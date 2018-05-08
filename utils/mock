@@ -107,9 +107,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--verbose', action='store_true', default=False)
     args = parser.parse_args()
-    level = logging.DEBUG if args.verbose else logging.INFO
 
-    logging.basicConfig(level=level)
+    level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(level=level, datefmt='%Y-%m-%d %H:%M:%S', format='%(asctime)s %(name)s %(levelname)s %(message)s')
 
     servers = [
         ThreadedUDPServer(('0.0.0.0', 7380), DiscoveryInterface),
@@ -124,6 +124,7 @@ if __name__ == '__main__':
 
     def sigint_handler(signal, frame):
         for server in servers:
+            logging.info("Shutting down {}:{}".format(*server.server_address))
             server.shutdown()
             server.server_close()
 
