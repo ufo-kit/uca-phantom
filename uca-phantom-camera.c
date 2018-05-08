@@ -67,10 +67,10 @@ static gint base_overrideables[] = {
 static GParamSpec *phantom_properties[N_PROPERTIES] = { NULL, };
 
 struct _UcaPhantomCameraPrivate {
-    GError          *construct_error;
-    gchar           *host;
-    GSocketClient   *client;
-    gsize            size;
+    GError              *construct_error;
+    gchar               *host;
+    GSocketClient       *client;
+    GSocketConnection   *connection;
 };
 
 typedef struct  {
@@ -99,6 +99,24 @@ static UnitVariable variables[] = {
     { NULL, }
 };
 
+#define DEFINE_CAST(suffix, trans_func)                 \
+static void                                             \
+value_transform_##suffix (const GValue *src_value,      \
+                         GValue       *dest_value)      \
+{                                                       \
+  const gchar* src = g_value_get_string (src_value);    \
+  g_value_set_##suffix (dest_value, trans_func (src));  \
+}
+
+DEFINE_CAST (uchar,     atoi)
+DEFINE_CAST (int,       atoi)
+DEFINE_CAST (long,      atol)
+DEFINE_CAST (uint,      atoi)
+DEFINE_CAST (uint64,    atoi)
+DEFINE_CAST (ulong,     atol)
+DEFINE_CAST (float,     atof)
+DEFINE_CAST (double,    atof)
+
 static UnitVariable *
 phantom_lookup_by_id (gint property_id)
 {
@@ -111,27 +129,60 @@ phantom_lookup_by_id (gint property_id)
 }
 
 static gchar *
-phantom_get_string (UnitVariable *var)
+phantom_get_string (UcaPhantomCameraPrivate *priv, UnitVariable *var)
 {
+    GOutputStream *ostream;
+    GInputStream *istream;
     gchar *request;
+    gsize size;
+    gchar *cr = NULL;
     gchar *reply = NULL;
+    GError *error = NULL;
+    const gsize reply_size = 512;
 
-    request = g_strdup_printf ("get %s", var->name);
-    g_debug ("send request `%s'", request);
-    g_free (request);
+    ostream = g_io_stream_get_output_stream ((GIOStream *) priv->connection);
+    istream = g_io_stream_get_input_stream ((GIOStream *) priv->connection);
+    request = g_strdup_printf ("get %s\r\n", var->name);
+
+    if (!g_output_stream_write_all (ostream, request, strlen (request), &size, NULL, &error)) {
+        g_warning ("Could not write request: %s\n", error->message);
+        goto get_string_error;
+    }
+
+    reply = g_malloc0 (reply_size);
+
+    if (!g_input_stream_read (istream, reply, reply_size, NULL, &error)) {
+        g_warning ("Could not read reply: %s\n", error->message);
+        goto get_string_error;
+    }
+
+    /* strip \r\n and properly zero-limit the string */
+    g_assert (size < reply_size);
+    cr = strchr (reply, '\r');
+
+    if (cr != NULL)
+        *cr = '\0';
+
     return reply;
+
+get_string_error:
+    g_error_free (error);
+    g_free (reply);
+    return NULL;
 }
 
 static void
-phantom_get (UnitVariable *var, GValue *value)
+phantom_get (UcaPhantomCameraPrivate *priv, UnitVariable *var, GValue *value)
 {
     gchar *reply;
     GValue reply_value = {0,};
 
-    reply = phantom_get_string (var);
+    reply = phantom_get_string (priv, var);
     g_value_init (&reply_value, G_TYPE_STRING);
     g_value_set_string (&reply_value, reply);
-    g_value_transform (&reply_value, value);
+
+    if (!g_value_transform (&reply_value, value))
+        g_warning ("Could not transform `%s' to target value type %s", reply, G_VALUE_TYPE_NAME (value));
 
     g_free (reply);
     g_value_unset (&reply_value);
@@ -238,7 +289,7 @@ uca_phantom_camera_get_property (GObject *object,
     var = phantom_lookup_by_id (property_id);
 
     if (var != NULL && var->handle_automatically) {
-        phantom_get (var, value);
+        phantom_get (UCA_PHANTOM_CAMERA_GET_PRIVATE (object), var, value);
         return;
     }
 
@@ -256,7 +307,7 @@ uca_phantom_camera_get_property (GObject *object,
             {
                 gchar *s;
                 gdouble time;
-                s = phantom_get_string (var);
+                s = phantom_get_string (UCA_PHANTOM_CAMERA_GET_PRIVATE (object), var);
                 /* FIXME: remove this */
                 s = "30000000";
                 time = atoi (s) / 1000.0 / 1000.0 / 1000.0;
@@ -276,6 +327,28 @@ uca_phantom_camera_get_property (GObject *object,
 static void
 uca_phantom_camera_dispose (GObject *object)
 {
+    UcaPhantomCameraPrivate *priv;
+
+    priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (object);
+
+    if (priv->connection) {
+        GOutputStream *ostream;
+        gsize size;
+        const gchar *request = "bye\r\n";
+        GError *error = NULL;
+
+        /* remove bye for real camera */
+        ostream = g_io_stream_get_output_stream ((GIOStream *) priv->connection);
+        g_output_stream_write_all (ostream, request, strlen (request), &size, NULL, NULL);
+
+        if (!g_io_stream_close ((GIOStream *) priv->connection, NULL, &error)) {
+            g_warning ("Could not close connection: %s\n", error->message);
+            g_error_free (error);
+        }
+
+        priv->connection = NULL;
+    }
+
     G_OBJECT_CLASS (uca_phantom_camera_parent_class)->dispose (object);
 }
 
@@ -371,7 +444,7 @@ cleanup_discovery_addr:
 
 cleanup_discovery_socket:
     g_object_unref (socket);
-    
+
     return result;
 }
 
@@ -384,7 +457,7 @@ uca_phantom_camera_constructed (GObject *object)
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (object);
 
     phantom_discover (&addr, &priv->construct_error);
-
+    priv->connection = g_socket_client_connect (priv->client, (GSocketConnectable *) addr, NULL, &priv->construct_error);
     g_object_unref (addr);
 }
 
@@ -400,6 +473,15 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
     GObjectClass *oclass = G_OBJECT_CLASS (klass);
     UcaCameraClass *camera_class = UCA_CAMERA_CLASS (klass);
 
+    g_value_register_transform_func (G_TYPE_STRING, G_TYPE_UCHAR,   value_transform_uchar);
+    g_value_register_transform_func (G_TYPE_STRING, G_TYPE_INT,     value_transform_int);
+    g_value_register_transform_func (G_TYPE_STRING, G_TYPE_UINT,    value_transform_uint);
+    g_value_register_transform_func (G_TYPE_STRING, G_TYPE_UINT64,  value_transform_uint64);
+    g_value_register_transform_func (G_TYPE_STRING, G_TYPE_LONG,    value_transform_long);
+    g_value_register_transform_func (G_TYPE_STRING, G_TYPE_ULONG,   value_transform_ulong);
+    g_value_register_transform_func (G_TYPE_STRING, G_TYPE_FLOAT,   value_transform_float);
+    g_value_register_transform_func (G_TYPE_STRING, G_TYPE_DOUBLE,  value_transform_double);
+
     oclass->set_property = uca_phantom_camera_set_property;
     oclass->get_property = uca_phantom_camera_get_property;
     oclass->constructed = uca_phantom_camera_constructed;
@@ -414,7 +496,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
     camera_class->grab = uca_phantom_camera_grab;
     camera_class->trigger = uca_phantom_camera_trigger;
 
-    /* 
+    /*
      * XXX: we should try to construct the table from the UnitVariable table.
      */
     phantom_properties[PROP_SENSOR_TYPE] =
@@ -471,6 +553,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
 
     priv->construct_error = NULL;
     priv->client = g_socket_client_new ();
+    priv->connection = NULL;
 }
 
 G_MODULE_EXPORT GType
