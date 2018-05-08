@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+
+import argparse
+import logging
+import threading
+import signal
+import sys
+import socketserver
+
+unit = {
+    'info': {
+        'sensor': 1,
+        'snsversion': 2,
+        'hwver': 123,
+        'kernel': 456,
+        'swver': 135,
+        'xver': 246,
+        'xmax': 2048,
+        'ymax': 1952,
+        'serial': 123456,
+        'name': 'Phantom v2640',
+    },
+    'video': {
+        'paox': 0,
+        'paoy': 0,
+    },
+    'defc': {
+        'exp': 10 * 1000 * 1000,    # = 10 ms
+    }
+}
+
+
+class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    pass
+
+
+class ThreadedUDPServer(socketserver.ThreadingMixIn, socketserver.UDPServer):
+    pass
+
+
+class DiscoveryInterface(socketserver.BaseRequestHandler):
+    def handle(self):
+        data, socket = self.request
+        message = 'PH16 7115 {} {}'.format(unit['info']['hwver'], unit['info']['serial'])
+        socket.sendto(message.encode('utf-8'), self.client_address)
+
+
+class ControlInterface(socketserver.BaseRequestHandler):
+    def handle(self):
+        while True:
+            data = self.request.recv(512).strip()
+            cmd = data.decode('utf-8').split(' ')
+
+            if cmd and cmd[0] == '':
+                continue
+
+            handle = getattr(self, 'handle_' + cmd[0])
+
+            if not handle(cmd[1:]):
+                break
+
+    def send(self, message):
+        self.request.sendall('{}\r\n'.format(message).encode('utf-8'))
+
+    def send_error(self, message):
+        self.send('ERR: {}'.format(message))
+
+    def handle_get(self, data):
+        var = data[0]
+        logging.debug('GET {}'.format(var))
+
+        try:
+            x = unit
+            for p in var.split('.'):
+                x = x[p]
+        except KeyError as e:
+            self.send_error('name {} is unknown'.format(e.args[0]))
+
+        self.send(str(x))
+        return True
+
+    def handle_set(self, data):
+        var, value = data
+        logging.debug('SET {}={}'.format(var, value))
+
+        try:
+            path = var.split('.')
+            x = unit
+
+            for p in path[:-1]:
+                x = x[p]
+
+            v = path[-1]
+            t = type(x[v])
+            x[v] = t(value)
+        except KeyError as e:
+            self.send_error('name {} is unknown'.format(e.args[0]))
+
+        self.send('Ok!')
+        return True
+
+    def handle_bye(self, data):
+        return False
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--verbose', action='store_true', default=False)
+    args = parser.parse_args()
+    level = logging.DEBUG if args.verbose else logging.INFO
+
+    logging.basicConfig(level=level)
+
+    servers = [
+        ThreadedUDPServer(('0.0.0.0', 7380), DiscoveryInterface),
+        ThreadedTCPServer(('0.0.0.0', 7115), ControlInterface)
+    ]
+
+    threads = [threading.Thread(target=s.serve_forever) for s in servers]
+
+    for thread in threads:
+        thread.daemon = True
+        thread.start()
+
+    def sigint_handler(signal, frame):
+        for server in servers:
+            server.shutdown()
+            server.server_close()
+
+    signal.signal(signal.SIGINT, sigint_handler)
+    logging.info("Press Ctr+C to stop servers ...")
+    signal.pause()
