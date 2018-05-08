@@ -354,11 +354,8 @@ uca_phantom_camera_get_property (GObject *object,
                 gchar *s;
                 gdouble time;
                 s = phantom_get_string (UCA_PHANTOM_CAMERA_GET_PRIVATE (object), var);
-                /* FIXME: remove this */
-                s = "30000000";
                 time = atoi (s) / 1000.0 / 1000.0 / 1000.0;
                 g_value_set_double (value, time);
-                /* g_free (s); */
             }
             break;
         case PROP_HAS_STREAMING:
