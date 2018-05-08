@@ -146,14 +146,14 @@ phantom_get_string (UcaPhantomCameraPrivate *priv, UnitVariable *var)
 
     if (!g_output_stream_write_all (ostream, request, strlen (request), &size, NULL, &error)) {
         g_warning ("Could not write request: %s\n", error->message);
-        goto get_string_error;
+        goto get_string_free_error;
     }
 
     reply = g_malloc0 (reply_size);
 
     if (!g_input_stream_read (istream, reply, reply_size, NULL, &error)) {
         g_warning ("Could not read reply: %s\n", error->message);
-        goto get_string_error;
+        goto get_string_free_error;
     }
 
     /* strip \r\n and properly zero-limit the string */
@@ -163,10 +163,17 @@ phantom_get_string (UcaPhantomCameraPrivate *priv, UnitVariable *var)
     if (cr != NULL)
         *cr = '\0';
 
+    if (g_str_has_prefix (reply, "ERR: ")) {
+        g_warning ("Error: %s", reply + 5);
+        goto get_string_error;
+    }
+
     return reply;
 
-get_string_error:
+get_string_free_error:
     g_error_free (error);
+
+get_string_error:
     g_free (reply);
     return NULL;
 }
@@ -178,6 +185,10 @@ phantom_get (UcaPhantomCameraPrivate *priv, UnitVariable *var, GValue *value)
     GValue reply_value = {0,};
 
     reply = phantom_get_string (priv, var);
+
+    if (reply == NULL)
+        return;
+
     g_value_init (&reply_value, G_TYPE_STRING);
     g_value_set_string (&reply_value, reply);
 
@@ -189,9 +200,44 @@ phantom_get (UcaPhantomCameraPrivate *priv, UnitVariable *var, GValue *value)
 }
 
 static void
-phantom_set (UnitVariable *var, const GValue *value)
+phantom_set_string (UcaPhantomCameraPrivate *priv, UnitVariable *var, const gchar *value)
 {
+    GOutputStream *ostream;
+    GInputStream *istream;
     gchar *request;
+    gsize size;
+    gchar reply[256];
+    GError *error = NULL;
+
+    ostream = g_io_stream_get_output_stream ((GIOStream *) priv->connection);
+    istream = g_io_stream_get_input_stream ((GIOStream *) priv->connection);
+    request = g_strdup_printf ("set %s %s\r\n", var->name, value);
+
+    if (!g_output_stream_write_all (ostream, request, strlen (request), &size, NULL, &error)) {
+        g_warning ("Could not write request: %s\n", error->message);
+        goto get_string_error;
+    }
+
+    if (!g_input_stream_read (istream, reply, sizeof (reply), NULL, &error)) {
+        if (error != NULL)
+            g_warning ("Could not read reply: %s\n", error->message);
+        goto get_string_error;
+    }
+
+    if (g_str_has_prefix (reply, "ERR: "))
+        g_warning ("Error: %s", reply + 5);
+
+    g_free (request);
+    return;
+
+get_string_error:
+    g_error_free (error);
+    g_free (request);
+}
+
+static void
+phantom_set (UcaPhantomCameraPrivate *priv, UnitVariable *var, const GValue *value)
+{
     GValue request_value = {0,};
 
     if (!(var->flags & G_PARAM_WRITABLE))
@@ -199,7 +245,7 @@ phantom_set (UnitVariable *var, const GValue *value)
 
     g_value_init (&request_value, G_TYPE_STRING);
     g_value_transform (value, &request_value);
-    request = g_strdup_printf ("set %s %s", var->name, g_value_get_string (&request_value));
+    phantom_set_string (priv, var, g_value_get_string (&request_value));
     g_value_unset (&request_value);
 }
 
@@ -273,7 +319,7 @@ uca_phantom_camera_set_property (GObject *object,
     var = phantom_lookup_by_id (property_id);
 
     if (var != NULL) {
-        phantom_set (var, value);
+        phantom_set (UCA_PHANTOM_CAMERA_GET_PRIVATE (object), var, value);
         return;
     }
 }
