@@ -129,53 +129,62 @@ phantom_lookup_by_id (gint property_id)
 }
 
 static gchar *
-phantom_get_string (UcaPhantomCameraPrivate *priv, UnitVariable *var)
+phantom_talk (UcaPhantomCameraPrivate *priv, const gchar *request, gchar *reply_loc, gsize reply_loc_size)
 {
     GOutputStream *ostream;
     GInputStream *istream;
-    gchar *request;
     gsize size;
-    gchar *cr = NULL;
-    gchar *reply = NULL;
+    gsize reply_size;
     GError *error = NULL;
-    const gsize reply_size = 512;
+    gchar *reply = NULL;
 
     ostream = g_io_stream_get_output_stream ((GIOStream *) priv->connection);
     istream = g_io_stream_get_input_stream ((GIOStream *) priv->connection);
-    request = g_strdup_printf ("get %s\r\n", var->name);
 
     if (!g_output_stream_write_all (ostream, request, strlen (request), &size, NULL, &error)) {
         g_warning ("Could not write request: %s\n", error->message);
-        goto get_string_free_error;
+        g_error_free (error);
+        return NULL;
     }
 
-    reply = g_malloc0 (reply_size);
+    reply_size = reply_loc ? reply_loc_size : 512;
+    reply = reply_loc ? reply_loc : g_malloc0 (reply_size);
 
     if (!g_input_stream_read (istream, reply, reply_size, NULL, &error)) {
         g_warning ("Could not read reply: %s\n", error->message);
-        goto get_string_free_error;
+        g_error_free (error);
+        g_free (reply);
+        return NULL;
     }
 
+    if (g_str_has_prefix (reply, "ERR: "))
+        g_warning ("Error: %s", reply + 5);
+
+    return reply;
+}
+
+static gchar *
+phantom_get_string (UcaPhantomCameraPrivate *priv, UnitVariable *var)
+{
+    gchar *request;
+    gchar *cr = NULL;
+    gchar *reply = NULL;
+
+    request = g_strdup_printf ("get %s\r\n", var->name);
+    reply = phantom_talk (priv, request, NULL, 0);
+
+    if (reply == NULL)
+        goto phantom_get_string_error;
+
     /* strip \r\n and properly zero-limit the string */
-    g_assert (size < reply_size);
     cr = strchr (reply, '\r');
 
     if (cr != NULL)
         *cr = '\0';
 
-    if (g_str_has_prefix (reply, "ERR: ")) {
-        g_warning ("Error: %s", reply + 5);
-        goto get_string_error;
-    }
-
+phantom_get_string_error:
+    g_free (request);
     return reply;
-
-get_string_free_error:
-    g_error_free (error);
-
-get_string_error:
-    g_free (reply);
-    return NULL;
 }
 
 static void
@@ -202,36 +211,12 @@ phantom_get (UcaPhantomCameraPrivate *priv, UnitVariable *var, GValue *value)
 static void
 phantom_set_string (UcaPhantomCameraPrivate *priv, UnitVariable *var, const gchar *value)
 {
-    GOutputStream *ostream;
-    GInputStream *istream;
     gchar *request;
-    gsize size;
     gchar reply[256];
-    GError *error = NULL;
 
-    ostream = g_io_stream_get_output_stream ((GIOStream *) priv->connection);
-    istream = g_io_stream_get_input_stream ((GIOStream *) priv->connection);
     request = g_strdup_printf ("set %s %s\r\n", var->name, value);
+    phantom_talk (priv, request, reply, sizeof (reply));
 
-    if (!g_output_stream_write_all (ostream, request, strlen (request), &size, NULL, &error)) {
-        g_warning ("Could not write request: %s\n", error->message);
-        goto get_string_error;
-    }
-
-    if (!g_input_stream_read (istream, reply, sizeof (reply), NULL, &error)) {
-        if (error != NULL)
-            g_warning ("Could not read reply: %s\n", error->message);
-        goto get_string_error;
-    }
-
-    if (g_str_has_prefix (reply, "ERR: "))
-        g_warning ("Error: %s", reply + 5);
-
-    g_free (request);
-    return;
-
-get_string_error:
-    g_error_free (error);
     g_free (request);
 }
 
