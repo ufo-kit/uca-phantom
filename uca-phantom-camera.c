@@ -532,6 +532,7 @@ uca_phantom_camera_dispose (GObject *object)
             g_error_free (error);
         }
 
+        g_object_unref (priv->connection);
         priv->connection = NULL;
     }
 
@@ -541,6 +542,7 @@ uca_phantom_camera_dispose (GObject *object)
     if (priv->listener)
         g_object_unref (priv->listener);
 
+    g_object_unref (priv->client);
     g_async_queue_unref (priv->message_queue);
     g_async_queue_unref (priv->result_queue);
 
