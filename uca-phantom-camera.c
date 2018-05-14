@@ -353,6 +353,8 @@ accept_data (UcaPhantomCameraPrivate *priv)
         g_error_free (error);
     }
 
+    g_object_unref (connection);
+
     return NULL;
 }
 
