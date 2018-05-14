@@ -105,6 +105,7 @@ class ThreadedUDPServer(socketserver.ThreadingMixIn, socketserver.UDPServer):
 class DiscoveryInterface(socketserver.BaseRequestHandler):
     def handle(self):
         data, socket = self.request
+        logging.debug('Discovery request from {}'.format(socket))
         message = 'PH16 7115 {} {}'.format(unit['info']['hwver'], unit['info']['serial'])
         socket.sendto(message.encode('utf-8'), self.client_address)
 
