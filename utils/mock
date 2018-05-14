@@ -5,6 +5,7 @@ import logging
 import threading
 import signal
 import sys
+import socket
 import socketserver
 import parsimonious.grammar
 import parsimonious.nodes
@@ -109,6 +110,10 @@ class DiscoveryInterface(socketserver.BaseRequestHandler):
 
 
 class ControlInterface(socketserver.BaseRequestHandler):
+    def setup(self):
+        self.data_socket = None
+        self.data_thread = None
+
     def handle(self):
         while True:
             data = self.request.recv(512).strip()
@@ -160,6 +165,37 @@ class ControlInterface(socketserver.BaseRequestHandler):
             self.send_error('name {} is unknown'.format(e.args[0]))
 
         self.send('Ok!')
+        return True
+
+    def push_data(self):
+        while True:
+            try:
+                self.data_socket.sendall('hello here are some cookies'.encode('utf-8'))
+            except ConnectionResetError:
+                # is server allowed to reset connection?
+                pass
+            except BrokenPipeError:
+                pass
+
+    def handle_startdata(self, data):
+        try:
+            params = to_python(''.join(data))
+            port = params['port']
+            host, _ = self.request.getpeername()
+            logging.debug('Connecting to {}:{}'.format(host, port))
+            self.data_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.data_socket.connect((host, port))
+            self.data_thread = threading.Thread(target=self.push_data)
+            self.data_thread.start()
+            self.send('Ok!')
+        except parsimonious.exceptions.ParseError as e:
+            logging.error("Could not parse {}: {}".format(data, str(e)))
+            self.send_error('missing command args')
+
+        return True
+
+    def handle_ximg(self, data):
+        self.send('Ok')
         return True
 
     def handle_bye(self, data):

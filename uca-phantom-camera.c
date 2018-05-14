@@ -71,6 +71,11 @@ struct _UcaPhantomCameraPrivate {
     gchar               *host;
     GSocketClient       *client;
     GSocketConnection   *connection;
+    GSocketListener     *listener;
+    GCancellable        *accept;
+    GThread             *accept_thread;
+    GAsyncQueue         *message_queue;
+    GAsyncQueue         *result_queue;
 };
 
 typedef struct  {
@@ -98,6 +103,21 @@ static UnitVariable variables[] = {
     /* { "video.pay",          G_TYPE_UINT, G_PARAM_READWRITE, PROP_ROI_HEIGHT }, */
     { NULL, }
 };
+
+typedef struct {
+    enum {
+        MESSAGE_READ_IMAGE = 1,
+        MESSAGE_READ_TIMESTAMP,
+        MESSAGE_STOP,
+    } type;
+    gpointer  data;
+    GError  **error;
+} InternalMessage;
+
+typedef enum {
+    RESULT_SUCCESS = 1,
+    RESULT_FAILURE,
+} Result;
 
 #define DEFINE_CAST(suffix, trans_func)                 \
 static void                                             \
@@ -129,7 +149,11 @@ phantom_lookup_by_id (gint property_id)
 }
 
 static gchar *
-phantom_talk (UcaPhantomCameraPrivate *priv, const gchar *request, gchar *reply_loc, gsize reply_loc_size)
+phantom_talk (UcaPhantomCameraPrivate *priv,
+              const gchar *request,
+              gchar *reply_loc,
+              gsize reply_loc_size,
+              GError **error_loc)
 {
     GOutputStream *ostream;
     GInputStream *istream;
@@ -142,8 +166,15 @@ phantom_talk (UcaPhantomCameraPrivate *priv, const gchar *request, gchar *reply_
     istream = g_io_stream_get_input_stream ((GIOStream *) priv->connection);
 
     if (!g_output_stream_write_all (ostream, request, strlen (request), &size, NULL, &error)) {
-        g_warning ("Could not write request: %s\n", error->message);
-        g_error_free (error);
+        if (error_loc == NULL) {
+            g_warning ("Could not write request: %s\n", error->message);
+            g_error_free (error);
+        }
+        else {
+            if (error != NULL)
+                g_propagate_error (error_loc, error);
+        }
+
         return NULL;
     }
 
@@ -151,14 +182,27 @@ phantom_talk (UcaPhantomCameraPrivate *priv, const gchar *request, gchar *reply_
     reply = reply_loc ? reply_loc : g_malloc0 (reply_size);
 
     if (!g_input_stream_read (istream, reply, reply_size, NULL, &error)) {
-        g_warning ("Could not read reply: %s\n", error->message);
-        g_error_free (error);
+        if (error_loc == NULL) {
+            g_warning ("Could not read reply: %s\n", error->message);
+            g_error_free (error);
+        }
+        else  {
+            if (error != NULL)
+                g_propagate_error (error_loc, error);
+        }
+
         g_free (reply);
         return NULL;
     }
 
-    if (g_str_has_prefix (reply, "ERR: "))
-        g_warning ("Error: %s", reply + 5);
+    if (g_str_has_prefix (reply, "ERR: ")) {
+        if (error_loc != NULL) {
+            g_set_error (error_loc, G_IO_ERROR, G_IO_ERROR_FAILED,
+                         "Phantom error: %s", reply + 5);
+        }
+        else
+            g_warning ("Error: %s", reply + 5);
+    }
 
     return reply;
 }
@@ -171,7 +215,7 @@ phantom_get_string (UcaPhantomCameraPrivate *priv, UnitVariable *var)
     gchar *reply = NULL;
 
     request = g_strdup_printf ("get %s\r\n", var->name);
-    reply = phantom_talk (priv, request, NULL, 0);
+    reply = phantom_talk (priv, request, NULL, 0, NULL);
 
     if (reply == NULL)
         goto phantom_get_string_error;
@@ -215,7 +259,7 @@ phantom_set_string (UcaPhantomCameraPrivate *priv, UnitVariable *var, const gcha
     gchar reply[256];
 
     request = g_strdup_printf ("set %s %s\r\n", var->name, value);
-    phantom_talk (priv, request, reply, sizeof (reply));
+    phantom_talk (priv, request, reply, sizeof (reply), NULL);
 
     g_free (request);
 }
@@ -240,7 +284,6 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
 {
     /* send command */
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
-
 }
 
 static void
@@ -250,13 +293,88 @@ uca_phantom_camera_stop_recording (UcaCamera *camera,
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 }
 
+static gpointer
+accept_data (UcaPhantomCameraPrivate *priv)
+{
+    GSocketConnection *connection;
+    GSocketAddress *remote_addr;
+    GInetAddress *inet_addr;
+    gchar *addr;
+    gboolean stop = FALSE;
+    GError *error = NULL;
+
+    g_debug ("Accepting data connection ...");
+    connection = g_socket_listener_accept (priv->listener, NULL, priv->accept, &error);
+
+    if (g_cancellable_is_cancelled (priv->accept)) {
+        g_print ("Listen cancelled\n");
+        g_error_free (error);
+        return NULL;
+    }
+
+    if (error != NULL) {
+        g_print ("Error: %s\n", error->message);
+        g_error_free (error);
+    }
+
+    remote_addr = g_socket_connection_get_remote_address (connection, NULL);
+    inet_addr = g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (remote_addr));
+    addr = g_inet_address_to_string (inet_addr);
+    g_debug ("%s connected", addr);
+    g_object_unref (remote_addr);
+    g_free (addr);
+
+    while (!stop) {
+        InternalMessage *message;
+        GInputStream *istream;
+        gchar request[256];
+        Result result = RESULT_SUCCESS;
+
+        istream = g_io_stream_get_input_stream (G_IO_STREAM (connection));
+        message = g_async_queue_pop (priv->message_queue);
+
+        switch (message->type) {
+            case MESSAGE_READ_IMAGE:
+                g_input_stream_read (istream, request, sizeof (request), NULL, message->error);
+                break;
+            case MESSAGE_READ_TIMESTAMP:
+                break;
+            case MESSAGE_STOP:
+                stop = TRUE;
+                break;
+        }
+
+        g_free (message);
+        g_async_queue_push (priv->result_queue, GINT_TO_POINTER (result));
+    }
+
+    if (!g_io_stream_close (G_IO_STREAM (connection), NULL, &error)) {
+        g_warning ("Could not close connection: %s\n", error->message);
+        g_error_free (error);
+    }
+
+    return NULL;
+}
+
 static void
 uca_phantom_camera_start_readout (UcaCamera *camera,
                                   GError **error)
 {
+    UcaPhantomCameraPrivate *priv;
+    gchar *reply;
+    const gchar *request = "startdata {port:7116}";
+
+    priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
+
     /* set up listener */
+    g_socket_listener_add_inet_port (priv->listener, 7116, G_OBJECT (camera), error);
+    priv->accept = g_cancellable_new ();
+    priv->accept_thread = g_thread_new (NULL, (GThreadFunc) accept_data, priv);
 
     /* send startdata command */
+    /* FIXME: there might be a race condition with g_socket_listener_accept */
+    reply = phantom_talk (priv, request, NULL, 0, error);
+    g_free (reply);
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 }
 
@@ -264,7 +382,22 @@ static void
 uca_phantom_camera_stop_readout (UcaCamera *camera,
                                  GError **error)
 {
+    UcaPhantomCameraPrivate *priv;
+    InternalMessage *message;
+
+    priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
+
+    /* stop accept thread */
+    message = g_new0 (InternalMessage, 1);
+    message->type = MESSAGE_STOP;
+    g_async_queue_push (priv->message_queue, message);
+
     /* stop listener */
+    g_cancellable_cancel (priv->accept);
+    g_socket_listener_close (priv->listener);
+    g_thread_join (priv->accept_thread);
+    g_thread_unref (priv->accept_thread);
+
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 }
 
@@ -283,7 +416,32 @@ uca_phantom_camera_grab (UcaCamera *camera,
                          gpointer data,
                          GError **error)
 {
-    return TRUE;
+    UcaPhantomCameraPrivate *priv;
+    InternalMessage *message;
+    Result result;
+    gchar *reply;
+    const gchar *request = "ximg {cine:0, start:0, cnt:1}";
+
+    priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
+
+    message = g_new0 (InternalMessage, 1);
+    message->data = data;
+    message->type = MESSAGE_READ_IMAGE;
+    message->error = error;
+    g_async_queue_push (priv->message_queue, message);
+
+    /* send request */
+    reply = phantom_talk (priv, request, NULL, 0, error);
+
+    if (reply == NULL)
+        return FALSE;
+
+    g_free (reply);
+
+    /* wait for image transfer to finish */
+    result = (Result) GPOINTER_TO_INT (g_async_queue_pop (priv->result_queue));
+
+    return result == RESULT_SUCCESS;
 }
 
 static void
@@ -366,16 +524,25 @@ uca_phantom_camera_dispose (GObject *object)
         GError *error = NULL;
 
         /* remove bye for real camera */
-        ostream = g_io_stream_get_output_stream ((GIOStream *) priv->connection);
+        ostream = g_io_stream_get_output_stream (G_IO_STREAM (priv->connection));
         g_output_stream_write_all (ostream, request, strlen (request), &size, NULL, NULL);
 
-        if (!g_io_stream_close ((GIOStream *) priv->connection, NULL, &error)) {
+        if (!g_io_stream_close (G_IO_STREAM (priv->connection), NULL, &error)) {
             g_warning ("Could not close connection: %s\n", error->message);
             g_error_free (error);
         }
 
         priv->connection = NULL;
     }
+
+    if (priv->accept)
+        g_object_unref (priv->accept);
+
+    if (priv->listener)
+        g_object_unref (priv->listener);
+
+    g_async_queue_unref (priv->message_queue);
+    g_async_queue_unref (priv->result_queue);
 
     G_OBJECT_CLASS (uca_phantom_camera_parent_class)->dispose (object);
 }
@@ -581,7 +748,11 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
 
     priv->construct_error = NULL;
     priv->client = g_socket_client_new ();
+    priv->listener = g_socket_listener_new ();
     priv->connection = NULL;
+    priv->accept = NULL;
+    priv->message_queue = g_async_queue_new ();
+    priv->result_queue = g_async_queue_new ();
 }
 
 G_MODULE_EXPORT GType
