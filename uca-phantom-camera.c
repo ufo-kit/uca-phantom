@@ -584,8 +584,8 @@ ufo_net_camera_initable_init (GInitable *initable,
     return TRUE;
 }
 
-static gboolean
-phantom_discover (GSocketAddress **remote_addr, GError **error)
+static GSocketAddress *
+phantom_discover (GError **error)
 {
     GInetAddress *bcast_addr;
     GSocketAddress *bcast_socket_addr;
@@ -597,7 +597,7 @@ phantom_discover (GSocketAddress **remote_addr, GError **error)
     guint port;
     const gchar request[] = "phantom?";
     gchar reply[128] = {0,};
-    gboolean result = TRUE;
+    GSocketAddress *result = NULL;
 
     bcast_addr = g_inet_address_new_from_string ("255.255.255.255");
     bcast_socket_addr = g_inet_socket_address_new (bcast_addr, 7380);
@@ -610,15 +610,11 @@ phantom_discover (GSocketAddress **remote_addr, GError **error)
 
     g_socket_set_broadcast (socket, TRUE);
 
-    if (g_socket_send_to (socket, bcast_socket_addr, request, sizeof (request), NULL, error) < 0) {
-        result = FALSE;
+    if (g_socket_send_to (socket, bcast_socket_addr, request, sizeof (request), NULL, error) < 0)
         goto cleanup_discovery_socket;
-    }
 
-    if (g_socket_receive_from (socket, &remote_socket_addr, reply, sizeof (reply), NULL, error) < 0) {
-        result = FALSE;
+    if (g_socket_receive_from (socket, &remote_socket_addr, reply, sizeof (reply), NULL, error) < 0)
         goto cleanup_discovery_socket;
-    }
 
     g_debug ("Phantom UDP discovery reply: `%s'", reply);
     regex = g_regex_new ("PH16 (\\d+) (\\d+) (\\d+)", 0, 0, error);
@@ -632,7 +628,7 @@ phantom_discover (GSocketAddress **remote_addr, GError **error)
     port_string = g_match_info_fetch (info, 1);
     port = atoi (port_string);
     g_free (port_string);
-    *remote_addr = g_inet_socket_address_new (g_inet_socket_address_get_address ((GInetSocketAddress *) remote_socket_addr), port);
+    result = g_inet_socket_address_new (g_inet_socket_address_get_address ((GInetSocketAddress *) remote_socket_addr), port);
 
 cleanup_discovery_addr:
     g_regex_unref (regex);
@@ -653,9 +649,12 @@ uca_phantom_camera_constructed (GObject *object)
 
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (object);
 
-    phantom_discover (&addr, &priv->construct_error);
-    priv->connection = g_socket_client_connect (priv->client, (GSocketConnectable *) addr, NULL, &priv->construct_error);
-    g_object_unref (addr);
+    addr = phantom_discover (&priv->construct_error);
+
+    if (addr != NULL) {
+        priv->connection = g_socket_client_connect (priv->client, G_SOCKET_CONNECTABLE (addr), NULL, &priv->construct_error);
+        g_object_unref (addr);
+    }
 }
 
 static void
