@@ -39,18 +39,31 @@ GQuark uca_phantom_camera_error_quark ()
 }
 
 enum {
-    /* info structure */
+    /* 4.2. info structure */
     PROP_SENSOR_TYPE = N_BASE_PROPERTIES,
+
+    /* 4.2.1 sensor information */
     PROP_SENSOR_VERSION,
+
+    /* 4.2.2 version and identification */
     PROP_HARDWARE_VERSION,
     PROP_KERNEL_VERSION,
     PROP_FIRMWARE_VERSION,
     PROP_FPGA_VERSION,
+    PROP_MODEL,
+    PROP_PROTOCOL_VERSION,
+    PROP_SYSTEM_RELEASE_VERSION,
+    PROP_FIRMWARE_RELEASE_VERSION,
+    PROP_SERIAL_NUMBER,
+
+    /* 4.2.3 capabilities */
+    PROP_FEATURES,
+    PROP_IMAGE_FORMATS,
     N_PROPERTIES
 };
 
 static gint base_overrideables[] = {
-    PROP_NAME,
+    PROP_NAME,                  /* info.name */
     PROP_SENSOR_WIDTH,
     PROP_SENSOR_HEIGHT,
     PROP_SENSOR_BITDEPTH,
@@ -58,6 +71,8 @@ static gint base_overrideables[] = {
     PROP_ROI_Y,
     PROP_ROI_WIDTH,
     PROP_ROI_HEIGHT,
+    PROP_ROI_WIDTH_MULTIPLIER,  /* info.xinc */
+    PROP_ROI_HEIGHT_MULTIPLIER, /* info.yinc */
     PROP_EXPOSURE_TIME,
     PROP_HAS_STREAMING,
     PROP_HAS_CAMRAM_RECORDING,
@@ -87,18 +102,27 @@ typedef struct  {
 } UnitVariable;
 
 static UnitVariable variables[] = {
-    { "info.sensor",     G_TYPE_UINT, G_PARAM_READABLE,  PROP_SENSOR_TYPE,      TRUE },
-    { "info.snsversion", G_TYPE_UINT, G_PARAM_READABLE,  PROP_SENSOR_VERSION,   TRUE },
-    { "info.hwver",      G_TYPE_UINT, G_PARAM_READABLE,  PROP_HARDWARE_VERSION, TRUE },
-    { "info.kernel",     G_TYPE_UINT, G_PARAM_READABLE,  PROP_KERNEL_VERSION,   TRUE },
-    { "info.swver",      G_TYPE_UINT, G_PARAM_READABLE,  PROP_FIRMWARE_VERSION, TRUE },
-    { "info.xver",       G_TYPE_UINT, G_PARAM_READABLE,  PROP_FPGA_VERSION,     TRUE },
-    { "info.name",       G_TYPE_UINT, G_PARAM_READABLE,  PROP_NAME,             TRUE },
-    { "info.xmax",       G_TYPE_UINT, G_PARAM_READABLE,  PROP_SENSOR_WIDTH,     TRUE },
-    { "info.ymax",       G_TYPE_UINT, G_PARAM_READABLE,  PROP_SENSOR_HEIGHT,    TRUE },
-    { "video.paox",      G_TYPE_INT,  G_PARAM_READWRITE, PROP_ROI_X,            TRUE },
-    { "video.paoy",      G_TYPE_INT,  G_PARAM_READWRITE, PROP_ROI_Y,            TRUE },
-    { "defc.exp",        G_TYPE_UINT, G_PARAM_READWRITE, PROP_EXPOSURE_TIME,    FALSE },
+    { "info.sensor",     G_TYPE_UINT,   G_PARAM_READABLE,  PROP_SENSOR_TYPE,                TRUE },
+    { "info.snsversion", G_TYPE_UINT,   G_PARAM_READABLE,  PROP_SENSOR_VERSION,             TRUE },
+    { "info.hwver",      G_TYPE_UINT,   G_PARAM_READABLE,  PROP_HARDWARE_VERSION,           TRUE },
+    { "info.kernel",     G_TYPE_UINT,   G_PARAM_READABLE,  PROP_KERNEL_VERSION,             TRUE },
+    { "info.swver",      G_TYPE_UINT,   G_PARAM_READABLE,  PROP_FIRMWARE_VERSION,           TRUE },
+    { "info.xver",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_FPGA_VERSION,               TRUE },
+    { "info.model",      G_TYPE_STRING, G_PARAM_READABLE,  PROP_MODEL,                      TRUE },
+    { "info.pver",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_PROTOCOL_VERSION,           TRUE },
+    { "info.sver",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_SYSTEM_RELEASE_VERSION,     TRUE },
+    { "info.fver",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_FIRMWARE_RELEASE_VERSION,   TRUE },
+    { "info.serial",     G_TYPE_UINT,   G_PARAM_READABLE,  PROP_SERIAL_NUMBER,              TRUE },
+    { "info.xmax",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_SENSOR_WIDTH,               TRUE },
+    { "info.ymax",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_SENSOR_HEIGHT,              TRUE },
+    { "info.name",       G_TYPE_STRING, G_PARAM_READABLE,  PROP_NAME,                       TRUE },
+    { "info.features",   G_TYPE_STRING, G_PARAM_READABLE,  PROP_FEATURES,                   TRUE },
+    { "info.imgformats", G_TYPE_STRING, G_PARAM_READABLE,  PROP_IMAGE_FORMATS,              TRUE },
+    { "info.xinc",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_ROI_WIDTH_MULTIPLIER,       TRUE },
+    { "info.yinc",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_ROI_HEIGHT_MULTIPLIER,      TRUE },
+    { "video.paox",      G_TYPE_INT,    G_PARAM_READWRITE, PROP_ROI_X,                      TRUE },
+    { "video.paoy",      G_TYPE_INT,    G_PARAM_READWRITE, PROP_ROI_Y,                      TRUE },
+    { "defc.exp",        G_TYPE_UINT,   G_PARAM_READWRITE, PROP_EXPOSURE_TIME,              FALSE },
     /* { "video.pax",          G_TYPE_UINT, G_PARAM_READWRITE, PROP_ROI_WIDTH }, */
     /* { "video.pay",          G_TYPE_UINT, G_PARAM_READWRITE, PROP_ROI_HEIGHT }, */
     { NULL, }
@@ -732,6 +756,48 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             "FPGA version",
             "FPGA version",
             0, G_MAXUINT, 0, G_PARAM_READABLE);
+
+    phantom_properties[PROP_MODEL] =
+        g_param_spec_string ("model",
+            "Model",
+            "Model",
+            "", G_PARAM_READABLE);
+
+    phantom_properties[PROP_PROTOCOL_VERSION] =
+        g_param_spec_uint ("protocol-version",
+            "Protocol version",
+            "Protocol version",
+            0, G_MAXUINT, 0, G_PARAM_READABLE);
+
+    phantom_properties[PROP_SYSTEM_RELEASE_VERSION] =
+        g_param_spec_uint ("system-release-version",
+            "System release version",
+            "System release version",
+            0, G_MAXUINT, 0, G_PARAM_READABLE);
+
+    phantom_properties[PROP_FIRMWARE_RELEASE_VERSION] =
+        g_param_spec_uint ("firmware-release-version",
+            "Firmware release version",
+            "Firmware release version",
+            0, G_MAXUINT, 0, G_PARAM_READABLE);
+
+    phantom_properties[PROP_SERIAL_NUMBER] =
+        g_param_spec_uint ("serial-number",
+            "Serial number",
+            "Serial number",
+            0, G_MAXUINT, 0, G_PARAM_READABLE);
+
+    phantom_properties[PROP_FEATURES] =
+        g_param_spec_string ("features",
+            "Features",
+            "Features see 4.2.4",
+            "", G_PARAM_READABLE);
+
+    phantom_properties[PROP_IMAGE_FORMATS] =
+        g_param_spec_string ("image-formats",
+            "Image formats",
+            "Image formats",
+            "", G_PARAM_READABLE);
 
     for (guint i = 0; i < base_overrideables[i]; i++)
         g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
