@@ -142,6 +142,10 @@ class ControlInterface(socketserver.BaseRequestHandler):
     def send_error(self, message):
         self.send('ERR: {}'.format(message))
 
+    def send_ok(self):
+        self.send('Ok!')
+        return True
+
     def handle_get(self, data):
         var = data[0]
         logging.debug('GET {}'.format(var))
@@ -173,8 +177,7 @@ class ControlInterface(socketserver.BaseRequestHandler):
         except KeyError as e:
             self.send_error('name {} is unknown'.format(e.args[0]))
 
-        self.send('Ok!')
-        return True
+        return self.send_ok()
 
     def push_data(self):
         while True:
@@ -204,11 +207,16 @@ class ControlInterface(socketserver.BaseRequestHandler):
         return True
 
     def handle_ximg(self, data):
-        self.send('Ok')
-        return True
+        return self.send_ok()
+
+    def handle_trig(self, data):
+        return self.send_ok()
+
+    def handle_rec(self, data):
+        return self.send_ok()
 
     def handle_bye(self, data):
-        return False
+        return self.send_ok()
 
 
 if __name__ == '__main__':

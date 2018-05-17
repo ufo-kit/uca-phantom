@@ -306,7 +306,9 @@ static void
 uca_phantom_camera_start_recording (UcaCamera *camera,
                                     GError **error)
 {
-    /* send command */
+    const gchar *request = "rec";
+
+    g_free (phantom_talk (priv, request, NULL, 0, error));
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 }
 
@@ -472,8 +474,15 @@ uca_phantom_camera_grab (UcaCamera *camera,
 
 static void
 uca_phantom_camera_trigger (UcaCamera *camera,
-                        GError **error)
+                            GError **error)
 {
+    const gchar *request = "trig";
+
+    /*
+     * XXX: note that this triggers the acquisition of an entire series of
+     * images rather than triggering the exposure of a single image.
+     */
+    g_free (phantom_talk (priv, request, NULL, 0, error));
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 }
 
