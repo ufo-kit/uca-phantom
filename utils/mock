@@ -35,8 +35,13 @@ unit = {
         'paox': 0,
         'paoy': 0,
     },
+    'cam': {
+        'syncimg': 1,
+        'frdelay': 100,
+    },
     'defc': {
         'exp': 10 * 1000 * 1000,    # = 10 ms
+        'rate': 1000.0,
     }
 }
 

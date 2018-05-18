@@ -59,6 +59,10 @@ enum {
     /* 4.2.3 capabilities */
     PROP_FEATURES,
     PROP_IMAGE_FORMATS,
+
+    /* 4.4 cam structure */
+    PROP_FRAME_SYNCHRONIZATION,
+    PROP_FRAME_DELAY,
     N_PROPERTIES
 };
 
@@ -73,13 +77,29 @@ static gint base_overrideables[] = {
     PROP_ROI_HEIGHT,
     PROP_ROI_WIDTH_MULTIPLIER,  /* info.xinc */
     PROP_ROI_HEIGHT_MULTIPLIER, /* info.yinc */
-    PROP_EXPOSURE_TIME,
+    PROP_EXPOSURE_TIME,         /* defc.exp */
+    PROP_FRAMES_PER_SECOND,     /* defc.rate */
     PROP_HAS_STREAMING,
     PROP_HAS_CAMRAM_RECORDING,
     0
 };
 
 static GParamSpec *phantom_properties[N_PROPERTIES] = { NULL, };
+
+typedef enum {
+    SYNC_MODE_FREE_RUN = 0,
+    SYNC_MODE_FSYNC,
+    SYNC_MODE_IRIG,
+    SYNC_MODE_VIDEO_FRAME_RATE,
+} SyncMode;
+
+static GEnumValue sync_mode_values[] = {
+    { SYNC_MODE_FREE_RUN, "SYNC_MODE_FREE_RUN", "sync_mode_free_run" },
+    { SYNC_MODE_FSYNC, "SYNC_MODE_FSYNC", "sync_mode_fsync" },
+    { SYNC_MODE_IRIG, "SYNC_MODE_IRIG", "sync_mode_irig" },
+    { SYNC_MODE_VIDEO_FRAME_RATE, "SYNC_MODE_VIDEO_FRAME_RATE", "sync_mode_video_frame_rate" },
+    { 0, NULL, NULL }
+};
 
 struct _UcaPhantomCameraPrivate {
     GError              *construct_error;
@@ -120,8 +140,11 @@ static UnitVariable variables[] = {
     { "info.imgformats", G_TYPE_STRING, G_PARAM_READABLE,  PROP_IMAGE_FORMATS,              TRUE },
     { "info.xinc",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_ROI_WIDTH_MULTIPLIER,       TRUE },
     { "info.yinc",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_ROI_HEIGHT_MULTIPLIER,      TRUE },
+    { "cam.syncimg",     G_TYPE_ENUM,   G_PARAM_READWRITE, PROP_FRAME_SYNCHRONIZATION,      TRUE },
+    { "cam.frdelay",     G_TYPE_UINT,   G_PARAM_READWRITE, PROP_FRAME_DELAY,                FALSE },
     { "video.paox",      G_TYPE_INT,    G_PARAM_READWRITE, PROP_ROI_X,                      TRUE },
     { "video.paoy",      G_TYPE_INT,    G_PARAM_READWRITE, PROP_ROI_Y,                      TRUE },
+    { "defc.rate",       G_TYPE_FLOAT,  G_PARAM_READWRITE, PROP_FRAMES_PER_SECOND,          TRUE },
     { "defc.exp",        G_TYPE_UINT,   G_PARAM_READWRITE, PROP_EXPOSURE_TIME,              FALSE },
     /* { "video.pax",          G_TYPE_UINT, G_PARAM_READWRITE, PROP_ROI_WIDTH }, */
     /* { "video.pay",          G_TYPE_UINT, G_PARAM_READWRITE, PROP_ROI_HEIGHT }, */
@@ -160,6 +183,7 @@ DEFINE_CAST (uint64,    atoi)
 DEFINE_CAST (ulong,     atol)
 DEFINE_CAST (float,     atof)
 DEFINE_CAST (double,    atof)
+DEFINE_CAST (enum,      atoi)   /* not super type safe */
 
 static UnitVariable *
 phantom_lookup_by_id (gint property_id)
@@ -308,7 +332,7 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
 {
     const gchar *request = "rec";
 
-    g_free (phantom_talk (priv, request, NULL, 0, error));
+    g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), request, NULL, 0, error));
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 }
 
@@ -482,7 +506,7 @@ uca_phantom_camera_trigger (UcaCamera *camera,
      * XXX: note that this triggers the acquisition of an entire series of
      * images rather than triggering the exposure of a single image.
      */
-    g_free (phantom_talk (priv, request, NULL, 0, error));
+    g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), request, NULL, 0, error));
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 }
 
@@ -528,12 +552,15 @@ uca_phantom_camera_get_property (GObject *object,
             g_value_set_uint (value, 1952);
             break;
         case PROP_EXPOSURE_TIME:
+            /* fall through */
+        case PROP_FRAME_DELAY:
             {
                 gchar *s;
                 gdouble time;
                 s = phantom_get_string (UCA_PHANTOM_CAMERA_GET_PRIVATE (object), var);
                 time = atoi (s) / 1000.0 / 1000.0 / 1000.0;
                 g_value_set_double (value, time);
+                g_free (s);
             }
             break;
         case PROP_HAS_STREAMING:
@@ -712,6 +739,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
     g_value_register_transform_func (G_TYPE_STRING, G_TYPE_ULONG,   value_transform_ulong);
     g_value_register_transform_func (G_TYPE_STRING, G_TYPE_FLOAT,   value_transform_float);
     g_value_register_transform_func (G_TYPE_STRING, G_TYPE_DOUBLE,  value_transform_double);
+    g_value_register_transform_func (G_TYPE_STRING, G_TYPE_ENUM,    value_transform_enum);
 
     oclass->set_property = uca_phantom_camera_set_property;
     oclass->get_property = uca_phantom_camera_get_property;
@@ -808,6 +836,20 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             "Image formats",
             "", G_PARAM_READABLE);
 
+    phantom_properties[PROP_FRAME_SYNCHRONIZATION] =
+        g_param_spec_enum ("frame-synchronization",
+            "Frame synchronization mode",
+            "Frame synchronization mode",
+            g_enum_register_static ("sync-mode", sync_mode_values),
+            SYNC_MODE_FREE_RUN,
+            G_PARAM_READWRITE);
+
+    phantom_properties[PROP_FRAME_DELAY] =
+        g_param_spec_double ("frame-delay",
+            "Frame delay in seconds",
+            "Frame delay in seconds",
+            0.0, G_MAXDOUBLE, 0.0, G_PARAM_READWRITE);
+
     for (guint i = 0; i < base_overrideables[i]; i++)
         g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
 
@@ -831,6 +873,8 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->accept = NULL;
     priv->message_queue = g_async_queue_new ();
     priv->result_queue = g_async_queue_new ();
+
+    uca_camera_register_unit (UCA_CAMERA (self), "frame-delay", UCA_UNIT_SECOND);
 }
 
 G_MODULE_EXPORT GType
