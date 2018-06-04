@@ -59,10 +59,20 @@ enum {
     /* 4.2.3 capabilities */
     PROP_FEATURES,
     PROP_IMAGE_FORMATS,
+    PROP_MAX_NUM_CINES,
 
     /* 4.4 cam structure */
     PROP_FRAME_SYNCHRONIZATION,
     PROP_FRAME_DELAY,
+    PROP_NUM_CINES,
+
+    /* 4.6 defc */
+    PROP_ENABLE_HQ_MODE,
+
+    /* 4.7.1 cine status */
+    PROP_CINE_STATE,
+
+    /* our own */
     N_PROPERTIES
 };
 
@@ -79,12 +89,16 @@ static gint base_overrideables[] = {
     PROP_ROI_HEIGHT_MULTIPLIER, /* info.yinc */
     PROP_EXPOSURE_TIME,         /* defc.exp */
     PROP_FRAMES_PER_SECOND,     /* defc.rate */
+    PROP_RECORDED_FRAMES,
     PROP_HAS_STREAMING,
     PROP_HAS_CAMRAM_RECORDING,
     0
 };
 
 static GParamSpec *phantom_properties[N_PROPERTIES] = { NULL, };
+
+/* static const gsize MAX_BUFFER_SIZE = 2048 * 1952 * 2; */
+static const gsize MAX_BUFFER_SIZE = 1024 * 976 * 2;
 
 typedef enum {
     SYNC_MODE_FREE_RUN = 0,
@@ -111,6 +125,8 @@ struct _UcaPhantomCameraPrivate {
     GThread             *accept_thread;
     GAsyncQueue         *message_queue;
     GAsyncQueue         *result_queue;
+    GRegex              *response_pattern;
+    guint32             *buffer;
 };
 
 typedef struct  {
@@ -138,16 +154,19 @@ static UnitVariable variables[] = {
     { "info.name",       G_TYPE_STRING, G_PARAM_READABLE,  PROP_NAME,                       TRUE },
     { "info.features",   G_TYPE_STRING, G_PARAM_READABLE,  PROP_FEATURES,                   TRUE },
     { "info.imgformats", G_TYPE_STRING, G_PARAM_READABLE,  PROP_IMAGE_FORMATS,              TRUE },
+    { "info.maxcines",   G_TYPE_UINT,   G_PARAM_READABLE,  PROP_MAX_NUM_CINES,              TRUE },
     { "info.xinc",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_ROI_WIDTH_MULTIPLIER,       TRUE },
     { "info.yinc",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_ROI_HEIGHT_MULTIPLIER,      TRUE },
     { "cam.syncimg",     G_TYPE_ENUM,   G_PARAM_READWRITE, PROP_FRAME_SYNCHRONIZATION,      TRUE },
     { "cam.frdelay",     G_TYPE_UINT,   G_PARAM_READWRITE, PROP_FRAME_DELAY,                FALSE },
-    { "video.paox",      G_TYPE_INT,    G_PARAM_READWRITE, PROP_ROI_X,                      TRUE },
-    { "video.paoy",      G_TYPE_INT,    G_PARAM_READWRITE, PROP_ROI_Y,                      TRUE },
+    { "cam.cines",       G_TYPE_UINT,   G_PARAM_READWRITE, PROP_NUM_CINES,                  FALSE },
     { "defc.rate",       G_TYPE_FLOAT,  G_PARAM_READWRITE, PROP_FRAMES_PER_SECOND,          TRUE },
     { "defc.exp",        G_TYPE_UINT,   G_PARAM_READWRITE, PROP_EXPOSURE_TIME,              FALSE },
-    /* { "video.pax",          G_TYPE_UINT, G_PARAM_READWRITE, PROP_ROI_WIDTH }, */
-    /* { "video.pay",          G_TYPE_UINT, G_PARAM_READWRITE, PROP_ROI_HEIGHT }, */
+    { "defc.meta.w",     G_TYPE_UINT,   G_PARAM_READWRITE, PROP_ROI_WIDTH,                  TRUE },
+    { "defc.meta.h",     G_TYPE_UINT,   G_PARAM_READWRITE, PROP_ROI_HEIGHT,                 TRUE },
+    { "defc.hqenable",   G_TYPE_UINT,   G_PARAM_READWRITE, PROP_ENABLE_HQ_MODE,             TRUE },
+    { "c1.frcount",      G_TYPE_UINT,   G_PARAM_READABLE,  PROP_RECORDED_FRAMES,            TRUE },
+    { "c1.state",        G_TYPE_STRING, G_PARAM_READABLE,  PROP_CINE_STATE,                 TRUE },
     { NULL, }
 };
 
@@ -158,12 +177,15 @@ typedef struct {
         MESSAGE_STOP,
     } type;
     gpointer  data;
-    GError  **error;
 } InternalMessage;
 
-typedef enum {
-    RESULT_SUCCESS = 1,
-    RESULT_FAILURE,
+typedef struct {
+    enum {
+        RESULT_READY = 1,
+        RESULT_IMAGE,
+    } type;
+    gboolean success;
+    GError *error;
 } Result;
 
 #define DEFINE_CAST(suffix, trans_func)                 \
@@ -175,6 +197,12 @@ value_transform_##suffix (const GValue *src_value,      \
   g_value_set_##suffix (dest_value, trans_func (src));  \
 }
 
+static gboolean
+str_to_boolean (const gchar *s)
+{
+    return g_ascii_strncasecmp (s, "true", 4) == 0;
+}
+
 DEFINE_CAST (uchar,     atoi)
 DEFINE_CAST (int,       atoi)
 DEFINE_CAST (long,      atol)
@@ -184,6 +212,7 @@ DEFINE_CAST (ulong,     atol)
 DEFINE_CAST (float,     atof)
 DEFINE_CAST (double,    atof)
 DEFINE_CAST (enum,      atoi)   /* not super type safe */
+DEFINE_CAST (boolean,   str_to_boolean)
 
 static UnitVariable *
 phantom_lookup_by_id (gint property_id)
@@ -256,13 +285,13 @@ phantom_talk (UcaPhantomCameraPrivate *priv,
 }
 
 static gchar *
-phantom_get_string (UcaPhantomCameraPrivate *priv, UnitVariable *var)
+phantom_get_string_by_name (UcaPhantomCameraPrivate *priv, const gchar *name)
 {
     gchar *request;
     gchar *cr = NULL;
     gchar *reply = NULL;
 
-    request = g_strdup_printf ("get %s\r\n", var->name);
+    request = g_strdup_printf ("get %s\r\n", name);
     reply = phantom_talk (priv, request, NULL, 0, NULL);
 
     if (reply == NULL)
@@ -279,19 +308,34 @@ phantom_get_string_error:
     return reply;
 }
 
+static gchar *
+phantom_get_string (UcaPhantomCameraPrivate *priv, UnitVariable *var)
+{
+    return phantom_get_string_by_name (priv, var->name);
+}
+
 static void
 phantom_get (UcaPhantomCameraPrivate *priv, UnitVariable *var, GValue *value)
 {
     gchar *reply;
     GValue reply_value = {0,};
+    GMatchInfo *info;
+    gchar *var_value;
 
     reply = phantom_get_string (priv, var);
 
     if (reply == NULL)
         return;
 
+    if (!g_regex_match (priv->response_pattern, reply, 0, &info)) {
+        g_warning ("Cannot parse `%s'", reply);
+        return;
+    }
+
+    var_value = g_match_info_fetch (info, 2);
+
     g_value_init (&reply_value, G_TYPE_STRING);
-    g_value_set_string (&reply_value, reply);
+    g_value_set_string (&reply_value, var_value);
 
     if (!g_value_transform (&reply_value, value))
         g_warning ("Could not transform `%s' to target value type %s", reply, G_VALUE_TYPE_NAME (value));
@@ -330,10 +374,13 @@ static void
 uca_phantom_camera_start_recording (UcaCamera *camera,
                                     GError **error)
 {
-    const gchar *request = "rec";
+    const gchar *rec_request = "rec 1\r\n";
+    const gchar *trig_request = "trig\r\n";
 
-    g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), request, NULL, 0, error));
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
+    g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), rec_request, NULL, 0, error));
+    /* TODO: check previous error */
+    g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), trig_request, NULL, 0, error));
 }
 
 static void
@@ -349,11 +396,15 @@ accept_data (UcaPhantomCameraPrivate *priv)
     GSocketConnection *connection;
     GSocketAddress *remote_addr;
     GInetAddress *inet_addr;
+    Result *result;
     gchar *addr;
     gboolean stop = FALSE;
     GError *error = NULL;
 
     g_debug ("Accepting data connection ...");
+    result = g_new0 (Result, 1);
+    result->type = RESULT_READY;
+    g_async_queue_push (priv->result_queue, result);
     connection = g_socket_listener_accept (priv->listener, NULL, priv->accept, &error);
 
     if (g_cancellable_is_cancelled (priv->accept)) {
@@ -365,6 +416,7 @@ accept_data (UcaPhantomCameraPrivate *priv)
     if (error != NULL) {
         g_print ("Error: %s\n", error->message);
         g_error_free (error);
+        return NULL;
     }
 
     remote_addr = g_socket_connection_get_remote_address (connection, NULL);
@@ -377,15 +429,15 @@ accept_data (UcaPhantomCameraPrivate *priv)
     while (!stop) {
         InternalMessage *message;
         GInputStream *istream;
-        gchar request[256];
-        Result result = RESULT_SUCCESS;
+        gsize bytes_read;
 
+        result = g_new0 (Result, 1);
         istream = g_io_stream_get_input_stream (G_IO_STREAM (connection));
         message = g_async_queue_pop (priv->message_queue);
 
         switch (message->type) {
             case MESSAGE_READ_IMAGE:
-                g_input_stream_read (istream, request, sizeof (request), NULL, message->error);
+                g_input_stream_read_all (istream, priv->buffer, MAX_BUFFER_SIZE, &bytes_read, NULL, &result->error);
                 break;
             case MESSAGE_READ_TIMESTAMP:
                 break;
@@ -395,7 +447,9 @@ accept_data (UcaPhantomCameraPrivate *priv)
         }
 
         g_free (message);
-        g_async_queue_push (priv->result_queue, GINT_TO_POINTER (result));
+        result->type = RESULT_IMAGE;
+        result->success = TRUE;
+        g_async_queue_push (priv->result_queue, result);
     }
 
     if (!g_io_stream_close (G_IO_STREAM (connection), NULL, &error)) {
@@ -413,8 +467,9 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
                                   GError **error)
 {
     UcaPhantomCameraPrivate *priv;
+    Result *result;
     gchar *reply;
-    const gchar *request = "startdata {port:7116}";
+    const gchar *request = "startdata {port:7116}\r\n";
 
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
@@ -423,8 +478,12 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
     priv->accept = g_cancellable_new ();
     priv->accept_thread = g_thread_new (NULL, (GThreadFunc) accept_data, priv);
 
+    /* wait for listener to become ready */
+    result = (Result *) g_async_queue_pop (priv->result_queue);
+    g_assert (result->type == RESULT_READY);
+    g_free (result);
+
     /* send startdata command */
-    /* FIXME: there might be a race condition with g_socket_listener_accept */
     reply = phantom_talk (priv, request, NULL, 0, error);
     g_free (reply);
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
@@ -470,16 +529,16 @@ uca_phantom_camera_grab (UcaCamera *camera,
 {
     UcaPhantomCameraPrivate *priv;
     InternalMessage *message;
-    Result result;
+    Result *result;
     gchar *reply;
-    const gchar *request = "ximg {cine:0, start:0, cnt:1}";
+    gboolean return_value = TRUE;
+    const gchar *request = "img {cine:1, start:1, cnt:100, fmt:P16}\r\n";
 
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
     message = g_new0 (InternalMessage, 1);
     message->data = data;
     message->type = MESSAGE_READ_IMAGE;
-    message->error = error;
     g_async_queue_push (priv->message_queue, message);
 
     /* send request */
@@ -491,16 +550,26 @@ uca_phantom_camera_grab (UcaCamera *camera,
     g_free (reply);
 
     /* wait for image transfer to finish */
-    result = (Result) GPOINTER_TO_INT (g_async_queue_pop (priv->result_queue));
+    result = g_async_queue_pop (priv->result_queue);
+    g_assert (result->type == RESULT_IMAGE);
+    return_value = result->success;
 
-    return result == RESULT_SUCCESS;
+    if (result->success)
+        memcpy (data, priv->buffer, MAX_BUFFER_SIZE);
+
+    if (result->error != NULL)
+        g_propagate_error (error, result->error);
+
+    g_free (result);
+
+    return return_value;
 }
 
 static void
 uca_phantom_camera_trigger (UcaCamera *camera,
                             GError **error)
 {
-    const gchar *request = "trig";
+    const gchar *request = "trig\r\n";
 
     /*
      * XXX: note that this triggers the acquisition of an entire series of
@@ -532,12 +601,14 @@ uca_phantom_camera_get_property (GObject *object,
                                  GValue *value,
                                  GParamSpec *pspec)
 {
+    UcaPhantomCameraPrivate *priv;
     UnitVariable *var;
 
+    priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (object);
     var = phantom_lookup_by_id (property_id);
 
     if (var != NULL && var->handle_automatically) {
-        phantom_get (UCA_PHANTOM_CAMERA_GET_PRIVATE (object), var, value);
+        phantom_get (priv, var, value);
         return;
     }
 
@@ -545,22 +616,25 @@ uca_phantom_camera_get_property (GObject *object,
         case PROP_SENSOR_BITDEPTH:
             g_value_set_uint (value, 12);
             break;
-        case PROP_ROI_WIDTH:
-            g_value_set_uint (value, 2048);
-            break;
-        case PROP_ROI_HEIGHT:
-            g_value_set_uint (value, 1952);
-            break;
         case PROP_EXPOSURE_TIME:
             /* fall through */
         case PROP_FRAME_DELAY:
             {
                 gchar *s;
                 gdouble time;
-                s = phantom_get_string (UCA_PHANTOM_CAMERA_GET_PRIVATE (object), var);
+                s = phantom_get_string (priv, var);
                 time = atoi (s) / 1000.0 / 1000.0 / 1000.0;
                 g_value_set_double (value, time);
                 g_free (s);
+            }
+            break;
+        case PROP_NUM_CINES:
+            {
+                /*
+                 * We want to handle setting the property, so we have to bail
+                 * out on the automatic handling ...
+                 */
+                phantom_get (priv, var, value);
             }
             break;
         case PROP_HAS_STREAMING:
@@ -614,6 +688,12 @@ uca_phantom_camera_dispose (GObject *object)
 static void
 uca_phantom_camera_finalize (GObject *object)
 {
+    UcaPhantomCameraPrivate *priv;
+
+    priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (object);
+    g_regex_unref (priv->response_pattern);
+    g_free (priv->buffer);
+
     G_OBJECT_CLASS (uca_phantom_camera_parent_class)->finalize (object);
 }
 
@@ -740,6 +820,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
     g_value_register_transform_func (G_TYPE_STRING, G_TYPE_FLOAT,   value_transform_float);
     g_value_register_transform_func (G_TYPE_STRING, G_TYPE_DOUBLE,  value_transform_double);
     g_value_register_transform_func (G_TYPE_STRING, G_TYPE_ENUM,    value_transform_enum);
+    g_value_register_transform_func (G_TYPE_STRING, G_TYPE_BOOLEAN, value_transform_boolean);
 
     oclass->set_property = uca_phantom_camera_set_property;
     oclass->get_property = uca_phantom_camera_get_property;
@@ -836,6 +917,12 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             "Image formats",
             "", G_PARAM_READABLE);
 
+    phantom_properties[PROP_MAX_NUM_CINES] =
+        g_param_spec_uint ("max-num-cines",
+            "Number of maximum allocatable cines",
+            "Number of maximum allocatable cines",
+            0, G_MAXUINT, 0, G_PARAM_READABLE);
+
     phantom_properties[PROP_FRAME_SYNCHRONIZATION] =
         g_param_spec_enum ("frame-synchronization",
             "Frame synchronization mode",
@@ -850,6 +937,24 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             "Frame delay in seconds",
             0.0, G_MAXDOUBLE, 0.0, G_PARAM_READWRITE);
 
+    phantom_properties[PROP_NUM_CINES] =
+        g_param_spec_uint ("num-cines",
+            "Number of maximum allocatable cines",
+            "Number of maximum allocatable cines",
+            0, G_MAXUINT, 0, G_PARAM_READWRITE);
+
+    phantom_properties[PROP_CINE_STATE] =
+        g_param_spec_string ("cine-state",
+            "State of current cine",
+            "State of current cine",
+            "", G_PARAM_READABLE);
+
+    phantom_properties[PROP_ENABLE_HQ_MODE] =
+        g_param_spec_uint ("enable-hq-mode",
+            "Enable HQ acquisition mode",
+            "Enable HQ acquisition mode",
+            0, G_MAXUINT, 0, G_PARAM_READWRITE);
+
     for (guint i = 0; i < base_overrideables[i]; i++)
         g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
 
@@ -863,6 +968,7 @@ static void
 uca_phantom_camera_init (UcaPhantomCamera *self)
 {
     UcaPhantomCameraPrivate *priv;
+    GError *error = NULL;
 
     self->priv = priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (self);
 
@@ -873,6 +979,13 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->accept = NULL;
     priv->message_queue = g_async_queue_new ();
     priv->result_queue = g_async_queue_new ();
+    priv->response_pattern = g_regex_new ("\\s*([A-Za-z0-9]+)\\s*:\\s*{?\\s*\"?([A-Za-z0-9\\s]+)\"?\\s*}?", 0, 0, &error);
+
+    /* TODO: make dynamic and don't waste too much space */
+    priv->buffer = g_malloc0 (MAX_BUFFER_SIZE);
+
+    if (error != NULL)
+        g_print ("%s\n", error->message);
 
     uca_camera_register_unit (UCA_CAMERA (self), "frame-delay", UCA_UNIT_SECOND);
 }
