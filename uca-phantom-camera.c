@@ -1076,7 +1076,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             "Image format",
             "Image format",
             g_enum_register_static ("image-format", image_format_values),
-            IMAGE_FORMAT_P12L,
+            IMAGE_FORMAT_P16,
             G_PARAM_READWRITE);
 
     for (guint i = 0; i < base_overrideables[i]; i++)
@@ -1101,7 +1101,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->listener = g_socket_listener_new ();
     priv->connection = NULL;
     priv->accept = NULL;
-    priv->format = IMAGE_FORMAT_P12L;
+    priv->format = IMAGE_FORMAT_P16;
     priv->message_queue = g_async_queue_new ();
     priv->result_queue = g_async_queue_new ();
     priv->response_pattern = g_regex_new ("\\s*([A-Za-z0-9]+)\\s*:\\s*{?\\s*\"?([A-Za-z0-9\\s]+)\"?\\s*}?", 0, 0, &error);
