@@ -324,36 +324,40 @@ phantom_get_string_error:
 static gchar *
 phantom_get_string (UcaPhantomCameraPrivate *priv, UnitVariable *var)
 {
-    return phantom_get_string_by_name (priv, var->name);
+    GMatchInfo *info;
+    gchar *reply;
+    gchar *value;
+
+    reply = phantom_get_string_by_name (priv, var->name);
+
+    if (reply == NULL)
+        return NULL;
+
+    if (!g_regex_match (priv->response_pattern, reply, 0, &info)) {
+        g_warning ("Cannot parse `%s'", reply);
+        return NULL;
+    }
+
+    value = g_match_info_fetch (info, 2);
+    g_match_info_free (info);
+    return value;
 }
 
 static void
 phantom_get (UcaPhantomCameraPrivate *priv, UnitVariable *var, GValue *value)
 {
-    gchar *reply;
     GValue reply_value = {0,};
-    GMatchInfo *info;
     gchar *var_value;
 
-    reply = phantom_get_string (priv, var);
-
-    if (reply == NULL)
-        return;
-
-    if (!g_regex_match (priv->response_pattern, reply, 0, &info)) {
-        g_warning ("Cannot parse `%s'", reply);
-        return;
-    }
-
-    var_value = g_match_info_fetch (info, 2);
+    var_value = phantom_get_string (priv, var);
 
     g_value_init (&reply_value, G_TYPE_STRING);
     g_value_set_string (&reply_value, var_value);
 
     if (!g_value_transform (&reply_value, value))
-        g_warning ("Could not transform `%s' to target value type %s", reply, G_VALUE_TYPE_NAME (value));
+        g_warning ("Could not transform `%s' to target value type %s", var_value, G_VALUE_TYPE_NAME (value));
 
-    g_free (reply);
+    g_free (var_value);
     g_value_unset (&reply_value);
 }
 
