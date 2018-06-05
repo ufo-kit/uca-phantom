@@ -73,6 +73,7 @@ enum {
     PROP_CINE_STATE,
 
     /* our own */
+    PROP_IMAGE_FORMAT,
     N_PROPERTIES
 };
 
@@ -107,11 +108,22 @@ typedef enum {
     SYNC_MODE_VIDEO_FRAME_RATE,
 } SyncMode;
 
+typedef enum {
+    IMAGE_FORMAT_P16 = 0,
+    IMAGE_FORMAT_P12L,
+} ImageFormat;
+
 static GEnumValue sync_mode_values[] = {
     { SYNC_MODE_FREE_RUN, "SYNC_MODE_FREE_RUN", "sync_mode_free_run" },
     { SYNC_MODE_FSYNC, "SYNC_MODE_FSYNC", "sync_mode_fsync" },
     { SYNC_MODE_IRIG, "SYNC_MODE_IRIG", "sync_mode_irig" },
     { SYNC_MODE_VIDEO_FRAME_RATE, "SYNC_MODE_VIDEO_FRAME_RATE", "sync_mode_video_frame_rate" },
+    { 0, NULL, NULL }
+};
+
+static GEnumValue image_format_values[] = {
+    { IMAGE_FORMAT_P16,     "IMAGE_FORMAT_P16",     "image_format_p16" },
+    { IMAGE_FORMAT_P12L,    "IMAGE_FORMAT_P12L",    "image_format_p12l" },
     { 0, NULL, NULL }
 };
 
@@ -127,6 +139,7 @@ struct _UcaPhantomCameraPrivate {
     GAsyncQueue         *result_queue;
     GRegex              *response_pattern;
     guint32             *buffer;
+    ImageFormat          format;
 };
 
 typedef struct  {
@@ -350,6 +363,11 @@ phantom_set_string (UcaPhantomCameraPrivate *priv, UnitVariable *var, const gcha
     gchar *request;
     gchar reply[256];
 
+    if (!(var->flags & G_PARAM_WRITABLE)) {
+        g_warning ("%s cannot be written", var->name);
+        return;
+    }
+
     request = g_strdup_printf ("set %s %s\r\n", var->name, value);
     phantom_talk (priv, request, reply, sizeof (reply), NULL);
 
@@ -360,9 +378,6 @@ static void
 phantom_set (UcaPhantomCameraPrivate *priv, UnitVariable *var, const GValue *value)
 {
     GValue request_value = {0,};
-
-    if (!(var->flags & G_PARAM_WRITABLE))
-        return;
 
     g_value_init (&request_value, G_TYPE_STRING);
     g_value_transform (value, &request_value);
@@ -375,12 +390,12 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
                                     GError **error)
 {
     const gchar *rec_request = "rec 1\r\n";
-    const gchar *trig_request = "trig\r\n";
+    /* const gchar *trig_request = "trig\r\n"; */
 
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
     g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), rec_request, NULL, 0, error));
     /* TODO: check previous error */
-    g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), trig_request, NULL, 0, error));
+    /* g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), trig_request, NULL, 0, error)); */
 }
 
 static void
@@ -522,6 +537,62 @@ uca_phantom_camera_write (UcaCamera *camera,
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 }
 
+static void
+unpack_p12l (guint16 *output,
+             const guint32 *input,
+             const guint num_pixels)
+{
+    guint i, j;
+
+    /*
+     * Eight 12 bit values are packed into three 32 bit words. Each word is in
+     * Big endian format, i.e. the four bytes of a 32 bit word are mirrored.
+     * Once they are swapped to Little endian, you can think of it as a Big
+     * Endian bit stream of three 4 bit words. The middle word becomes the
+     * highest word, the lower word becomes the middle word and the highest word
+     * becomes the lowest word.
+     *
+     * For anyone taking this up: good luck with vectorization!
+     */
+    for (i = 0, j = 0; i < num_pixels; i += 8, j += 3) {
+        const guint32 tmp1 = g_ntohl (input[j + 0]);
+        const guint32 tmp2 = g_ntohl (input[j + 1]);
+        const guint32 tmp3 = g_ntohl (input[j + 2]);
+
+        output[i + 0] = ((tmp1 & 0x00F00000) >> 16) |
+                        ((tmp1 & 0x0F000000) >> 16) |
+                        ((tmp1 & 0xF0000000) >> 28);
+
+        output[i + 1] = ((tmp1 & 0x00000F00) >> 4) |
+                        ((tmp1 & 0x0000F000) >> 4) |
+                        ((tmp1 & 0x000F0000) >> 16);
+
+        output[i + 2] = ((tmp2 & 0xF0000000) >> 24) |
+                        ((tmp1 & 0x0000000F) << 8) |
+                        ((tmp1 & 0x000000F0) >> 4);
+
+        output[i + 3] = ((tmp2 & 0x000F0000) >> 12) |
+                        ((tmp2 & 0x00F00000) >> 12) |
+                        ((tmp2 & 0x0F000000) >> 24);
+
+        output[i + 4] = ((tmp2 & 0x000000F0)) |
+                        ((tmp2 & 0x00000F00)) |
+                        ((tmp2 & 0x0000F000) >> 12);
+
+        output[i + 5] = ((tmp3 & 0x0F000000) >> 20) |
+                        ((tmp3 & 0xF0000000) >> 20) |
+                        ((tmp2 & 0x0000000F));
+
+        output[i + 6] = ((tmp3 & 0x0000F000) >> 8) |
+                        ((tmp3 & 0x000F0000) >> 8) |
+                        ((tmp3 & 0x00F00000) >> 20);
+
+        output[i + 7] = ((tmp3 & 0x0000000F) << 4) |
+                        ((tmp3 & 0x000000F0) << 4) |
+                        ((tmp3 & 0x00000F00) >> 8);
+    }
+}
+
 static gboolean
 uca_phantom_camera_grab (UcaCamera *camera,
                          gpointer data,
@@ -530,9 +601,10 @@ uca_phantom_camera_grab (UcaCamera *camera,
     UcaPhantomCameraPrivate *priv;
     InternalMessage *message;
     Result *result;
+    gchar *request;
     gchar *reply;
     gboolean return_value = TRUE;
-    const gchar *request = "img {cine:1, start:1, cnt:100, fmt:P16}\r\n";
+    const gchar *request_fmt = "img {cine:1, start:1, cnt:100, fmt:%s}\r\n";
 
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
@@ -541,8 +613,18 @@ uca_phantom_camera_grab (UcaCamera *camera,
     message->type = MESSAGE_READ_IMAGE;
     g_async_queue_push (priv->message_queue, message);
 
+    switch (priv->format) {
+        case IMAGE_FORMAT_P16:
+            request = g_strdup_printf (request_fmt, "P16");
+            break;
+        case IMAGE_FORMAT_P12L:
+            request = g_strdup_printf (request_fmt, "P12L");
+            break;
+    }
+
     /* send request */
     reply = phantom_talk (priv, request, NULL, 0, error);
+    g_free (request);
 
     if (reply == NULL)
         return FALSE;
@@ -554,8 +636,16 @@ uca_phantom_camera_grab (UcaCamera *camera,
     g_assert (result->type == RESULT_IMAGE);
     return_value = result->success;
 
-    if (result->success)
-        memcpy (data, priv->buffer, MAX_BUFFER_SIZE);
+    if (result->success) {
+        switch (priv->format) {
+            case IMAGE_FORMAT_P16:
+                memcpy (data, priv->buffer, MAX_BUFFER_SIZE);
+                break;
+            case IMAGE_FORMAT_P12L:
+                unpack_p12l (data, priv->buffer, 1024 * 976);
+                break;
+        }
+    }
 
     if (result->error != NULL)
         g_propagate_error (error, result->error);
@@ -585,13 +675,32 @@ uca_phantom_camera_set_property (GObject *object,
                                  const GValue *value,
                                  GParamSpec *pspec)
 {
+    UcaPhantomCameraPrivate *priv;
     UnitVariable *var;
 
+    priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (object);
     var = phantom_lookup_by_id (property_id);
 
-    if (var != NULL) {
-        phantom_set (UCA_PHANTOM_CAMERA_GET_PRIVATE (object), var, value);
+    if (var != NULL && var->handle_automatically) {
+        phantom_set (priv, var, value);
         return;
+    }
+
+    switch (property_id) {
+        case PROP_EXPOSURE_TIME:
+            {
+                gchar *val;
+                gdouble time;
+
+                time = g_value_get_double (value);
+                val = g_strdup_printf ("%u", (guint) (time * 1000 * 1000 * 1000));
+                phantom_set_string (priv, var, val);
+                g_free (val);
+            }
+            break;
+        case PROP_IMAGE_FORMAT:
+            priv->format = g_value_get_enum (value);
+            break;
     }
 }
 
@@ -636,6 +745,9 @@ uca_phantom_camera_get_property (GObject *object,
                  */
                 phantom_get (priv, var, value);
             }
+            break;
+        case PROP_IMAGE_FORMAT:
+            g_value_set_enum (value, priv->format);
             break;
         case PROP_HAS_STREAMING:
             g_value_set_boolean (value, FALSE);
@@ -955,6 +1067,14 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             "Enable HQ acquisition mode",
             0, G_MAXUINT, 0, G_PARAM_READWRITE);
 
+    phantom_properties[PROP_IMAGE_FORMAT] =
+        g_param_spec_enum ("image-format",
+            "Image format",
+            "Image format",
+            g_enum_register_static ("image-format", image_format_values),
+            IMAGE_FORMAT_P12L,
+            G_PARAM_READWRITE);
+
     for (guint i = 0; i < base_overrideables[i]; i++)
         g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
 
@@ -977,6 +1097,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->listener = g_socket_listener_new ();
     priv->connection = NULL;
     priv->accept = NULL;
+    priv->format = IMAGE_FORMAT_P12L;
     priv->message_queue = g_async_queue_new ();
     priv->result_queue = g_async_queue_new ();
     priv->response_pattern = g_regex_new ("\\s*([A-Za-z0-9]+)\\s*:\\s*{?\\s*\"?([A-Za-z0-9\\s]+)\"?\\s*}?", 0, 0, &error);
