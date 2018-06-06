@@ -71,7 +71,6 @@ enum {
     PROP_NUM_CINES,
 
     /* 4.6 defc */
-    PROP_ENABLE_HQ_MODE,
     PROP_POST_TRIGGER_FRAMES,
 
     /* 4.7.1 cine status */
@@ -184,7 +183,6 @@ static UnitVariable variables[] = {
     { "defc.rate",       G_TYPE_FLOAT,  G_PARAM_READWRITE, PROP_FRAMES_PER_SECOND,          TRUE },
     { "defc.exp",        G_TYPE_UINT,   G_PARAM_READWRITE, PROP_EXPOSURE_TIME,              FALSE },
     { "defc.ptframes",   G_TYPE_UINT,   G_PARAM_READWRITE, PROP_POST_TRIGGER_FRAMES,        TRUE },
-    { "defc.hqenable",   G_TYPE_UINT,   G_PARAM_READWRITE, PROP_ENABLE_HQ_MODE,             TRUE },
     { "c1.frcount",      G_TYPE_UINT,   G_PARAM_READABLE,  PROP_RECORDED_FRAMES,            TRUE },
     { "c1.state",        G_TYPE_STRING, G_PARAM_READABLE,  PROP_CINE_STATE,                 TRUE },
     { NULL, }
@@ -1167,12 +1165,6 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             "State of current cine",
             "State of current cine",
             "", G_PARAM_READABLE);
-
-    phantom_properties[PROP_ENABLE_HQ_MODE] =
-        g_param_spec_uint ("enable-hq-mode",
-            "Enable HQ acquisition mode",
-            "Enable HQ acquisition mode",
-            0, G_MAXUINT, 0, G_PARAM_READWRITE);
 
     phantom_properties[PROP_POST_TRIGGER_FRAMES] =
         g_param_spec_uint ("post-trigger-frames",
