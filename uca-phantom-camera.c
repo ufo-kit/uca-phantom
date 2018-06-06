@@ -1230,6 +1230,8 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
         g_print ("%s\n", error->message);
 
     uca_camera_register_unit (UCA_CAMERA (self), "frame-delay", UCA_UNIT_SECOND);
+    uca_camera_register_unit (UCA_CAMERA (self), "sensor-temperature", UCA_UNIT_DEGREE_CELSIUS);
+    uca_camera_register_unit (UCA_CAMERA (self), "camera-temperature", UCA_UNIT_DEGREE_CELSIUS);
 }
 
 G_MODULE_EXPORT GType
