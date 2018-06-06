@@ -438,12 +438,12 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
                                     GError **error)
 {
     const gchar *rec_request = "rec 1\r\n";
-    /* const gchar *trig_request = "trig\r\n"; */
+    const gchar *trig_request = "trig\r\n";
 
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
     g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), rec_request, NULL, 0, error));
     /* TODO: check previous error */
-    /* g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), trig_request, NULL, 0, error)); */
+    g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), trig_request, NULL, 0, error));
 }
 
 static void
@@ -652,7 +652,7 @@ uca_phantom_camera_grab (UcaCamera *camera,
     gchar *request;
     gchar *reply;
     gboolean return_value = TRUE;
-    const gchar *request_fmt = "img {cine:1, start:1, cnt:100, fmt:%s}\r\n";
+    const gchar *request_fmt = "img {cine:1, start:0, cnt:100, fmt:%s}\r\n";
 
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
