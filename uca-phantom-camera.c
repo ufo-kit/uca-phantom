@@ -143,7 +143,7 @@ struct _UcaPhantomCameraPrivate {
     GAsyncQueue         *result_queue;
     GRegex              *response_pattern;
     GRegex              *res_pattern;
-    guint32             *buffer;
+    guint8              *buffer;
     ImageFormat          format;
 };
 
@@ -591,57 +591,18 @@ uca_phantom_camera_write (UcaCamera *camera,
 
 static void
 unpack_p12l (guint16 *output,
-             const guint32 *input,
+             const guint8 *input,
              const guint num_pixels)
 {
     guint i, j;
 
-    /*
-     * Eight 12 bit values are packed into three 32 bit words. Each word is in
-     * Big endian format, i.e. the four bytes of a 32 bit word are mirrored.
-     * Once they are swapped to Little endian, you can think of it as a Big
-     * Endian bit stream of three 4 bit words. The middle word becomes the
-     * highest word, the lower word becomes the middle word and the highest word
-     * becomes the lowest word.
-     *
-     * For anyone taking this up: good luck with vectorization!
-     */
-    for (i = 0, j = 0; i < num_pixels; i += 8, j += 3) {
-        const guint32 tmp1 = g_ntohl (input[j + 0]);
-        const guint32 tmp2 = g_ntohl (input[j + 1]);
-        const guint32 tmp3 = g_ntohl (input[j + 2]);
+    for (i = 0, j = 0; i < num_pixels; i += 2, j += 3) {
+        const guint16 tmp0 = (guint16) input[j + 0];
+        const guint16 tmp1 = (guint16) input[j + 1];
+        const guint16 tmp2 = (guint16) input[j + 2];
 
-        output[i + 0] = ((tmp1 & 0x00F00000) >> 16) |
-                        ((tmp1 & 0x0F000000) >> 16) |
-                        ((tmp1 & 0xF0000000) >> 28);
-
-        output[i + 1] = ((tmp1 & 0x00000F00) >> 4) |
-                        ((tmp1 & 0x0000F000) >> 4) |
-                        ((tmp1 & 0x000F0000) >> 16);
-
-        output[i + 2] = ((tmp2 & 0xF0000000) >> 24) |
-                        ((tmp1 & 0x0000000F) << 8) |
-                        ((tmp1 & 0x000000F0) >> 4);
-
-        output[i + 3] = ((tmp2 & 0x000F0000) >> 12) |
-                        ((tmp2 & 0x00F00000) >> 12) |
-                        ((tmp2 & 0x0F000000) >> 24);
-
-        output[i + 4] = ((tmp2 & 0x000000F0)) |
-                        ((tmp2 & 0x00000F00)) |
-                        ((tmp2 & 0x0000F000) >> 12);
-
-        output[i + 5] = ((tmp3 & 0x0F000000) >> 20) |
-                        ((tmp3 & 0xF0000000) >> 20) |
-                        ((tmp2 & 0x0000000F));
-
-        output[i + 6] = ((tmp3 & 0x0000F000) >> 8) |
-                        ((tmp3 & 0x000F0000) >> 8) |
-                        ((tmp3 & 0x00F00000) >> 20);
-
-        output[i + 7] = ((tmp3 & 0x0000000F) << 4) |
-                        ((tmp3 & 0x000000F0) << 4) |
-                        ((tmp3 & 0x00000F00) >> 8);
+        output[i + 0] = tmp0 << 4 | (tmp1 >> 4);
+        output[i + 1] = ((tmp1 & 0xF) << 8) | tmp2;
     }
 }
 
@@ -1177,7 +1138,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             "Image format",
             "Image format",
             g_enum_register_static ("image-format", image_format_values),
-            IMAGE_FORMAT_P16,
+            IMAGE_FORMAT_P12L,
             G_PARAM_READWRITE);
 
     for (guint i = 0; i < base_overrideables[i]; i++)
@@ -1202,7 +1163,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->listener = g_socket_listener_new ();
     priv->connection = NULL;
     priv->accept = NULL;
-    priv->format = IMAGE_FORMAT_P16;
+    priv->format = IMAGE_FORMAT_P12L;
     priv->message_queue = g_async_queue_new ();
     priv->result_queue = g_async_queue_new ();
 
