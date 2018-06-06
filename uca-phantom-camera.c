@@ -61,6 +61,10 @@ enum {
     PROP_IMAGE_FORMATS,
     PROP_MAX_NUM_CINES,
 
+    /* 4.2.6 status */
+    PROP_SENSOR_TEMPERATURE,
+    PROP_CAMERA_TEMPERATURE,
+
     /* 4.4 cam structure */
     PROP_FRAME_SYNCHRONIZATION,
     PROP_FRAME_DELAY,
@@ -172,6 +176,8 @@ static UnitVariable variables[] = {
     { "info.maxcines",   G_TYPE_UINT,   G_PARAM_READABLE,  PROP_MAX_NUM_CINES,              TRUE },
     { "info.xinc",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_ROI_WIDTH_MULTIPLIER,       TRUE },
     { "info.yinc",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_ROI_HEIGHT_MULTIPLIER,      TRUE },
+    { "info.snstemp",    G_TYPE_UINT,   G_PARAM_READABLE,  PROP_SENSOR_TEMPERATURE,         TRUE },
+    { "info.camtemp",    G_TYPE_UINT,   G_PARAM_READABLE,  PROP_CAMERA_TEMPERATURE,         TRUE },
     { "cam.syncimg",     G_TYPE_ENUM,   G_PARAM_READWRITE, PROP_FRAME_SYNCHRONIZATION,      TRUE },
     { "cam.frdelay",     G_TYPE_UINT,   G_PARAM_READWRITE, PROP_FRAME_DELAY,                FALSE },
     { "cam.cines",       G_TYPE_UINT,   G_PARAM_READWRITE, PROP_NUM_CINES,                  FALSE },
@@ -1122,6 +1128,18 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
         g_param_spec_uint ("max-num-cines",
             "Number of maximum allocatable cines",
             "Number of maximum allocatable cines",
+            0, G_MAXUINT, 0, G_PARAM_READABLE);
+
+    phantom_properties[PROP_SENSOR_TEMPERATURE] =
+        g_param_spec_uint ("sensor-temperature",
+            "Sensor temperature",
+            "Sensor temperature",
+            0, G_MAXUINT, 0, G_PARAM_READABLE);
+
+    phantom_properties[PROP_CAMERA_TEMPERATURE] =
+        g_param_spec_uint ("camera-temperature",
+            "Camera temperature",
+            "Camera temperature",
             0, G_MAXUINT, 0, G_PARAM_READABLE);
 
     phantom_properties[PROP_FRAME_SYNCHRONIZATION] =
