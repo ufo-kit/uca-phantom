@@ -139,6 +139,7 @@ struct _UcaPhantomCameraPrivate {
     GAsyncQueue         *message_queue;
     GAsyncQueue         *result_queue;
     GRegex              *response_pattern;
+    GRegex              *res_pattern;
     guint32             *buffer;
     ImageFormat          format;
 };
@@ -177,8 +178,6 @@ static UnitVariable variables[] = {
     { "defc.rate",       G_TYPE_FLOAT,  G_PARAM_READWRITE, PROP_FRAMES_PER_SECOND,          TRUE },
     { "defc.exp",        G_TYPE_UINT,   G_PARAM_READWRITE, PROP_EXPOSURE_TIME,              FALSE },
     { "defc.ptframes",   G_TYPE_UINT,   G_PARAM_READWRITE, PROP_POST_TRIGGER_FRAMES,        TRUE },
-    { "defc.meta.w",     G_TYPE_UINT,   G_PARAM_READWRITE, PROP_ROI_WIDTH,                  TRUE },
-    { "defc.meta.h",     G_TYPE_UINT,   G_PARAM_READWRITE, PROP_ROI_HEIGHT,                 TRUE },
     { "defc.hqenable",   G_TYPE_UINT,   G_PARAM_READWRITE, PROP_ENABLE_HQ_MODE,             TRUE },
     { "c1.frcount",      G_TYPE_UINT,   G_PARAM_READABLE,  PROP_RECORDED_FRAMES,            TRUE },
     { "c1.state",        G_TYPE_STRING, G_PARAM_READABLE,  PROP_CINE_STATE,                 TRUE },
@@ -302,47 +301,77 @@ phantom_talk (UcaPhantomCameraPrivate *priv,
 static gchar *
 phantom_get_string_by_name (UcaPhantomCameraPrivate *priv, const gchar *name)
 {
+    GMatchInfo *info;
     gchar *request;
-    gchar *cr = NULL;
+    gchar *cr;
+    gchar *value = NULL;
     gchar *reply = NULL;
 
     request = g_strdup_printf ("get %s\r\n", name);
     reply = phantom_talk (priv, request, NULL, 0, NULL);
+    g_free (request);
 
     if (reply == NULL)
-        goto phantom_get_string_error;
+        return NULL;
 
-    /* strip \r\n and properly zero-limit the string */
     cr = strchr (reply, '\r');
 
     if (cr != NULL)
         *cr = '\0';
 
-phantom_get_string_error:
-    g_free (request);
-    return reply;
-}
-
-static gchar *
-phantom_get_string (UcaPhantomCameraPrivate *priv, UnitVariable *var)
-{
-    GMatchInfo *info;
-    gchar *reply;
-    gchar *value;
-
-    reply = phantom_get_string_by_name (priv, var->name);
-
-    if (reply == NULL)
-        return NULL;
-
     if (!g_regex_match (priv->response_pattern, reply, 0, &info)) {
         g_warning ("Cannot parse `%s'", reply);
+        g_free (reply);
         return NULL;
     }
 
     value = g_match_info_fetch (info, 2);
     g_match_info_free (info);
+    g_free (reply);
+
     return value;
+}
+
+static gchar *
+phantom_get_string (UcaPhantomCameraPrivate *priv, UnitVariable *var)
+{
+    return phantom_get_string_by_name (priv, var->name);
+}
+
+static gboolean
+phantom_get_resolution_by_name (UcaPhantomCameraPrivate *priv,
+                                const gchar *name,
+                                guint *width,
+                                guint *height)
+{
+    GMatchInfo *info;
+    gchar *s;
+
+    if (width)
+        *width = 0;
+
+    if (height)
+        *height = 0;
+
+    s = phantom_get_string_by_name (priv, name);
+
+    if (s == NULL)
+        return FALSE;
+
+    if (!g_regex_match (priv->res_pattern, s, 0, &info)) {
+        g_free (s);
+        return FALSE;
+    }
+
+    if (width)
+        *width = atoi (g_match_info_fetch (info, 1));
+
+    if (height)
+        *height = atoi (g_match_info_fetch (info, 2));
+
+    g_free (s);
+    g_match_info_free (info);
+    return TRUE;
 }
 
 static void
@@ -376,7 +405,6 @@ phantom_set_string (UcaPhantomCameraPrivate *priv, UnitVariable *var, const gcha
 
     request = g_strdup_printf ("set %s %s\r\n", var->name, value);
     phantom_talk (priv, request, reply, sizeof (reply), NULL);
-
     g_free (request);
 }
 
@@ -389,6 +417,20 @@ phantom_set (UcaPhantomCameraPrivate *priv, UnitVariable *var, const GValue *val
     g_value_transform (value, &request_value);
     phantom_set_string (priv, var, g_value_get_string (&request_value));
     g_value_unset (&request_value);
+}
+
+static void
+phantom_set_resolution_by_name (UcaPhantomCameraPrivate *priv,
+                                const gchar *name,
+                                guint width,
+                                guint height)
+{
+    gchar *request;
+    gchar reply[256];
+
+    request = g_strdup_printf ("set %s %u x %u\r\n", name, width, height);
+    phantom_talk (priv, request, reply, sizeof (reply), NULL);
+    g_free (request);
 }
 
 static void
@@ -704,6 +746,30 @@ uca_phantom_camera_set_property (GObject *object,
                 g_free (val);
             }
             break;
+        case PROP_ROI_WIDTH:
+            {
+                guint height;
+
+                if (phantom_get_resolution_by_name (priv, "defc.res", NULL, &height)) {
+                    guint width;
+
+                    width = g_value_get_uint (value);
+                    phantom_set_resolution_by_name (priv, "defc.res", width, height);
+                }
+            }
+            break;
+        case PROP_ROI_HEIGHT:
+            {
+                guint width;
+
+                if (phantom_get_resolution_by_name (priv, "defc.res", &width, NULL)) {
+                    guint height;
+
+                    height = g_value_get_uint (value);
+                    phantom_set_resolution_by_name (priv, "defc.res", width, height);
+                }
+            }
+            break;
         case PROP_IMAGE_FORMAT:
             priv->format = g_value_get_enum (value);
             break;
@@ -730,6 +796,22 @@ uca_phantom_camera_get_property (GObject *object,
     switch (property_id) {
         case PROP_SENSOR_BITDEPTH:
             g_value_set_uint (value, 12);
+            break;
+        case PROP_ROI_WIDTH:
+            {
+                guint width;
+
+                if (phantom_get_resolution_by_name (priv, "defc.res", &width, NULL))
+                    g_value_set_uint (value, width);
+            }
+            break;
+        case PROP_ROI_HEIGHT:
+            {
+                guint height;
+
+                if (phantom_get_resolution_by_name (priv, "defc.res", NULL, &height))
+                    g_value_set_uint (value, height);
+            }
             break;
         case PROP_EXPOSURE_TIME:
             /* fall through */
@@ -810,6 +892,7 @@ uca_phantom_camera_finalize (GObject *object)
 
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (object);
     g_regex_unref (priv->response_pattern);
+    g_regex_unref (priv->res_pattern);
     g_free (priv->buffer);
 
     G_OBJECT_CLASS (uca_phantom_camera_parent_class)->finalize (object);
@@ -1112,7 +1195,15 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->format = IMAGE_FORMAT_P16;
     priv->message_queue = g_async_queue_new ();
     priv->result_queue = g_async_queue_new ();
+
+    /*
+     * Matches responses to `get` requests but covers only single value
+     * responses, i.e. something like `def.res : 1024 x 976`.
+     */
     priv->response_pattern = g_regex_new ("\\s*([A-Za-z0-9]+)\\s*:\\s*{?\\s*\"?([A-Za-z0-9\\s]+)\"?\\s*}?", 0, 0, &error);
+
+    /* Matches `1024 x 976`. */
+    priv->res_pattern = g_regex_new ("\\s*([0-9]+)\\s*x\\s*([0-9]+)", 0, 0, &error);
 
     /* TODO: make dynamic and don't waste too much space */
     priv->buffer = g_malloc0 (MAX_BUFFER_SIZE);
