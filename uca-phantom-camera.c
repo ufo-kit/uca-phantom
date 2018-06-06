@@ -1154,7 +1154,6 @@ static void
 uca_phantom_camera_init (UcaPhantomCamera *self)
 {
     UcaPhantomCameraPrivate *priv;
-    GError *error = NULL;
 
     self->priv = priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (self);
 
@@ -1171,16 +1170,13 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
      * Matches responses to `get` requests but covers only single value
      * responses, i.e. something like `def.res : 1024 x 976`.
      */
-    priv->response_pattern = g_regex_new ("\\s*([A-Za-z0-9]+)\\s*:\\s*{?\\s*\"?([A-Za-z0-9\\s]+)\"?\\s*}?", 0, 0, &error);
+    priv->response_pattern = g_regex_new ("\\s*([A-Za-z0-9]+)\\s*:\\s*{?\\s*\"?([A-Za-z0-9\\s]+)\"?\\s*}?", 0, 0, NULL);
 
     /* Matches `1024 x 976`. */
-    priv->res_pattern = g_regex_new ("\\s*([0-9]+)\\s*x\\s*([0-9]+)", 0, 0, &error);
+    priv->res_pattern = g_regex_new ("\\s*([0-9]+)\\s*x\\s*([0-9]+)", 0, 0, NULL);
 
     /* TODO: make dynamic and don't waste too much space */
     priv->buffer = g_malloc0 (MAX_BUFFER_SIZE);
-
-    if (error != NULL)
-        g_print ("%s\n", error->message);
 
     uca_camera_register_unit (UCA_CAMERA (self), "frame-delay", UCA_UNIT_SECOND);
     uca_camera_register_unit (UCA_CAMERA (self), "sensor-temperature", UCA_UNIT_DEGREE_CELSIUS);
