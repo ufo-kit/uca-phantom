@@ -143,6 +143,9 @@ struct _UcaPhantomCameraPrivate {
     GAsyncQueue         *result_queue;
     GRegex              *response_pattern;
     GRegex              *res_pattern;
+
+    guint                roi_width;
+    guint                roi_height;
     guint8              *buffer;
     ImageFormat          format;
 };
@@ -617,7 +620,7 @@ uca_phantom_camera_grab (UcaCamera *camera,
     gchar *request;
     gchar *reply;
     gboolean return_value = TRUE;
-    const gchar *request_fmt = "img {cine:1, start:0, cnt:100, fmt:%s}\r\n";
+    const gchar *request_fmt = "img {cine:1, start:0, cnt:10, fmt:%s}\r\n";
 
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
@@ -712,28 +715,12 @@ uca_phantom_camera_set_property (GObject *object,
             }
             break;
         case PROP_ROI_WIDTH:
-            {
-                guint height;
-
-                if (phantom_get_resolution_by_name (priv, "defc.res", NULL, &height)) {
-                    guint width;
-
-                    width = g_value_get_uint (value);
-                    phantom_set_resolution_by_name (priv, "defc.res", width, height);
-                }
-            }
+            priv->roi_width = g_value_get_uint (value);
+            phantom_set_resolution_by_name (priv, "defc.res", priv->roi_width, priv->roi_height);
             break;
         case PROP_ROI_HEIGHT:
-            {
-                guint width;
-
-                if (phantom_get_resolution_by_name (priv, "defc.res", &width, NULL)) {
-                    guint height;
-
-                    height = g_value_get_uint (value);
-                    phantom_set_resolution_by_name (priv, "defc.res", width, height);
-                }
-            }
+            priv->roi_height = g_value_get_uint (value);
+            phantom_set_resolution_by_name (priv, "defc.res", priv->roi_width, priv->roi_height);
             break;
         case PROP_IMAGE_FORMAT:
             priv->format = g_value_get_enum (value);
@@ -763,20 +750,10 @@ uca_phantom_camera_get_property (GObject *object,
             g_value_set_uint (value, 12);
             break;
         case PROP_ROI_WIDTH:
-            {
-                guint width;
-
-                if (phantom_get_resolution_by_name (priv, "defc.res", &width, NULL))
-                    g_value_set_uint (value, width);
-            }
+            g_value_set_uint (value, priv->roi_width);
             break;
         case PROP_ROI_HEIGHT:
-            {
-                guint height;
-
-                if (phantom_get_resolution_by_name (priv, "defc.res", NULL, &height))
-                    g_value_set_uint (value, height);
-            }
+            g_value_set_uint (value, priv->roi_height);
             break;
         case PROP_EXPOSURE_TIME:
             /* fall through */
@@ -962,6 +939,8 @@ uca_phantom_camera_constructed (GObject *object)
     if (addr != NULL) {
         priv->connection = g_socket_client_connect (priv->client, G_SOCKET_CONNECTABLE (addr), NULL, &priv->construct_error);
         g_object_unref (addr);
+
+        phantom_get_resolution_by_name (priv, "defc.res", &priv->roi_width, &priv->roi_height);
     }
 }
 
