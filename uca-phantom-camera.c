@@ -521,13 +521,13 @@ accept_data (UcaPhantomCameraPrivate *priv)
     connection = g_socket_listener_accept (priv->listener, NULL, priv->accept, &error);
 
     if (g_cancellable_is_cancelled (priv->accept)) {
-        g_print ("Listen cancelled\n");
+        g_warning ("Listen cancelled\n");
         g_error_free (error);
         return NULL;
     }
 
     if (error != NULL) {
-        g_print ("Error: %s\n", error->message);
+        g_warning ("Error: %s\n", error->message);
         g_error_free (error);
         return NULL;
     }
