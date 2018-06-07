@@ -937,7 +937,12 @@ uca_phantom_camera_constructed (GObject *object)
     addr = phantom_discover (&priv->construct_error);
 
     if (addr != NULL) {
+        gchar *addr_string;
+
         priv->connection = g_socket_client_connect (priv->client, G_SOCKET_CONNECTABLE (addr), NULL, &priv->construct_error);
+        addr_string = g_inet_address_to_string (g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (addr)));
+        g_debug ("Connected to %s\n", addr_string);
+        g_free (addr_string);
         g_object_unref (addr);
 
         phantom_get_resolution_by_name (priv, "defc.res", &priv->roi_width, &priv->roi_height);
