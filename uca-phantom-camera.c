@@ -102,9 +102,6 @@ static gint base_overrideables[] = {
 
 static GParamSpec *phantom_properties[N_PROPERTIES] = { NULL, };
 
-/* static const gsize MAX_BUFFER_SIZE = 2048 * 1952 * 2; */
-static const gsize MAX_BUFFER_SIZE = 1024 * 976 * 2;
-
 typedef enum {
     SYNC_MODE_FREE_RUN = 0,
     SYNC_MODE_FSYNC,
@@ -440,6 +437,13 @@ phantom_set_resolution_by_name (UcaPhantomCameraPrivate *priv,
     g_free (request);
 }
 
+static gsize
+get_buffer_size (UcaPhantomCameraPrivate *priv)
+{
+    /* Adapt this if we ever use 8 bit modes ... */
+    return priv->roi_width * priv->roi_height * 2;
+}
+
 static void
 uca_phantom_camera_start_recording (UcaCamera *camera,
                                     GError **error)
@@ -458,6 +462,23 @@ uca_phantom_camera_stop_recording (UcaCamera *camera,
                                    GError **error)
 {
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
+}
+
+static void
+read_data (UcaPhantomCameraPrivate *priv, GInputStream *istream, GError **error)
+{
+    gsize to_read;
+
+    to_read = get_buffer_size (priv);
+
+    while (to_read > 0) {
+        gsize bytes_read;
+
+        if (!g_input_stream_read_all (istream, priv->buffer, to_read, &bytes_read, NULL, error))
+            return;
+
+        to_read -= bytes_read;
+    }
 }
 
 static gpointer
@@ -499,7 +520,6 @@ accept_data (UcaPhantomCameraPrivate *priv)
     while (!stop) {
         InternalMessage *message;
         GInputStream *istream;
-        gsize bytes_read;
 
         result = g_new0 (Result, 1);
         istream = g_io_stream_get_input_stream (G_IO_STREAM (connection));
@@ -507,7 +527,7 @@ accept_data (UcaPhantomCameraPrivate *priv)
 
         switch (message->type) {
             case MESSAGE_READ_IMAGE:
-                g_input_stream_read_all (istream, priv->buffer, MAX_BUFFER_SIZE, &bytes_read, NULL, &result->error);
+                read_data (priv, istream, &result->error);
                 break;
             case MESSAGE_READ_TIMESTAMP:
                 break;
@@ -542,6 +562,9 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
     const gchar *request = "startdata {port:7116}\r\n";
 
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
+
+    g_free (priv->buffer);
+    priv->buffer = g_malloc0 (get_buffer_size (priv));
 
     /* set up listener */
     g_socket_listener_add_inet_port (priv->listener, 7116, G_OBJECT (camera), error);
@@ -655,10 +678,10 @@ uca_phantom_camera_grab (UcaCamera *camera,
     if (result->success) {
         switch (priv->format) {
             case IMAGE_FORMAT_P16:
-                memcpy (data, priv->buffer, MAX_BUFFER_SIZE);
+                memcpy (data, priv->buffer, get_buffer_size (priv));
                 break;
             case IMAGE_FORMAT_P12L:
-                unpack_p12l (data, priv->buffer, 1024 * 976);
+                unpack_p12l (data, priv->buffer, priv->roi_width * priv->roi_height);
                 break;
         }
     }
@@ -1146,6 +1169,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->listener = g_socket_listener_new ();
     priv->connection = NULL;
     priv->accept = NULL;
+    priv->buffer = NULL;
     priv->format = IMAGE_FORMAT_P12L;
     priv->message_queue = g_async_queue_new ();
     priv->result_queue = g_async_queue_new ();
@@ -1158,9 +1182,6 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
 
     /* Matches `1024 x 976`. */
     priv->res_pattern = g_regex_new ("\\s*([0-9]+)\\s*x\\s*([0-9]+)", 0, 0, NULL);
-
-    /* TODO: make dynamic and don't waste too much space */
-    priv->buffer = g_malloc0 (MAX_BUFFER_SIZE);
 
     uca_camera_register_unit (UCA_CAMERA (self), "frame-delay", UCA_UNIT_SECOND);
     uca_camera_register_unit (UCA_CAMERA (self), "sensor-temperature", UCA_UNIT_DEGREE_CELSIUS);
