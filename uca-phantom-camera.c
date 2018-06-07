@@ -78,6 +78,8 @@ enum {
 
     /* our own */
     PROP_IMAGE_FORMAT,
+    PROP_ENABLE_10GE,
+    PROP_MAC_ADDRESS,
     N_PROPERTIES
 };
 
@@ -144,6 +146,10 @@ struct _UcaPhantomCameraPrivate {
     guint                roi_width;
     guint                roi_height;
     guint8              *buffer;
+    gchar               *features;
+    gboolean             have_ximg;
+    gboolean             enable_10ge;
+    guint8               mac_address[6];
     ImageFormat          format;
 };
 
@@ -170,7 +176,6 @@ static UnitVariable variables[] = {
     { "info.xmax",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_SENSOR_WIDTH,               TRUE },
     { "info.ymax",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_SENSOR_HEIGHT,              TRUE },
     { "info.name",       G_TYPE_STRING, G_PARAM_READABLE,  PROP_NAME,                       TRUE },
-    { "info.features",   G_TYPE_STRING, G_PARAM_READABLE,  PROP_FEATURES,                   TRUE },
     { "info.imgformats", G_TYPE_STRING, G_PARAM_READABLE,  PROP_IMAGE_FORMATS,              TRUE },
     { "info.maxcines",   G_TYPE_UINT,   G_PARAM_READABLE,  PROP_MAX_NUM_CINES,              TRUE },
     { "info.xinc",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_ROI_WIDTH_MULTIPLIER,       TRUE },
@@ -633,6 +638,17 @@ unpack_p12l (guint16 *output,
 }
 
 static gboolean
+mac_address_valid (UcaPhantomCameraPrivate *priv)
+{
+    gboolean all_zeroes = TRUE;
+
+    for (guint i = 0; i < 6; i++)
+        all_zeroes &= priv->mac_address[i] == 0;
+
+    return !all_zeroes;
+}
+
+static gboolean
 uca_phantom_camera_grab (UcaCamera *camera,
                          gpointer data,
                          GError **error)
@@ -642,10 +658,19 @@ uca_phantom_camera_grab (UcaCamera *camera,
     Result *result;
     gchar *request;
     gchar *reply;
+    gchar *additional;
+    const gchar *command;
+    const gchar *format;
+    const gchar *request_fmt = "%s {cine:1, start:0, cnt:10, fmt:%s %s}\r\n";
     gboolean return_value = TRUE;
-    const gchar *request_fmt = "img {cine:1, start:0, cnt:10, fmt:%s}\r\n";
 
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
+
+    if (priv->enable_10ge && !mac_address_valid (priv)) {
+        g_set_error_literal (error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_NOT_IMPLEMENTED,
+                             "Trying to use 10GE but no valid MAC address is given");
+        return FALSE;
+    }
 
     message = g_new0 (InternalMessage, 1);
     message->data = data;
@@ -654,12 +679,29 @@ uca_phantom_camera_grab (UcaCamera *camera,
 
     switch (priv->format) {
         case IMAGE_FORMAT_P16:
-            request = g_strdup_printf (request_fmt, "P16");
+            format = "P16";
             break;
         case IMAGE_FORMAT_P12L:
-            request = g_strdup_printf (request_fmt, "P12L");
+            format = "P12L";
             break;
     }
+
+    if (priv->enable_10ge) {
+        command = "ximg";
+        additional = g_strdup_printf (", dest:%02x%02x%02x%02x%02x%02x",
+                                      priv->mac_address[0], priv->mac_address[1],
+                                      priv->mac_address[2], priv->mac_address[3],
+                                      priv->mac_address[4], priv->mac_address[5]);
+    }
+    else {
+        command = "img";
+        additional = "";
+    }
+
+    request = g_strdup_printf (request_fmt, command, format, additional);
+
+    if (priv->enable_10ge)
+        g_free (additional);
 
     /* send request */
     reply = phantom_talk (priv, request, NULL, 0, error);
@@ -748,6 +790,47 @@ uca_phantom_camera_set_property (GObject *object,
         case PROP_IMAGE_FORMAT:
             priv->format = g_value_get_enum (value);
             break;
+        case PROP_ENABLE_10GE:
+            if (!priv->have_ximg)
+                g_warning ("10GE not supported by this camera");
+            else
+                priv->enable_10ge = g_value_get_boolean (value);
+            break;
+        case PROP_MAC_ADDRESS:
+            {
+                GRegex *regex;
+                GMatchInfo *info;
+                GError *error = NULL;
+
+                regex = g_regex_new ("([a-f0-9][a-f0-9])[:-]"
+                                     "([a-f0-9][a-f0-9])[:-]"
+                                     "([a-f0-9][a-f0-9])[:-]"
+                                     "([a-f0-9][a-f0-9])[:-]"
+                                     "([a-f0-9][a-f0-9])[:-]"
+                                     "([a-f0-9][a-f0-9])", 0, 0, &error);
+
+                if (error != NULL) {
+                    g_print ("regex error: %s\n", error->message);
+                }
+
+                if (g_regex_match (regex, g_value_get_string (value), 0, &info)) {
+                    gchar **substrings;
+
+                    substrings = g_match_info_fetch_all (info);
+
+                    for (guint i = 0; i < 6; i++)
+                        priv->mac_address[i] = strtol (substrings[i + 1], NULL, 16);
+
+                    g_strfreev (substrings);
+                    g_match_info_free (info);
+                }
+                else {
+                    g_warning ("%s is not a valid MAC address", g_value_get_string (value));
+                }
+
+                g_regex_unref (regex);
+            }
+            break;
     }
 }
 
@@ -790,6 +873,9 @@ uca_phantom_camera_get_property (GObject *object,
                 g_free (s);
             }
             break;
+        case PROP_FEATURES:
+            g_value_set_string (value, priv->features);
+            break;
         case PROP_NUM_CINES:
             {
                 /*
@@ -801,6 +887,21 @@ uca_phantom_camera_get_property (GObject *object,
             break;
         case PROP_IMAGE_FORMAT:
             g_value_set_enum (value, priv->format);
+            break;
+        case PROP_ENABLE_10GE:
+            g_value_set_boolean (value, priv->enable_10ge);
+            break;
+        case PROP_MAC_ADDRESS:
+            {
+                gchar *addr;
+
+                addr = g_strdup_printf ("%02x:%02x:%02x:%02x:%02x:%02x",
+                                        priv->mac_address[0], priv->mac_address[1],
+                                        priv->mac_address[2], priv->mac_address[3],
+                                        priv->mac_address[4], priv->mac_address[5]);
+                g_value_set_string (value, addr);
+                g_free (addr);
+            }
             break;
         case PROP_HAS_STREAMING:
             g_value_set_boolean (value, FALSE);
@@ -859,6 +960,7 @@ uca_phantom_camera_finalize (GObject *object)
     g_regex_unref (priv->response_pattern);
     g_regex_unref (priv->res_pattern);
     g_free (priv->buffer);
+    g_free (priv->features);
 
     G_OBJECT_CLASS (uca_phantom_camera_parent_class)->finalize (object);
 }
@@ -937,6 +1039,7 @@ phantom_discover (GError **error)
     port = atoi (port_string);
     g_free (port_string);
     result = g_inet_socket_address_new (g_inet_socket_address_get_address ((GInetSocketAddress *) remote_socket_addr), port);
+    g_match_info_free (info);
 
 cleanup_discovery_addr:
     g_regex_unref (regex);
@@ -969,6 +1072,8 @@ uca_phantom_camera_constructed (GObject *object)
         g_object_unref (addr);
 
         phantom_get_resolution_by_name (priv, "defc.res", &priv->roi_width, &priv->roi_height);
+        priv->features = phantom_get_string_by_name (priv, "info.features");
+        priv->have_ximg = strstr (priv->features, "ximg") != NULL;
     }
 }
 
@@ -1145,8 +1250,20 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             "Image format",
             "Image format",
             g_enum_register_static ("image-format", image_format_values),
-            IMAGE_FORMAT_P12L,
-            G_PARAM_READWRITE);
+            IMAGE_FORMAT_P12L, G_PARAM_READWRITE);
+
+    /* Ideally, we would install this property only if ximg is available ... */
+    phantom_properties[PROP_ENABLE_10GE] =
+        g_param_spec_boolean ("enable-10ge",
+            "Enable 10GE data transmission",
+            "Enable 10GE data transmission",
+            FALSE, G_PARAM_READWRITE);
+
+    phantom_properties[PROP_MAC_ADDRESS] =
+        g_param_spec_string ("mac-address",
+            "MAC address of the 10GE device",
+            "MAC address of the 10GE device",
+            "", G_PARAM_READWRITE);
 
     for (guint i = 0; i < base_overrideables[i]; i++)
         g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
@@ -1170,9 +1287,15 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->connection = NULL;
     priv->accept = NULL;
     priv->buffer = NULL;
+    priv->features = NULL;
     priv->format = IMAGE_FORMAT_P12L;
+    priv->enable_10ge = FALSE;
+    priv->have_ximg = FALSE;
     priv->message_queue = g_async_queue_new ();
     priv->result_queue = g_async_queue_new ();
+
+    for (guint i = 0; i < G_N_ELEMENTS (priv->mac_address); i++)
+        priv->mac_address[i] = 0;
 
     /*
      * Matches responses to `get` requests but covers only single value
