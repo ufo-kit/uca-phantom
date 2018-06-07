@@ -77,6 +77,7 @@ enum {
     PROP_CINE_STATE,
 
     /* our own */
+    PROP_ACQUISITION_MODE,
     PROP_IMAGE_FORMAT,
     PROP_ENABLE_10GE,
     PROP_MAC_ADDRESS,
@@ -116,6 +117,13 @@ typedef enum {
     IMAGE_FORMAT_P12L,
 } ImageFormat;
 
+typedef enum {
+    ACQUISITION_MODE_STANDARD = 0,
+    ACQUISITION_MODE_STANDARD_BINNED = 2,
+    ACQUISITION_MODE_HS = 5,
+    ACQUISITION_MODE_HS_BINNED = 7,
+} AcquisitionMode;
+
 static GEnumValue sync_mode_values[] = {
     { SYNC_MODE_FREE_RUN, "SYNC_MODE_FREE_RUN", "sync_mode_free_run" },
     { SYNC_MODE_FSYNC, "SYNC_MODE_FSYNC", "sync_mode_fsync" },
@@ -127,6 +135,14 @@ static GEnumValue sync_mode_values[] = {
 static GEnumValue image_format_values[] = {
     { IMAGE_FORMAT_P16,     "IMAGE_FORMAT_P16",     "image_format_p16" },
     { IMAGE_FORMAT_P12L,    "IMAGE_FORMAT_P12L",    "image_format_p12l" },
+    { 0, NULL, NULL }
+};
+
+static GEnumValue acquisition_mode_values[] = {
+    { ACQUISITION_MODE_STANDARD,        "ACQUISITION_MODE_STANDARD",        "acquisition_mode_standard" },
+    { ACQUISITION_MODE_STANDARD_BINNED, "ACQUISITION_MODE_STANDARD_BINNED", "acquisition_mode_standard_binned" },
+    { ACQUISITION_MODE_HS,              "ACQUISITION_MODE_HS",              "acquisition_mode_hs" },
+    { ACQUISITION_MODE_HS_BINNED,       "ACQUISITION_MODE_HS_BINNED",       "acquisition_mode_hs_binned" },
     { 0, NULL, NULL }
 };
 
@@ -151,6 +167,7 @@ struct _UcaPhantomCameraPrivate {
     gboolean             enable_10ge;
     guint8               mac_address[6];
     ImageFormat          format;
+    AcquisitionMode      acquisition_mode;
 };
 
 typedef struct  {
@@ -790,6 +807,22 @@ uca_phantom_camera_set_property (GObject *object,
         case PROP_IMAGE_FORMAT:
             priv->format = g_value_get_enum (value);
             break;
+        case PROP_ACQUISITION_MODE:
+            {
+                gchar *request;
+                GError *error = NULL;
+
+                priv->acquisition_mode = g_value_get_enum (value);
+                request = g_strdup_printf ("iload {mode:%i}\r\n", priv->acquisition_mode);
+                g_free (phantom_talk (priv, request, NULL, 0, &error));
+                g_free (request);
+
+                if (error != NULL) {
+                    g_warning ("Could not change acquisition mode: %s", error->message);
+                    g_error_free (error);
+                }
+            }
+            break;
         case PROP_ENABLE_10GE:
             if (!priv->have_ximg)
                 g_warning ("10GE not supported by this camera");
@@ -887,6 +920,9 @@ uca_phantom_camera_get_property (GObject *object,
             break;
         case PROP_IMAGE_FORMAT:
             g_value_set_enum (value, priv->format);
+            break;
+        case PROP_ACQUISITION_MODE:
+            g_value_set_enum (value, priv->acquisition_mode);
             break;
         case PROP_ENABLE_10GE:
             g_value_set_boolean (value, priv->enable_10ge);
@@ -1252,6 +1288,13 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             g_enum_register_static ("image-format", image_format_values),
             IMAGE_FORMAT_P12L, G_PARAM_READWRITE);
 
+    phantom_properties[PROP_ACQUISITION_MODE] =
+        g_param_spec_enum ("acquisition-mode",
+            "Acquisition mode",
+            "Acquisition mode",
+            g_enum_register_static ("acquisition-mode", acquisition_mode_values),
+            ACQUISITION_MODE_STANDARD, G_PARAM_READWRITE);
+
     /* Ideally, we would install this property only if ximg is available ... */
     phantom_properties[PROP_ENABLE_10GE] =
         g_param_spec_boolean ("enable-10ge",
@@ -1289,6 +1332,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->buffer = NULL;
     priv->features = NULL;
     priv->format = IMAGE_FORMAT_P12L;
+    priv->acquisition_mode = ACQUISITION_MODE_STANDARD;
     priv->enable_10ge = FALSE;
     priv->have_ximg = FALSE;
     priv->message_queue = g_async_queue_new ();
