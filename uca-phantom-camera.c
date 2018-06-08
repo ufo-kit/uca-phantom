@@ -599,6 +599,7 @@ read_ximg_data (UcaPhantomCameraPrivate *priv,
     const gsize end_of_frame_size = 4;
     const gsize overhead = header_size + end_of_frame_size;
 
+    /* XXX: replace recvfrom with the ring buffer code by Radu Corlan */
     while (total < 2500000) {
         gssize size;
 
