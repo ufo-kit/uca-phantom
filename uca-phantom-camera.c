@@ -645,11 +645,8 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
         return;
     }
 
-    /* set interface to promiscous mode */
+    /* get MAC address for ximg command */
     strncpy (if_opts.ifr_name, priv->iface, strlen (priv->iface));
-    ioctl (fd, SIOCGIFFLAGS, &if_opts);
-    if_opts.ifr_flags |= IFF_PROMISC;
-    ioctl (fd, SIOCSIFFLAGS, &if_opts);
     ioctl (fd, SIOCGIFHWADDR, &if_opts);
 
     priv->mac_address[0] = if_opts.ifr_hwaddr.sa_data[0];
