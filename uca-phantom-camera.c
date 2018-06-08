@@ -321,7 +321,7 @@ phantom_talk (UcaPhantomCameraPrivate *priv,
 
     if (g_str_has_prefix (reply, "ERR: ")) {
         if (error_loc != NULL) {
-            g_set_error (error_loc, G_IO_ERROR, G_IO_ERROR_FAILED,
+            g_set_error (error_loc, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_DEVICE,
                          "Phantom error: %s", reply + 5);
         }
         else
@@ -640,7 +640,7 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
     fd = socket (PF_PACKET, SOCK_RAW, htons (0x88B7));
 
     if (fd == -1) {
-        g_set_error_literal (&result->error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_NOT_IMPLEMENTED,
+        g_set_error_literal (&result->error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_DEVICE,
                              "Could not open raw socket");
         g_async_queue_push (priv->result_queue, result);
         return;
@@ -659,7 +659,7 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
 
     /* re-use socket */
     if (setsockopt (fd, SOL_SOCKET, SO_REUSEADDR, &sock_opt, sizeof (sock_opt)) == -1) {
-        g_set_error_literal (&result->error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_NOT_IMPLEMENTED,
+        g_set_error_literal (&result->error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_DEVICE,
                              "Could not set socket mode to reuse");
         g_async_queue_push (priv->result_queue, result);
         close (fd);
@@ -668,7 +668,7 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
 
     /* bind to device */
     if (setsockopt (fd, SOL_SOCKET, SO_BINDTODEVICE, priv->iface, strlen (priv->iface)) == -1) {
-        g_set_error (&result->error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_NOT_IMPLEMENTED,
+        g_set_error (&result->error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_DEVICE,
                      "Could not bind socket to %s", priv->iface);
         g_async_queue_push (priv->result_queue, result);
         close (fd);
@@ -715,7 +715,7 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
     if (priv->enable_10ge && priv->iface == NULL) {
-        g_set_error_literal (error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_NOT_IMPLEMENTED,
+        g_set_error_literal (error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_DEVICE,
                              "Trying to use 10GE but no network adapter is given");
         return;
     }
@@ -830,7 +830,7 @@ uca_phantom_camera_grab (UcaCamera *camera,
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
     if (priv->enable_10ge && priv->iface == NULL) {
-        g_set_error_literal (error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_NOT_IMPLEMENTED,
+        g_set_error_literal (error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_DEVICE,
                              "Trying to use 10GE but no valid MAC address is given");
         return FALSE;
     }
@@ -1176,7 +1176,7 @@ phantom_discover (GError **error)
     regex = g_regex_new ("PH16 (\\d+) (\\d+) (\\d+)", 0, 0, error);
 
     if (!g_regex_match (regex, reply, 0, &info)) {
-        g_set_error (error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_NOT_FOUND,
+        g_set_error (error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_DEVICE,
                      "`%s' does not match expected reply", reply);
         goto cleanup_discovery_addr;
     }
