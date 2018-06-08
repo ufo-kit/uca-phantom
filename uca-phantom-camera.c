@@ -19,13 +19,19 @@
 #include <gio/gio.h>
 #include <gmodule.h>
 #include <string.h>
-
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <arpa/inet.h>
+#include <netinet/if_ether.h>
+#include <net/if.h>
+#include <linux/ip.h>
 #include <uca/uca-camera.h>
 #include "uca-phantom-camera.h"
-#include "config.h"
 
 
 #define UCA_PHANTOM_CAMERA_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE((obj), UCA_TYPE_PHANTOM_CAMERA, UcaPhantomCameraPrivate))
+
+#define CHECK_ETHERNET_HEADER   0
 
 static void uca_phantom_camera_initable_iface_init (GInitableIface *iface);
 
@@ -80,7 +86,7 @@ enum {
     PROP_ACQUISITION_MODE,
     PROP_IMAGE_FORMAT,
     PROP_ENABLE_10GE,
-    PROP_MAC_ADDRESS,
+    PROP_NETWORK_INTERFACE,
     N_PROPERTIES
 };
 
@@ -165,6 +171,7 @@ struct _UcaPhantomCameraPrivate {
     gchar               *features;
     gboolean             have_ximg;
     gboolean             enable_10ge;
+    gchar               *iface;
     guint8               mac_address[6];
     ImageFormat          format;
     AcquisitionMode      acquisition_mode;
@@ -504,7 +511,7 @@ read_data (UcaPhantomCameraPrivate *priv, GInputStream *istream, GError **error)
 }
 
 static gpointer
-accept_data (UcaPhantomCameraPrivate *priv)
+accept_img_data (UcaPhantomCameraPrivate *priv)
 {
     GSocketConnection *connection;
     GSocketAddress *remote_addr;
@@ -543,13 +550,16 @@ accept_data (UcaPhantomCameraPrivate *priv)
         InternalMessage *message;
         GInputStream *istream;
 
-        result = g_new0 (Result, 1);
         istream = g_io_stream_get_input_stream (G_IO_STREAM (connection));
         message = g_async_queue_pop (priv->message_queue);
 
         switch (message->type) {
             case MESSAGE_READ_IMAGE:
+                result = g_new0 (Result, 1);
                 read_data (priv, istream, &result->error);
+                result->type = RESULT_IMAGE;
+                result->success = TRUE;
+                g_async_queue_push (priv->result_queue, result);
                 break;
             case MESSAGE_READ_TIMESTAMP:
                 break;
@@ -559,9 +569,6 @@ accept_data (UcaPhantomCameraPrivate *priv)
         }
 
         g_free (message);
-        result->type = RESULT_IMAGE;
-        result->success = TRUE;
-        g_async_queue_push (priv->result_queue, result);
     }
 
     if (!g_io_stream_close (G_IO_STREAM (connection), NULL, &error)) {
@@ -575,32 +582,184 @@ accept_data (UcaPhantomCameraPrivate *priv)
 }
 
 static void
+read_ximg_data (UcaPhantomCameraPrivate *priv,
+                gint fd,
+                GError **error)
+{
+    guint8 buffer[1506];
+
+#if CHECK_ETHERNET_HEADER
+    const struct ether_header *eth_h = (struct ether_header *) buffer;
+#endif
+
+    guint8 *dst = priv->buffer;
+    gsize total = 0;
+
+    const gsize header_size = 32;
+    const gsize end_of_frame_size = 4;
+    const gsize overhead = header_size + end_of_frame_size;
+
+    while (total < 2500000) {
+        gssize size;
+
+        size = recvfrom (fd, buffer, 1506, 0, NULL, NULL);
+
+        if (size < 0)
+            break;
+
+#if CHECK_ETHERNET_HEADER
+        if (eth_h->ether_dhost[0] != priv->mac_address[0] ||
+            eth_h->ether_dhost[1] != priv->mac_address[1] ||
+            eth_h->ether_dhost[2] != priv->mac_address[2] ||
+            eth_h->ether_dhost[3] != priv->mac_address[3] ||
+            eth_h->ether_dhost[4] != priv->mac_address[4] ||
+            eth_h->ether_dhost[5] != priv->mac_address[5]) {
+            continue;
+        }
+#endif
+
+        memcpy (dst, buffer + header_size, size - overhead);
+        dst += size - overhead;
+        total += size - overhead;
+    }
+}
+
+static void
+accept_ximg_data (UcaPhantomCameraPrivate *priv)
+{
+    Result *result;
+    gint fd;
+    gint sock_opt;
+    struct ifreq if_opts = {0,};
+    gboolean stop = FALSE;
+
+    result = g_new0 (Result, 1);
+    result->type = RESULT_READY;
+    result->success = FALSE;
+    fd = socket (PF_PACKET, SOCK_RAW, htons (0x88B7));
+
+    if (fd == -1) {
+        g_set_error_literal (&result->error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_NOT_IMPLEMENTED,
+                             "Could not open raw socket");
+        g_async_queue_push (priv->result_queue, result);
+        return;
+    }
+
+    /* set interface to promiscous mode */
+    strncpy (if_opts.ifr_name, priv->iface, strlen (priv->iface));
+    ioctl (fd, SIOCGIFFLAGS, &if_opts);
+    if_opts.ifr_flags |= IFF_PROMISC;
+    ioctl (fd, SIOCSIFFLAGS, &if_opts);
+    ioctl (fd, SIOCGIFHWADDR, &if_opts);
+
+    priv->mac_address[0] = if_opts.ifr_hwaddr.sa_data[0];
+    priv->mac_address[1] = if_opts.ifr_hwaddr.sa_data[1];
+    priv->mac_address[2] = if_opts.ifr_hwaddr.sa_data[2];
+    priv->mac_address[3] = if_opts.ifr_hwaddr.sa_data[3];
+    priv->mac_address[4] = if_opts.ifr_hwaddr.sa_data[4];
+    priv->mac_address[5] = if_opts.ifr_hwaddr.sa_data[5];
+
+    /* re-use socket */
+    if (setsockopt (fd, SOL_SOCKET, SO_REUSEADDR, &sock_opt, sizeof (sock_opt)) == -1) {
+        g_set_error_literal (&result->error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_NOT_IMPLEMENTED,
+                             "Could not set socket mode to reuse");
+        g_async_queue_push (priv->result_queue, result);
+        close (fd);
+        return;
+    }
+
+    /* bind to device */
+    if (setsockopt (fd, SOL_SOCKET, SO_BINDTODEVICE, priv->iface, strlen (priv->iface)) == -1) {
+        g_set_error (&result->error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_NOT_IMPLEMENTED,
+                     "Could not bind socket to %s", priv->iface);
+        g_async_queue_push (priv->result_queue, result);
+        close (fd);
+        return;
+    }
+
+    g_debug ("Accepting raw ethernet frames ...");
+    result->success = TRUE;
+    g_async_queue_push (priv->result_queue, result);
+
+    while (!stop) {
+        InternalMessage *message;
+
+        result = g_new0 (Result, 1);
+        message = g_async_queue_pop (priv->message_queue);
+
+        switch (message->type) {
+            case MESSAGE_READ_IMAGE:
+                read_ximg_data (priv, fd, &result->error);
+                result->type = RESULT_IMAGE;
+                result->success = TRUE;
+                g_async_queue_push (priv->result_queue, result);
+                break;
+            case MESSAGE_READ_TIMESTAMP:
+                break;
+            case MESSAGE_STOP:
+                stop = TRUE;
+                break;
+        }
+
+        g_free (message);
+    }
+
+    close (fd);
+}
+
+static void
 uca_phantom_camera_start_readout (UcaCamera *camera,
                                   GError **error)
 {
     UcaPhantomCameraPrivate *priv;
     Result *result;
-    gchar *reply;
-    const gchar *request = "startdata {port:7116}\r\n";
 
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
+
+    if (priv->enable_10ge && priv->iface == NULL) {
+        g_set_error_literal (error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_NOT_IMPLEMENTED,
+                             "Trying to use 10GE but no network adapter is given");
+        return;
+    }
 
     g_free (priv->buffer);
     priv->buffer = g_malloc0 (get_buffer_size (priv));
 
-    /* set up listener */
-    g_socket_listener_add_inet_port (priv->listener, 7116, G_OBJECT (camera), error);
-    priv->accept = g_cancellable_new ();
-    priv->accept_thread = g_thread_new (NULL, (GThreadFunc) accept_data, priv);
+    if (priv->enable_10ge) {
+        priv->accept_thread = g_thread_new (NULL, (GThreadFunc) accept_ximg_data, priv);
 
-    /* wait for listener to become ready */
-    result = (Result *) g_async_queue_pop (priv->result_queue);
-    g_assert (result->type == RESULT_READY);
-    g_free (result);
+        result = (Result *) g_async_queue_pop (priv->result_queue);
+        g_assert (result->type == RESULT_READY);
 
-    /* send startdata command */
-    reply = phantom_talk (priv, request, NULL, 0, error);
-    g_free (reply);
+        if (result->error != NULL)
+            g_propagate_error (error, result->error);
+
+        g_free (result);
+
+        /* no startdata necessary for ximg */
+    }
+    else {
+        gchar *reply;
+        const gchar *request = "startdata {port:7116}\r\n";
+
+        /* set up listener */
+        g_socket_listener_add_inet_port (priv->listener, 7116, G_OBJECT (camera), error);
+        priv->accept = g_cancellable_new ();
+        priv->accept_thread = g_thread_new (NULL, (GThreadFunc) accept_img_data, priv);
+
+        /* wait for listener to become ready */
+        result = (Result *) g_async_queue_pop (priv->result_queue);
+        g_assert (result->type == RESULT_READY);
+
+        if (result->error != NULL)
+            g_propagate_error (error, result->error);
+
+        g_free (result);
+
+        /* send startdata command */
+        reply = phantom_talk (priv, request, NULL, 0, error);
+        g_free (reply);
+    }
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 }
 
@@ -655,17 +814,6 @@ unpack_p12l (guint16 *output,
 }
 
 static gboolean
-mac_address_valid (UcaPhantomCameraPrivate *priv)
-{
-    gboolean all_zeroes = TRUE;
-
-    for (guint i = 0; i < 6; i++)
-        all_zeroes &= priv->mac_address[i] == 0;
-
-    return !all_zeroes;
-}
-
-static gboolean
 uca_phantom_camera_grab (UcaCamera *camera,
                          gpointer data,
                          GError **error)
@@ -678,12 +826,12 @@ uca_phantom_camera_grab (UcaCamera *camera,
     gchar *additional;
     const gchar *command;
     const gchar *format;
-    const gchar *request_fmt = "%s {cine:1, start:0, cnt:10, fmt:%s %s}\r\n";
+    const gchar *request_fmt = "%s {cine:-1, start:0, cnt:1, fmt:%s %s}\r\n";
     gboolean return_value = TRUE;
 
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
-    if (priv->enable_10ge && !mac_address_valid (priv)) {
+    if (priv->enable_10ge && priv->iface == NULL) {
         g_set_error_literal (error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_NOT_IMPLEMENTED,
                              "Trying to use 10GE but no valid MAC address is given");
         return FALSE;
@@ -829,40 +977,9 @@ uca_phantom_camera_set_property (GObject *object,
             else
                 priv->enable_10ge = g_value_get_boolean (value);
             break;
-        case PROP_MAC_ADDRESS:
-            {
-                GRegex *regex;
-                GMatchInfo *info;
-                GError *error = NULL;
-
-                regex = g_regex_new ("([a-f0-9][a-f0-9])[:-]"
-                                     "([a-f0-9][a-f0-9])[:-]"
-                                     "([a-f0-9][a-f0-9])[:-]"
-                                     "([a-f0-9][a-f0-9])[:-]"
-                                     "([a-f0-9][a-f0-9])[:-]"
-                                     "([a-f0-9][a-f0-9])", 0, 0, &error);
-
-                if (error != NULL) {
-                    g_print ("regex error: %s\n", error->message);
-                }
-
-                if (g_regex_match (regex, g_value_get_string (value), 0, &info)) {
-                    gchar **substrings;
-
-                    substrings = g_match_info_fetch_all (info);
-
-                    for (guint i = 0; i < 6; i++)
-                        priv->mac_address[i] = strtol (substrings[i + 1], NULL, 16);
-
-                    g_strfreev (substrings);
-                    g_match_info_free (info);
-                }
-                else {
-                    g_warning ("%s is not a valid MAC address", g_value_get_string (value));
-                }
-
-                g_regex_unref (regex);
-            }
+        case PROP_NETWORK_INTERFACE:
+            g_free (priv->iface);
+            priv->iface = g_value_dup_string (value);
             break;
     }
 }
@@ -927,17 +1044,11 @@ uca_phantom_camera_get_property (GObject *object,
         case PROP_ENABLE_10GE:
             g_value_set_boolean (value, priv->enable_10ge);
             break;
-        case PROP_MAC_ADDRESS:
-            {
-                gchar *addr;
-
-                addr = g_strdup_printf ("%02x:%02x:%02x:%02x:%02x:%02x",
-                                        priv->mac_address[0], priv->mac_address[1],
-                                        priv->mac_address[2], priv->mac_address[3],
-                                        priv->mac_address[4], priv->mac_address[5]);
-                g_value_set_string (value, addr);
-                g_free (addr);
-            }
+        case PROP_NETWORK_INTERFACE:
+            if (priv->iface == NULL)
+                g_value_set_string (value, "");
+            else
+                g_value_set_string (value, priv->iface);
             break;
         case PROP_HAS_STREAMING:
             g_value_set_boolean (value, FALSE);
@@ -997,6 +1108,7 @@ uca_phantom_camera_finalize (GObject *object)
     g_regex_unref (priv->res_pattern);
     g_free (priv->buffer);
     g_free (priv->features);
+    g_free (priv->iface);
 
     G_OBJECT_CLASS (uca_phantom_camera_parent_class)->finalize (object);
 }
@@ -1302,10 +1414,10 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             "Enable 10GE data transmission",
             FALSE, G_PARAM_READWRITE);
 
-    phantom_properties[PROP_MAC_ADDRESS] =
-        g_param_spec_string ("mac-address",
-            "MAC address of the 10GE device",
-            "MAC address of the 10GE device",
+    phantom_properties[PROP_NETWORK_INTERFACE] =
+        g_param_spec_string ("network-interface",
+            "Network interface name of the 10GE device",
+            "Network interface name of the 10GE device",
             "", G_PARAM_READWRITE);
 
     for (guint i = 0; i < base_overrideables[i]; i++)
@@ -1334,12 +1446,10 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->format = IMAGE_FORMAT_P12L;
     priv->acquisition_mode = ACQUISITION_MODE_STANDARD;
     priv->enable_10ge = FALSE;
+    priv->iface = NULL;
     priv->have_ximg = FALSE;
     priv->message_queue = g_async_queue_new ();
     priv->result_queue = g_async_queue_new ();
-
-    for (guint i = 0; i < G_N_ELEMENTS (priv->mac_address); i++)
-        priv->mac_address[i] = 0;
 
     /*
      * Matches responses to `get` requests but covers only single value
