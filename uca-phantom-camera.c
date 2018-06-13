@@ -131,10 +131,10 @@ typedef enum {
 } AcquisitionMode;
 
 static GEnumValue sync_mode_values[] = {
-    { SYNC_MODE_FREE_RUN, "SYNC_MODE_FREE_RUN", "sync_mode_free_run" },
-    { SYNC_MODE_FSYNC, "SYNC_MODE_FSYNC", "sync_mode_fsync" },
-    { SYNC_MODE_IRIG, "SYNC_MODE_IRIG", "sync_mode_irig" },
-    { SYNC_MODE_VIDEO_FRAME_RATE, "SYNC_MODE_VIDEO_FRAME_RATE", "sync_mode_video_frame_rate" },
+    { SYNC_MODE_FREE_RUN,           "SYNC_MODE_FREE_RUN",           "sync_mode_free_run" },
+    { SYNC_MODE_FSYNC,              "SYNC_MODE_FSYNC",              "sync_mode_fsync" },
+    { SYNC_MODE_IRIG,               "SYNC_MODE_IRIG",               "sync_mode_irig" },
+    { SYNC_MODE_VIDEO_FRAME_RATE,   "SYNC_MODE_VIDEO_FRAME_RATE",   "sync_mode_video_frame_rate" },
     { 0, NULL, NULL }
 };
 
