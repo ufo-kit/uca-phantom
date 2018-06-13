@@ -729,8 +729,11 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
         result = (Result *) g_async_queue_pop (priv->result_queue);
         g_assert (result->type == RESULT_READY);
 
-        if (result->error != NULL)
+        if (result->error != NULL) {
             g_propagate_error (error, result->error);
+            g_free (result);
+            return;
+        }
 
         g_free (result);
 
@@ -749,8 +752,11 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
         result = (Result *) g_async_queue_pop (priv->result_queue);
         g_assert (result->type == RESULT_READY);
 
-        if (result->error != NULL)
+        if (result->error != NULL) {
             g_propagate_error (error, result->error);
+            g_free (result);
+            return;
+        }
 
         g_free (result);
 
