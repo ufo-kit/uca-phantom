@@ -1065,14 +1065,7 @@ uca_phantom_camera_dispose (GObject *object)
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (object);
 
     if (priv->connection) {
-        GOutputStream *ostream;
-        gsize size;
-        const gchar *request = "bye\r\n";
         GError *error = NULL;
-
-        /* remove bye for real camera */
-        ostream = g_io_stream_get_output_stream (G_IO_STREAM (priv->connection));
-        g_output_stream_write_all (ostream, request, strlen (request), &size, NULL, NULL);
 
         if (!g_io_stream_close (G_IO_STREAM (priv->connection), NULL, &error)) {
             g_warning ("Could not close connection: %s\n", error->message);
