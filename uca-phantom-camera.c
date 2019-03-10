@@ -23,10 +23,17 @@
 #include <sys/ioctl.h>
 #include <arpa/inet.h>
 #include <netinet/if_ether.h>
-#include <net/if.h>
+#include <net/if.h> // This is making trouble
 #include <linux/ip.h>
 #include <uca/uca-camera.h>
 #include "uca-phantom-camera.h"
+
+// ***************************************
+// HARDCODING THE IP ADDRESS OF THE CAMERA
+// ***************************************
+
+#define IP_ADDRESS "127.0.0.1"
+
 
 
 #define UCA_PHANTOM_CAMERA_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE((obj), UCA_TYPE_PHANTOM_CAMERA, UcaPhantomCameraPrivate))
@@ -119,7 +126,7 @@ typedef enum {
 } SyncMode;
 
 typedef enum {
-    IMAGE_FORMAT_P16 = 0,
+    IMAGE_FORMAT_P16,
     IMAGE_FORMAT_P12L,
 } ImageFormat;
 
@@ -352,6 +359,7 @@ phantom_get_string_by_name (UcaPhantomCameraPrivate *priv, const gchar *name)
     if (cr != NULL)
         *cr = '\0';
 
+    g_warning(reply);
     if (!g_regex_match (priv->response_pattern, reply, 0, &info)) {
         g_warning ("Cannot parse `%s'", reply);
         g_free (reply);
@@ -543,6 +551,7 @@ accept_img_data (UcaPhantomCameraPrivate *priv)
     inet_addr = g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (remote_addr));
     addr = g_inet_address_to_string (inet_addr);
     g_debug ("%s connected", addr);
+    g_warning("%s connected", addr);
     g_object_unref (remote_addr);
     g_free (addr);
 
@@ -560,6 +569,7 @@ accept_img_data (UcaPhantomCameraPrivate *priv)
                 result->type = RESULT_IMAGE;
                 result->success = TRUE;
                 g_async_queue_push (priv->result_queue, result);
+                g_warning("%s", result);
                 break;
             case MESSAGE_READ_TIMESTAMP:
                 break;
@@ -724,6 +734,7 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
     priv->buffer = g_malloc0 (get_buffer_size (priv));
 
     if (priv->enable_10ge) {
+        g_warning("THIS IS WRONG NO 10G");
         priv->accept_thread = g_thread_new (NULL, (GThreadFunc) accept_ximg_data, priv);
 
         result = (Result *) g_async_queue_pop (priv->result_queue);
@@ -817,6 +828,8 @@ unpack_p12l (guint16 *output,
     }
 }
 
+int a = 0;
+
 static gboolean
 uca_phantom_camera_grab (UcaCamera *camera,
                          gpointer data,
@@ -832,6 +845,13 @@ uca_phantom_camera_grab (UcaCamera *camera,
     const gchar *format;
     const gchar *request_fmt = "%s {cine:-1, start:0, cnt:1, fmt:%s %s}\r\n";
     gboolean return_value = TRUE;
+
+    g_warning("HERE TO GRAB");
+
+    if (a == 0) {
+        uca_phantom_camera_start_readout(camera, error);
+    }
+    a = a + 1;
 
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
@@ -901,7 +921,6 @@ uca_phantom_camera_grab (UcaCamera *camera,
         g_propagate_error (error, result->error);
 
     g_free (result);
-
     return return_value;
 }
 
@@ -1153,10 +1172,13 @@ phantom_discover (GError **error)
     const gchar request[] = "phantom?";
     gchar reply[128] = {0,};
     GSocketAddress *result = NULL;
-
     bcast_addr = g_inet_address_new_from_string ("255.255.255.255");
     bcast_socket_addr = g_inet_socket_address_new (bcast_addr, 7380);
     socket = g_socket_new (G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_DATAGRAM, G_SOCKET_PROTOCOL_UDP, error);
+
+    port = 7115;
+    result = g_inet_socket_address_new (g_inet_address_new_from_string (IP_ADDRESS), port);
+    return result;
 
     if (socket == NULL) {
         result = FALSE;
@@ -1168,8 +1190,12 @@ phantom_discover (GError **error)
     if (g_socket_send_to (socket, bcast_socket_addr, request, sizeof (request), NULL, error) < 0)
         goto cleanup_discovery_socket;
 
+    g_warning("IT HAS SENT THE REQUEST");
+
     if (g_socket_receive_from (socket, &remote_socket_addr, reply, sizeof (reply), NULL, error) < 0)
         goto cleanup_discovery_socket;
+
+    g_warning("IT HAS RECEIVED A RESPONSE");
 
     g_debug ("Phantom UDP discovery reply: `%s'", reply);
     regex = g_regex_new ("PH16 (\\d+) (\\d+) (\\d+)", 0, 0, error);
@@ -1181,7 +1207,8 @@ phantom_discover (GError **error)
     }
 
     port_string = g_match_info_fetch (info, 1);
-    port = atoi (port_string);
+    //port = atoi (port_string);
+
     g_free (port_string);
     result = g_inet_socket_address_new (g_inet_socket_address_get_address ((GInetSocketAddress *) remote_socket_addr), port);
     g_match_info_free (info);
@@ -1395,7 +1422,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             "Image format",
             "Image format",
             g_enum_register_static ("image-format", image_format_values),
-            IMAGE_FORMAT_P12L, G_PARAM_READWRITE);
+            IMAGE_FORMAT_P16, G_PARAM_READWRITE);
 
     phantom_properties[PROP_ACQUISITION_MODE] =
         g_param_spec_enum ("acquisition-mode",
@@ -1440,7 +1467,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->accept = NULL;
     priv->buffer = NULL;
     priv->features = NULL;
-    priv->format = IMAGE_FORMAT_P12L;
+    priv->format = IMAGE_FORMAT_P16;
     priv->acquisition_mode = ACQUISITION_MODE_STANDARD;
     priv->enable_10ge = FALSE;
     priv->iface = NULL;

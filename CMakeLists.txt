@@ -8,7 +8,7 @@ if (POLICY CMP0054)
     cmake_policy(SET CMP0054 OLD)
 endif ()
 
-project(ucanet C)
+project(ucaphantom C)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
@@ -37,9 +37,11 @@ link_directories(
 
 add_library(ucaphantom SHARED uca-phantom-camera.c)
 
-target_link_libraries(ucanet
+target_link_libraries(ucaphantom
     ${UCA_LIBRARIES}
     ${GIO_LIBRARIES})
+
+set_property(TARGET ucaphantom PROPERTY C_STANDARD 99)
 
 install(TARGETS ucaphantom
         LIBRARY DESTINATION ${LIBUCA_PLUGINDIR}

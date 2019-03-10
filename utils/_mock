@@ -120,6 +120,7 @@ class DiscoveryInterface(socketserver.BaseRequestHandler):
         data, socket = self.request
         logging.debug('Discovery request from {}'.format(socket))
         message = 'PH16 7115 {} {}'.format(unit['info']['hwver'], unit['info']['serial'])
+        logging.debug('DISCOVERY MESSAGE: ' + message)
         socket.sendto(message.encode('utf-8'), self.client_address)
 
 
@@ -130,6 +131,7 @@ class ControlInterface(socketserver.BaseRequestHandler):
 
     def handle(self):
         while True:
+            #logging.debug('Incoming data...')
             data = self.request.recv(512).strip()
             cmd = data.decode('utf-8').split(' ')
 
@@ -142,6 +144,8 @@ class ControlInterface(socketserver.BaseRequestHandler):
                 break
 
     def send(self, message):
+        logging.debug('MESSAGE: ' + message)
+        # logging.debug('MESSAGE ENCODED: ' + '{}\r\n'.format(message).encode('utf-8'))
         self.request.sendall('{}\r\n'.format(message).encode('utf-8'))
 
     def send_error(self, message):
