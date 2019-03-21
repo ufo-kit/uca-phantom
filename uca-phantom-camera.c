@@ -32,8 +32,8 @@
 // HARDCODING THE IP ADDRESS OF THE CAMERA
 // ***************************************
 
+// #define IP_ADDRESS "100.100.189.164"
 #define IP_ADDRESS "127.0.0.1"
-
 
 
 #define UCA_PHANTOM_CAMERA_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE((obj), UCA_TYPE_PHANTOM_CAMERA, UcaPhantomCameraPrivate))
@@ -50,6 +50,11 @@ GQuark uca_phantom_camera_error_quark ()
 {
     return g_quark_from_static_string("uca-net-camera-error-quark");
 }
+
+
+// ***************************
+// STRUCT AND ENUM DEFINITIONS
+// ***************************
 
 enum {
     /* 4.2. info structure */
@@ -268,6 +273,11 @@ DEFINE_CAST (double,    atof)
 DEFINE_CAST (enum,      atoi)   /* not super type safe */
 DEFINE_CAST (boolean,   str_to_boolean)
 
+
+// ***************************************
+// BASIC NETWORK INTERACTIONS WITH PHANTOM
+// ***************************************
+
 static UnitVariable *
 phantom_lookup_by_id (gint property_id)
 {
@@ -279,6 +289,19 @@ phantom_lookup_by_id (gint property_id)
     return NULL;
 }
 
+/**
+ * @brief Sends the given request to the phantom and returns the response
+ *
+ * This function sends the given request string @p request to the phantom camera using the socket streams and then
+ * received the response and returns it.
+ *
+ * @param priv
+ * @param request
+ * @param reply_loc
+ * @param reply_loc_size
+ * @param error_loc
+ * @return
+ */
 static gchar *
 phantom_talk (UcaPhantomCameraPrivate *priv,
               const gchar *request,
@@ -296,7 +319,13 @@ phantom_talk (UcaPhantomCameraPrivate *priv,
     ostream = g_io_stream_get_output_stream ((GIOStream *) priv->connection);
     istream = g_io_stream_get_input_stream ((GIOStream *) priv->connection);
 
-    if (!g_output_stream_write_all (ostream, request, strlen (request), &size, NULL, &error)) {
+    // Here we are actually pushing the request string to the output stream, which will send over the nertwork to
+    // the phantom. The output of the write all function is a boolean indicator, of whether it worked or not.
+    gboolean output_write_success;
+    output_write_success = g_output_stream_write_all (ostream, request, strlen (request), &size, NULL, &error);
+
+    // In case the write did not work, we will inform the user first and then return NULL, terminating this function.
+    if (!output_write_success) {
         if (error_loc == NULL) {
             g_warning ("Could not write request: %s\n", error->message);
             g_error_free (error);
@@ -309,10 +338,19 @@ phantom_talk (UcaPhantomCameraPrivate *priv,
         return NULL;
     }
 
+    // So this seems like, we are either using the reply size/string, that has been passed to the this function already
+    // and essentially append to it. But in case no already existing reply string has been passed we are creating a new
+    // buffer where the reply will later be saved into
     reply_size = reply_loc ? reply_loc_size : 512;
     reply = reply_loc ? reply_loc : g_malloc0 (reply_size);
 
-    if (!g_input_stream_read (istream, reply, reply_size, NULL, &error)) {
+    // Here we are actually reading from the input stream/receiving the response from the camera. The actual characters
+    // string will be saved into the "reply" buffer (passed as pointer argument). The return value of the function is a
+    // boolean value indicating of whether there was an issue or not.
+    gboolean input_read_success;
+    input_read_success = g_input_stream_read (istream, reply, reply_size, NULL, &error);
+
+    if (!input_read_success) {
         if (error_loc == NULL) {
             g_warning ("Could not read reply: %s\n", error->message);
             g_error_free (error);
@@ -326,7 +364,13 @@ phantom_talk (UcaPhantomCameraPrivate *priv,
         return NULL;
     }
 
-    if (g_str_has_prefix (reply, "ERR: ")) {
+    // Of course, things cant only go wrong on this end. A malformed request or other things may cause an error inside
+    // The phantom. The phantom will tell us so, by sending an error message, always (!) starting with "ERR:".
+    // So here we are detecting, if the response is an error message and if so, the uses is notified.
+    gboolean is_phantom_error;
+    is_phantom_error = g_str_has_prefix (reply, "ERR: ");
+
+    if (is_phantom_error) {
         if (error_loc != NULL) {
             g_set_error (error_loc, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_DEVICE,
                          "Phantom error: %s", reply + 5);
@@ -335,6 +379,7 @@ phantom_talk (UcaPhantomCameraPrivate *priv,
             g_warning ("Error: %s", reply + 5);
     }
 
+    // Returning the final reply
     return reply;
 }
 
@@ -474,6 +519,7 @@ phantom_set_resolution_by_name (UcaPhantomCameraPrivate *priv,
     g_free (request);
 }
 
+// I might have to change this when using the P10 transmission with the phantom camera
 static gsize
 get_buffer_size (UcaPhantomCameraPrivate *priv)
 {
@@ -481,26 +527,21 @@ get_buffer_size (UcaPhantomCameraPrivate *priv)
     return priv->roi_width * priv->roi_height * 2;
 }
 
-static void
-uca_phantom_camera_start_recording (UcaCamera *camera,
-                                    GError **error)
-{
-    const gchar *rec_request = "rec 1\r\n";
-    const gchar *trig_request = "trig\r\n";
 
-    g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
-    g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), rec_request, NULL, 0, error));
-    /* TODO: check previous error */
-    g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), trig_request, NULL, 0, error));
-}
+// *********************************************
+// "NORMAL" NETWORK INTERFACE IMAGE TRANSMISSION
+// *********************************************
 
-static void
-uca_phantom_camera_stop_recording (UcaCamera *camera,
-                                   GError **error)
-{
-    g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
-}
-
+/**
+ * @brief Actually receives the image data for normal network connection
+ *
+ * This function receives all the image bytes from the given @p istream (the socket connected to the camera).
+ * The finished bytes for the image are stored int the "buffer" of the @p priv camera.
+ *
+ * @param priv
+ * @param istream
+ * @param error
+ */
 static void
 read_data (UcaPhantomCameraPrivate *priv, GInputStream *istream, GError **error)
 {
@@ -508,6 +549,9 @@ read_data (UcaPhantomCameraPrivate *priv, GInputStream *istream, GError **error)
 
     to_read = get_buffer_size (priv);
 
+    // This loop exits after all the bytes of the image have been received. The "to_read" variable contains the amount
+    // of bytes to be received in the beginning and is then step by step decremented by the amount, that has been
+    // received.
     while (to_read > 0) {
         gsize bytes_read;
 
@@ -518,6 +562,17 @@ read_data (UcaPhantomCameraPrivate *priv, GInputStream *istream, GError **error)
     }
 }
 
+/**
+ * @brief Thread, which will listen for new data connections from phantom and receive image data.
+ *
+ * This function will create a new listening socket, waiting for the phantom to make a new data connection.
+ * This thread is connected to the main program using a async message queue. This thread will receive image data until
+ * the main program sends a stop message. The end of one transmission is indicated by this thread pushing a message
+ * to the queue. The actual image data will be saved in the buffer of shared object @p priv
+ *
+ * @param priv
+ * @return
+ */
 static gpointer
 accept_img_data (UcaPhantomCameraPrivate *priv)
 {
@@ -531,8 +586,11 @@ accept_img_data (UcaPhantomCameraPrivate *priv)
 
     g_debug ("Accepting data connection ...");
     result = g_new0 (Result, 1);
+
     result->type = RESULT_READY;
     g_async_queue_push (priv->result_queue, result);
+
+    // Listening on the socket, waiting for the phantom to establish a new connection
     connection = g_socket_listener_accept (priv->listener, NULL, priv->accept, &error);
 
     if (g_cancellable_is_cancelled (priv->accept)) {
@@ -547,6 +605,8 @@ accept_img_data (UcaPhantomCameraPrivate *priv)
         return NULL;
     }
 
+    // In case a connection has been established on the listening port, we are extracting the IP address of the client,
+    // that has connected (this will be the IP address of the phantom).
     remote_addr = g_socket_connection_get_remote_address (connection, NULL);
     inet_addr = g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (remote_addr));
     addr = g_inet_address_to_string (inet_addr);
@@ -565,21 +625,35 @@ accept_img_data (UcaPhantomCameraPrivate *priv)
         switch (message->type) {
             case MESSAGE_READ_IMAGE:
                 result = g_new0 (Result, 1);
+
+                // This function, actually does the job of receiving the bytes over the socket connection. The function
+                // will be blocking, until all bytes have been received. The received image data will be saved into
+                // the "priv->buffer".
                 read_data (priv, istream, &result->error);
+
+                // After all the image data has been received, a message indicating the success will be put into the
+                // queue, so that the main thread knows, that it can retrieve the image data from the "buffer" now.
                 result->type = RESULT_IMAGE;
                 result->success = TRUE;
                 g_async_queue_push (priv->result_queue, result);
-                g_warning("%s", result);
+                g_warning("receive error %s", result->error);
                 break;
+
             case MESSAGE_READ_TIMESTAMP:
+                // not implemented
                 break;
+
             case MESSAGE_STOP:
+                // If a "stop message" has been put into the queue by the main thread, then the "stop" variable will
+                // be set, which will break the loop and the whole function exits.
                 stop = TRUE;
                 break;
         }
 
         g_free (message);
     }
+
+    g_warning("EXITS THE RECEIVE LOOP");
 
     if (!g_io_stream_close (G_IO_STREAM (connection), NULL, &error)) {
         g_warning ("Could not close connection: %s\n", error->message);
@@ -591,18 +665,40 @@ accept_img_data (UcaPhantomCameraPrivate *priv)
     return NULL;
 }
 
+
+// ******************************
+// 10G NETWORK IMAGE TRANSMISSION
+// ******************************
+
+/**
+ * @brief Actually receives the image data for 10G network, using raw ethernet frames
+ *
+ * This function uses a raw socket @p fd to receive ethernet frames, then extracts the payload from it and saves
+ * the complete image data into the "buffer" of the given camera @p priv.
+ *
+ * @param priv
+ * @param fd
+ * @param error
+ */
 static void
 read_ximg_data (UcaPhantomCameraPrivate *priv,
                 gint fd,
                 GError **error)
 {
-    guint8 buffer[1506];
+    g_warning("ATTEMPTING TO RECEIVE RAW DATA");
+
+    // This is the buffer, in which the received data will be saved into
+    guint8 buffer[10000];
 
 #if CHECK_ETHERNET_HEADER
     const struct ether_header *eth_h = (struct ether_header *) buffer;
 #endif
 
+    // I assume the "priv->buffer" is the internal buffer of the PhantomCamera object and the FINISHED image, meaning
+    // all bytes have been received has to be put into this buffer at the end.
     guint8 *dst = priv->buffer;
+
+    // With this we keep track of how many bytes have already been received.
     gsize total = 0;
 
     const gsize header_size = 32;
@@ -610,13 +706,26 @@ read_ximg_data (UcaPhantomCameraPrivate *priv,
     const gsize overhead = header_size + end_of_frame_size;
 
     /* XXX: replace recvfrom with the ring buffer code by Radu Corlan */
+
+    // IMPORTANT
+    // This loop essentially keeps track of how many bytes of the image have already been received and ends after X
+    // bytes have been received. At the moment the X bytes are a constant number, but they strongly depend on which
+    // resolution has been set to the camera and should be computed dynamically!
     while (total < 2500000) {
-        gssize size;
-
-        size = recvfrom (fd, buffer, 1506, 0, NULL, NULL);
-
+        gsize size;
+        g_warning("TOTAL %u", total);
+        size = recvfrom (fd, buffer, sizeof(buffer), 0, NULL, NULL); // Problem is here
         if (size < 0)
             break;
+
+        // Here we extract the two bytes from the ethernet header, which contain info about which protocol is being
+        // used. If the protocol does not match the protocol of the phantom, the data is being discarded.
+        guint8 a = buffer[12];
+        guint8 b = buffer[13];
+        g_warning("%u %u", a, b);
+        if (a != 0 && b != 0) {
+            continue;
+        }
 
 #if CHECK_ETHERNET_HEADER
         if (eth_h->ether_dhost[0] != priv->mac_address[0] ||
@@ -629,15 +738,35 @@ read_ximg_data (UcaPhantomCameraPrivate *priv,
         }
 #endif
 
+        // With this the actual payload from the ethernet frame is being copied into the "dst" which points to
+        // "priv->buffer" (which is where we want the final image to be).
+        // buffer + header_size configures the pointer to the buffer array in such a way, that the pointer starts at
+        // the actual payload of the package and skips the header bytes.
         memcpy (dst, buffer + header_size, size - overhead);
+
+        // Updating the pointer to the "dst" array in such a way, that the next copy process appends the new data at
+        // the end of the current data and not overwrites it.
         dst += size - overhead;
         total += size - overhead;
     }
 }
 
+/**
+ * @brief Thread, which will listen for raw ethernet frames and receive image data.
+ *
+ * This function will create a raw socket, receiving all the raw ethernet frames on the ethernet interface that is
+ * defined in @p priv 's configuration.
+ * This thread is connected to the main program using a async message queue. This thread will receive image data until
+ * the main program sends a stop message. The end of one transmission is indicated by this thread pushing a message
+ * to the queue. The actual image data will be saved in the buffer of shared object @p priv
+ *
+ * @param priv
+ * @return
+ */
 static void
 accept_ximg_data (UcaPhantomCameraPrivate *priv)
 {
+    g_warning("ACCEPTING 10G DATA");
     Result *result;
     gint fd;
     gint sock_opt;
@@ -647,7 +776,12 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
     result = g_new0 (Result, 1);
     result->type = RESULT_READY;
     result->success = FALSE;
-    fd = socket (PF_PACKET, SOCK_RAW, htons (0x88B7));
+
+    // Before htons was 0x88B7
+    // htons(ETH_P_ALL) simply tells the socket, that it is supposed to receive all ethernet frames, regardless of what
+    // interface they are using. This is mainly bad, because then we have to filter all the packets, that do not belong
+    // to the image transmission ourselves in the code, but this was the only thing, that made it work
+    fd = socket (PF_PACKET, SOCK_RAW, htons (ETH_P_ALL));
 
     if (fd == -1) {
         g_set_error_literal (&result->error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_DEVICE,
@@ -656,7 +790,8 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
         return;
     }
 
-    /* get MAC address for ximg command */
+    // The ximg command to send to the phantom needs the MAC address of the ethernet interface to send to (the one this
+    // program is using) as a parameter. So we are getting this here.
     strncpy (if_opts.ifr_name, priv->iface, strlen (priv->iface));
     ioctl (fd, SIOCGIFHWADDR, &if_opts);
 
@@ -685,7 +820,7 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
         return;
     }
 
-    g_debug ("Accepting raw ethernet frames ...");
+    g_warning ("Accepting raw ethernet frames ...");
     result->success = TRUE;
     g_async_queue_push (priv->result_queue, result);
 
@@ -697,13 +832,25 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
 
         switch (message->type) {
             case MESSAGE_READ_IMAGE:
+
+                // Here we are calling the function, which actually uses the socket to receive the image piece by piece
+                // The actual image will be saved in the buffer of the camra object's "priv" internal buffer
+                // "priv->buffer".
                 read_ximg_data (priv, fd, &result->error);
+
+                // Once the image was completely received we push a new message, indicating that image reception was a
+                // success, into the queue, so that the main thread which is watching the queue can retrieve the image
+                // from the buffer.
                 result->type = RESULT_IMAGE;
                 result->success = TRUE;
+                g_warning("ERROR: %s", result->error);
                 g_async_queue_push (priv->result_queue, result);
                 break;
+
             case MESSAGE_READ_TIMESTAMP:
+                // Not implemented
                 break;
+
             case MESSAGE_STOP:
                 stop = TRUE;
                 break;
@@ -712,8 +859,14 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
         g_free (message);
     }
 
+    // At the end we properly close the socket.
     close (fd);
 }
+
+
+// *********************************
+// STARTING AND STOPPING THE READOUT
+// *********************************
 
 static void
 uca_phantom_camera_start_readout (UcaCamera *camera,
@@ -752,6 +905,7 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
     }
     else {
         gchar *reply;
+        g_warning("DATA CONNECTION STARTED");
         const gchar *request = "startdata {port:7116}\r\n";
 
         /* set up listener */
@@ -782,6 +936,8 @@ static void
 uca_phantom_camera_stop_readout (UcaCamera *camera,
                                  GError **error)
 {
+    g_warning("STOP READOUT");
+
     UcaPhantomCameraPrivate *priv;
     InternalMessage *message;
 
@@ -799,6 +955,32 @@ uca_phantom_camera_stop_readout (UcaCamera *camera,
     g_thread_unref (priv->accept_thread);
 
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
+}
+
+static void
+uca_phantom_camera_start_recording (UcaCamera *camera,
+                                    GError **error)
+{
+    uca_phantom_camera_start_readout(camera, error);
+
+    g_warning("START RECORDING");
+
+    const gchar *rec_request = "rec 1\r\n";
+    const gchar *trig_request = "trig\r\n";
+
+    g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
+    //g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), rec_request, NULL, 0, error));
+    /* TODO: check previous error */
+    //g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), trig_request, NULL, 0, error));
+}
+
+static void
+uca_phantom_camera_stop_recording (UcaCamera *camera,
+                                   GError **error)
+{
+    g_warning("STOP RECORDING");
+    g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
+    g_warning("STOP RECORDING");
 }
 
 static void
@@ -830,6 +1012,26 @@ unpack_p12l (guint16 *output,
 
 int a = 0;
 
+// ***********************************************
+// MAIN INTERFACE FUNCTION FOR RETRIEVING AN IMAGE
+// ***********************************************
+
+/**
+ * @brief Sends the instruction to transmit an image to the phantom and receives the image in separate thread
+ *
+ * This function will assemble the command string to be sent to the phantom based on the settings of the @p camera
+ * object. (The string needs to be different, depending on whether we use normal or 10G connection).
+ * This instruction is then send to the camere, issuing it to send the raw byte data to the previously established
+ * data connection (This is important! A secondary channel for data transmission has to be established before calling
+ * this function).
+ * This function will also decode the transfer format into a usable image format. The resulting image will be stored in
+ * the buffer of the camera object.
+ *
+ * @param camera
+ * @param data
+ * @param error
+ * @return
+ */
 static gboolean
 uca_phantom_camera_grab (UcaCamera *camera,
                          gpointer data,
@@ -843,15 +1045,15 @@ uca_phantom_camera_grab (UcaCamera *camera,
     gchar *additional;
     const gchar *command;
     const gchar *format;
+
+    // This is the basic layout of the command string, that has to be send to the phantom camera to obtain an image
+    // The first "%s" is for the specific command identifier: "img" for normal network and "ximg" for 10G transmission
+    // the second is for the format identifier to specify the transfer format (how many bytes per pixel used)
+    // The last one is for optional additional parameters (only needed for the ximg commad)
     const gchar *request_fmt = "%s {cine:-1, start:0, cnt:1, fmt:%s %s}\r\n";
     gboolean return_value = TRUE;
 
     g_warning("HERE TO GRAB");
-
-    if (a == 0) {
-        uca_phantom_camera_start_readout(camera, error);
-    }
-    a = a + 1;
 
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
@@ -860,12 +1062,19 @@ uca_phantom_camera_grab (UcaCamera *camera,
                              "Trying to use 10GE but no valid MAC address is given");
         return FALSE;
     }
+    g_warning("CREATED PRIVATE OBJECT");
 
+    // This is the main function called when an image is to be retrieved. The actual process of receiving the image
+    // using network sockets etc will be done in a separate thread though. The two programs communicate with an async
+    // message queue.
+    // Here we push a message, indicating that the thread is supposed to start receiving the image now.
     message = g_new0 (InternalMessage, 1);
     message->data = data;
     message->type = MESSAGE_READ_IMAGE;
     g_async_queue_push (priv->message_queue, message);
+    g_warning("PUSHED THE MESSAGE REQUEST INTO QUEUE");
 
+    // We are only using 16P anyways
     switch (priv->format) {
         case IMAGE_FORMAT_P16:
             format = "P16";
@@ -875,6 +1084,8 @@ uca_phantom_camera_grab (UcaCamera *camera,
             break;
     }
 
+    // Of course depending on whether 10G transmission is enabled in the settings, the command to initiate the
+    // transmission has to be assembled differently.
     if (priv->enable_10ge) {
         command = "ximg";
         additional = g_strdup_printf (", dest:%02x%02x%02x%02x%02x%02x",
@@ -887,6 +1098,8 @@ uca_phantom_camera_grab (UcaCamera *camera,
         additional = "";
     }
 
+    // Here we assemble the final string to be sent to the phantom, using the specific command, format and additional
+    // parameters computed from the settings in the code above.
     request = g_strdup_printf (request_fmt, command, format, additional);
 
     if (priv->enable_10ge)
@@ -894,6 +1107,7 @@ uca_phantom_camera_grab (UcaCamera *camera,
 
     /* send request */
     reply = phantom_talk (priv, request, NULL, 0, error);
+    g_warning("IMG REQUEST SEND %s", reply);
     g_free (request);
 
     if (reply == NULL)
@@ -901,11 +1115,17 @@ uca_phantom_camera_grab (UcaCamera *camera,
 
     g_free (reply);
 
-    /* wait for image transfer to finish */
+    // Here the call to pop a message from the queue will be blocking the program execution, until the thread actually
+    // puts a message into the queue, indicating, that it is now finished receiving the image data.
+    g_warning("ATTEMPTING TO POP THE RESULTS");
     result = g_async_queue_pop (priv->result_queue);
+    g_warning("IMAGE TRANSFER FINISHED");
     g_assert (result->type == RESULT_IMAGE);
     return_value = result->success;
 
+    // The result of the transmission will be a long series of bytes. An actual image can only be reconstructed from
+    // these bytes with the knowledge of the resolution of the image (how many pixels were there in total) and the used
+    // transfer format (how many bytes used per pixel)
     if (result->success) {
         switch (priv->format) {
             case IMAGE_FORMAT_P16:
@@ -921,9 +1141,13 @@ uca_phantom_camera_grab (UcaCamera *camera,
         g_propagate_error (error, result->error);
 
     g_free (result);
+    g_warning("RETURNING IMAGE");
+
+    // The returned value will be boolean indicating the success (TRUE) of the image retrieval process.
     return return_value;
 }
 
+// This is pretty much not even needed
 static void
 uca_phantom_camera_trigger (UcaCamera *camera,
                             GError **error)
@@ -937,6 +1161,11 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), request, NULL, 0, error));
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 }
+
+
+// *************************************
+// GETTING AND SETTING CAMERA ATTRIBUTES
+// *************************************
 
 static void
 uca_phantom_camera_set_property (GObject *object,
@@ -1082,6 +1311,11 @@ uca_phantom_camera_get_property (GObject *object,
     };
 }
 
+
+// ****************************************
+// FINALIZING THE CAMERA / END OF PROGRAM ?
+// ****************************************
+
 static void
 uca_phantom_camera_dispose (GObject *object)
 {
@@ -1158,6 +1392,21 @@ ufo_net_camera_initable_init (GInitable *initable,
     return TRUE;
 }
 
+
+// **************************
+// PHANTOM DISCOVERY PROTOCOL
+// **************************
+
+/**
+ * @brief Returns the network address of the phantom camera
+ *
+ * Usually the phantom cameras have a broadcast discovery protcol, so the code doesnt have to know their IP address.
+ * That is not working at the moment though. So instead of executing the discovery routine, this function returns the
+ * hardcoded IP address defined at the top of this file.
+ *
+ * @param error
+ * @return
+ */
 static GSocketAddress *
 phantom_discover (GError **error)
 {
@@ -1223,6 +1472,11 @@ cleanup_discovery_socket:
 
     return result;
 }
+
+
+// **********************************
+// CAMERA OBJECT INITIALIZATION STUFF
+// **********************************
 
 static void
 uca_phantom_camera_constructed (GObject *object)
@@ -1469,9 +1723,9 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->features = NULL;
     priv->format = IMAGE_FORMAT_P16;
     priv->acquisition_mode = ACQUISITION_MODE_STANDARD;
-    priv->enable_10ge = FALSE;
-    priv->iface = NULL;
-    priv->have_ximg = FALSE;
+    priv->enable_10ge = TRUE;
+    priv->iface = "enp1s0";
+    priv->have_ximg = TRUE;
     priv->message_queue = g_async_queue_new ();
     priv->result_queue = g_async_queue_new ();
 
