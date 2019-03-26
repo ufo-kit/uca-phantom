@@ -1020,7 +1020,7 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
                 // Here we are calling the function, which actually uses the socket to receive the image piece by piece
                 // The actual image will be saved in the buffer of the camra object's "priv" internal buffer
                 // "priv->buffer".
-                read_ximg_data(priv, fd, &ring, &poll_fd, block_index, &result->error);
+                block_index = read_ximg_data(priv, fd, &ring, &poll_fd, block_index, &result->error);
 
                 // Once the image was completely received we push a new message, indicating that image reception was a
                 // success, into the queue, so that the main thread which is watching the queue can retrieve the image
