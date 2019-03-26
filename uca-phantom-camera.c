@@ -44,9 +44,12 @@
 // HARDCODING THE IP ADDRESS OF THE CAMERA
 // ***************************************
 
-#define IP_ADDRESS "100.100.189.164"
+// #define IP_ADDRESS "100.100.189.164"
 // #define IP_ADDRESS      "127.0.0.1"
-#define PROTOCOL        ETH_P_ALL
+#define IP_ADDRESS      "172.16.31.157"
+#define INTERFACE       "enp3s0f0"
+#define PROTOCOL        0x88b7
+#define X_NETWORK       TRUE
 
 #define UCA_PHANTOM_CAMERA_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE((obj), UCA_TYPE_PHANTOM_CAMERA, UcaPhantomCameraPrivate))
 
@@ -78,6 +81,7 @@ struct ring {
     uint8_t *map;
     struct tpacket_req3 req;
 };
+
 
 // ***************************
 // STRUCT AND ENUM DEFINITIONS
@@ -724,7 +728,7 @@ P10_byte_size(UcaPhantomCameraPrivate *priv)
     return bytes_amount;
 }
 
-int process_block(struct block_desc *block_description, const int block_number, guint8 **destination, const int expected, gsize *total) {
+int process_block(struct block_desc *block_description, const int block_number, guint8 *destination, const int expected, gsize *total) {
 
     // Each block can hold multiple actual packets (frames). But the actual amount how many packets are in one block
     // depends on the size of the packet, speed of transmission etc. In general, the amount is not previously known,
@@ -733,6 +737,8 @@ int process_block(struct block_desc *block_description, const int block_number, 
 
     // This will store the total amount of payload(!) bytes received int the processed block and will also be returned
     int bytes = 0;
+    
+    guint8 *dst_before;
 
     // This will be the pointer directed at the start of the actual packet data! The data contained in a packet is
     // byte wise, which means its a unsigned 8 bit format.
@@ -745,56 +751,63 @@ int process_block(struct block_desc *block_description, const int block_number, 
     // This is the header, which will be used
     struct tpacket3_hdr *header;
     uint8_t buffer[2];
+    short state = 0;
 
     // Here we are creating a struct from the the location within the ring buffer which describes the meta data for the
     // first (!) packet/frame in the block, that is currently being processed.
     header = (struct tpacket3_hdr *) ((uint8_t *) block_description + block_description->h1.offset_to_first_pkt);
-
     for (int i = 0; i < packet_amount; i++) {
-        length = header->tp_snaplen - 14;
+        length = header->tp_snaplen - 32;
 
         // After exactly 96 bytes into the package the payload data starts
         data = (guint8 *) header;
-        data += 94;
-        memcpy(buffer, data, 2);
-        data += 2;
+        //data += 94;
+        //memcpy(buffer, data, 2);
+        //data += 2;
         //print_buffer(data, 1000);
-
-        if (buffer[0] == 136 && buffer[1] == 183) {
+        data += 114;
+        
+        if (1/*buffer[0] == 136 && buffer[1] == 183*/) {
 
             *total += length;
 
+            g_warning("%i %i", i, packet_amount);
             // With this we copy all the data (using the complete length of the payload) onto the destination buffer (where
             // the final image data will be stored)
+            g_warning("Total %i, length %i, remaining %i", *total, length, remaining);
+            //g_warning("attempting this");
             memcpy (destination, data, length);
+            //g_warning("At least it finished this");
             //print_buffer((guint *) data, 100);
             // After that we need to increment the pointer of the destination buffer, so that with the next memcpy no
             // existing data will be overwritten, but instead be appended
+            dst_before = destination;
             destination += length;
+            //g_warning("DST DIFF: %u", destination - dst_before);
             bytes += length;
 
             remaining = expected - *total;
-
-            // g_warning("Total %i, length %i, remaining %i", *total, length, remaining);
 
             if (length > remaining + 1492) break;
         }
 
         // We are incrementing the loop by moving on to the location of the next packet
+        state = ~state;
         header = (struct tpacket3_hdr *) ((uint8_t *) header + header->tp_next_offset);
     }
-
+    //g_warning("Attempting to flush block");
     block_description->h1.block_status = TP_STATUS_KERNEL;
-
+    //g_warning("Flushed block");
     return bytes;
 }
 
-static void
+static int
 read_ximg_data (
         UcaPhantomCameraPrivate *priv,
         gint fd,
         struct ring *ring,
         struct pollfd *poll_fd,
+        unsigned int block_index,
         GError **error)
 {
     // I assume the "priv->buffer" is the internal buffer of the PhantomCamera object and the FINISHED image, meaning
@@ -811,30 +824,30 @@ read_ximg_data (
     int expected_bytes = P10_byte_size(priv);
 
     struct block_desc *block_description;
-    unsigned int block_index = 0;
+    //unsigned int block_index = 0;
     unsigned int block_amount = 64;
-
+    g_warning("STARTING TO RECEIVE THE BYTES NOW");
     while (total < expected_bytes) {
         block_description = (struct block_desc *) ring->rd[block_index].iov_base;
-
+        
         if ((block_description->h1.block_status & TP_STATUS_USER) == 0) {
             poll(poll_fd, 1, -1);
             continue;
         }
-
+        
         // Actually extracting the data of the packages in that block into the destination buffer.
         bytes = process_block(block_description, block_index, dst, expected_bytes, &total);
         dst += bytes;
-
+        g_warning("BLOCK : %i", block_index);
 
         // Going to the next block. If the last block has been reached, it starts with the first block again,
         // after all this is how a ring buffer works.
         block_index = (block_index + 1) % block_amount;
-        //g_warning("BLOCK : %i", block_index);
+        
     }
 
     g_warning("AFTER\nDESTINATION POINTER: %u, PRIV-BUFFER POINTER: %u", dst, priv->buffer);
-
+    return (block_index + 1) % block_amount;
 }
 
 static int setup_raw_socket(struct ring *ring, char *netdev) {
@@ -988,11 +1001,12 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
     priv->mac_address[3] = if_opts.ifr_hwaddr.sa_data[3];
     priv->mac_address[4] = if_opts.ifr_hwaddr.sa_data[4];
     priv->mac_address[5] = if_opts.ifr_hwaddr.sa_data[5];
-
+    
     result->success = TRUE;
     g_async_queue_push (priv->result_queue, result);
 
     g_warning("10G setup complete");
+    unsigned int block_index = 0;
 
     while (!stop) {
         InternalMessage *message;
@@ -1006,7 +1020,7 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
                 // Here we are calling the function, which actually uses the socket to receive the image piece by piece
                 // The actual image will be saved in the buffer of the camra object's "priv" internal buffer
                 // "priv->buffer".
-                read_ximg_data(priv, fd, &ring, &poll_fd, &result->error);
+                read_ximg_data(priv, fd, &ring, &poll_fd, block_index, &result->error);
 
                 // Once the image was completely received we push a new message, indicating that image reception was a
                 // success, into the queue, so that the main thread which is watching the queue can retrieve the image
@@ -1257,7 +1271,8 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
     }
 
     g_free (priv->buffer);
-    priv->buffer = g_malloc0 (get_buffer_size (priv));
+    //priv->buffer = g_malloc0 (get_buffer_size (priv));
+    priv->buffer = g_malloc0(9000000);
 
     if (priv->enable_10ge) {
         g_warning("THIS IS WRONG NO 10G");
@@ -1395,7 +1410,7 @@ unpack_p10 (guint16 *output,
             output[j + (3 - h)] = current;
         }
     }
-    // g_warning("i:%i j:%i", i, j);
+    g_warning("i:%i j:%i", i, j);
 
 }
 
@@ -1486,7 +1501,7 @@ uca_phantom_camera_grab (UcaCamera *camera,
     // We are only using 16P anyways
     switch (priv->format) {
         case IMAGE_FORMAT_P16:
-            // format = "P16";
+            //format = "P16";
             format = "P10";
             g_warning("P10");
             break;
@@ -2127,6 +2142,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
 static void
 uca_phantom_camera_init (UcaPhantomCamera *self)
 {
+    g_warning("HELLO");
     UcaPhantomCameraPrivate *priv;
 
     self->priv = priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (self);
@@ -2140,24 +2156,20 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->features = NULL;
     priv->format = IMAGE_FORMAT_P16;
     priv->acquisition_mode = ACQUISITION_MODE_STANDARD;
-    priv->enable_10ge = FALSE;
-    priv->iface = "enp1s0";
-    priv->have_ximg = FALSE;
+    priv->enable_10ge = X_NETWORK;
+    priv->iface = INTERFACE;
+    priv->have_ximg = X_NETWORK;
     priv->message_queue = g_async_queue_new ();
     priv->result_queue = g_async_queue_new ();
 
-    /*
-     * Matches responses to `get` requests but covers only single value
-     * responses, i.e. something like `def.res : 1024 x 976`.
-     */
     priv->response_pattern = g_regex_new ("\\s*([A-Za-z0-9]+)\\s*:\\s*{?\\s*\"?([A-Za-z0-9\\s]+)\"?\\s*}?", 0, 0, NULL);
 
-    /* Matches `1024 x 976`. */
     priv->res_pattern = g_regex_new ("\\s*([0-9]+)\\s*x\\s*([0-9]+)", 0, 0, NULL);
 
     uca_camera_register_unit (UCA_CAMERA (self), "frame-delay", UCA_UNIT_SECOND);
     uca_camera_register_unit (UCA_CAMERA (self), "sensor-temperature", UCA_UNIT_DEGREE_CELSIUS);
     uca_camera_register_unit (UCA_CAMERA (self), "camera-temperature", UCA_UNIT_DEGREE_CELSIUS);
+    g_warning("finished init");
 }
 
 G_MODULE_EXPORT GType
