@@ -37,6 +37,7 @@ camera.grab(buf)
 
 # Now data is in 'a' and we can use Numpy functions on it
 print(np.mean(a))
+print(a)
 plt.imshow(a, cmap='gray')
 plt.show()
 

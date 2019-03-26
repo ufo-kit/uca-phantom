@@ -16,25 +16,37 @@
    Franklin St, Fifth Floor, Boston, MA 02110, USA */
 
 #include <stdlib.h>
+#include <stdint.h>
+#include <inttypes.h>
+
 #include <gio/gio.h>
 #include <gmodule.h>
 #include <string.h>
+#include <unistd.h>
+
 #include <sys/socket.h>
+#include <sys/mman.h>
 #include <sys/ioctl.h>
+
 #include <arpa/inet.h>
-#include <netinet/if_ether.h>
+//#include <netinet/if_ether.h>
+#include <poll.h>
 #include <net/if.h> // This is making trouble
 #include <linux/ip.h>
+#include <linux/if_packet.h>
+#include <linux/if_ether.h>
+#include <netdb.h>
 #include <uca/uca-camera.h>
 #include "uca-phantom-camera.h"
+
 
 // ***************************************
 // HARDCODING THE IP ADDRESS OF THE CAMERA
 // ***************************************
 
-// #define IP_ADDRESS "100.100.189.164"
-#define IP_ADDRESS "127.0.0.1"
-
+#define IP_ADDRESS "100.100.189.164"
+// #define IP_ADDRESS      "127.0.0.1"
+#define PROTOCOL        ETH_P_ALL
 
 #define UCA_PHANTOM_CAMERA_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE((obj), UCA_TYPE_PHANTOM_CAMERA, UcaPhantomCameraPrivate))
 
@@ -51,6 +63,21 @@ GQuark uca_phantom_camera_error_quark ()
     return g_quark_from_static_string("uca-net-camera-error-quark");
 }
 
+// *************************************
+// STRUCTS FOR THE RAW SOCKET CONNECTION
+// *************************************
+
+struct block_desc {
+    uint32_t version;
+    uint32_t offset_to_priv;
+    struct tpacket_hdr_v1 h1;
+};
+
+struct ring {
+    struct iovec *rd;
+    uint8_t *map;
+    struct tpacket_req3 req;
+};
 
 // ***************************
 // STRUCT AND ENUM DEFINITIONS
@@ -524,7 +551,19 @@ static gsize
 get_buffer_size (UcaPhantomCameraPrivate *priv)
 {
     /* Adapt this if we ever use 8 bit modes ... */
-    return priv->roi_width * priv->roi_height * 2;
+    int buffer_size = (priv->roi_width * priv->roi_height * 5) / 4;
+    g_warning("DATA BUFFER SIZE: %i", buffer_size);
+    return buffer_size;
+}
+
+static void print_buffer(guint8 *buffer, int length) {
+    char string[100000];
+    char temp[20];
+    for (int i = 0; i < length; i++) {
+        sprintf(temp, "%02x ", buffer[i]);
+        strcat(string, temp);
+    }
+    g_warning("BUFFER: %s", string);
 }
 
 
@@ -636,7 +675,7 @@ accept_img_data (UcaPhantomCameraPrivate *priv)
                 result->type = RESULT_IMAGE;
                 result->success = TRUE;
                 g_async_queue_push (priv->result_queue, result);
-                g_warning("receive error %s", result->error);
+                // g_warning("receive error %s", result->error);
                 break;
 
             case MESSAGE_READ_TIMESTAMP:
@@ -670,20 +709,349 @@ accept_img_data (UcaPhantomCameraPrivate *priv)
 // 10G NETWORK IMAGE TRANSMISSION
 // ******************************
 
+int
+P10_byte_size(UcaPhantomCameraPrivate *priv)
+{
+    // The "roi"(region of interest) fields of the camera object store the x and y resolution of the image to be
+    // transmitted. The amount of pixels of the image is width times height, obviously.
+    int pixel_amount = priv->roi_height * priv->roi_width;
+
+    // The amount of bytes to be received for the 10G format is 10 bit per pixel, which comes down to (5/4) aka 1.25
+    // bytes per pixel
+    int bytes_amount = (pixel_amount * 5) / 4;
+    g_warning("height %i, width %i, pixels %i, bytes %i", priv->roi_height, priv->roi_width, pixel_amount, bytes_amount);
+
+    return bytes_amount;
+}
+
+int process_block(struct block_desc *block_description, const int block_number, guint8 **destination, const int expected, gsize *total) {
+
+    // Each block can hold multiple actual packets (frames). But the actual amount how many packets are in one block
+    // depends on the size of the packet, speed of transmission etc. In general, the amount is not previously known,
+    // but once the block is done writing, is stored inside the "num_pckts" of its descriptor.
+    int packet_amount = block_description->h1.num_pkts;
+
+    // This will store the total amount of payload(!) bytes received int the processed block and will also be returned
+    int bytes = 0;
+
+    // This will be the pointer directed at the start of the actual packet data! The data contained in a packet is
+    // byte wise, which means its a unsigned 8 bit format.
+    guint8 *data;
+    // This will store the size of the packet's payload
+    int length;
+    int remaining;
+
+    // g_warning("%u", destination);
+    // This is the header, which will be used
+    struct tpacket3_hdr *header;
+    uint8_t buffer[2];
+
+    // Here we are creating a struct from the the location within the ring buffer which describes the meta data for the
+    // first (!) packet/frame in the block, that is currently being processed.
+    header = (struct tpacket3_hdr *) ((uint8_t *) block_description + block_description->h1.offset_to_first_pkt);
+
+    for (int i = 0; i < packet_amount; i++) {
+        length = header->tp_snaplen - 14;
+
+        // After exactly 96 bytes into the package the payload data starts
+        data = (guint8 *) header;
+        data += 94;
+        memcpy(buffer, data, 2);
+        data += 2;
+        //print_buffer(data, 1000);
+
+        if (buffer[0] == 136 && buffer[1] == 183) {
+
+            *total += length;
+
+            // With this we copy all the data (using the complete length of the payload) onto the destination buffer (where
+            // the final image data will be stored)
+            memcpy (destination, data, length);
+            //print_buffer((guint *) data, 100);
+            // After that we need to increment the pointer of the destination buffer, so that with the next memcpy no
+            // existing data will be overwritten, but instead be appended
+            destination += length;
+            bytes += length;
+
+            remaining = expected - *total;
+
+            // g_warning("Total %i, length %i, remaining %i", *total, length, remaining);
+
+            if (length > remaining + 1492) break;
+        }
+
+        // We are incrementing the loop by moving on to the location of the next packet
+        header = (struct tpacket3_hdr *) ((uint8_t *) header + header->tp_next_offset);
+    }
+
+    block_description->h1.block_status = TP_STATUS_KERNEL;
+
+    return bytes;
+}
+
+static void
+read_ximg_data (
+        UcaPhantomCameraPrivate *priv,
+        gint fd,
+        struct ring *ring,
+        struct pollfd *poll_fd,
+        GError **error)
+{
+    // I assume the "priv->buffer" is the internal buffer of the PhantomCamera object and the FINISHED image, meaning
+    // all bytes have been received has to be put into this buffer at the end.
+    guint8 *dst = priv->buffer;
+    g_warning("DESTINATION POINTER: %u, PRIV-BUFFER POINTER: %u", dst, priv->buffer);
+
+    // With this we keep track of how many bytes have already been received.
+    gsize total = 0;
+    int bytes;
+    int remaining;
+    // This is the amount of bytes that has to be received, based on the resolution of the image and the structure of
+    // the 10G transfer format
+    int expected_bytes = P10_byte_size(priv);
+
+    struct block_desc *block_description;
+    unsigned int block_index = 0;
+    unsigned int block_amount = 64;
+
+    while (total < expected_bytes) {
+        block_description = (struct block_desc *) ring->rd[block_index].iov_base;
+
+        if ((block_description->h1.block_status & TP_STATUS_USER) == 0) {
+            poll(poll_fd, 1, -1);
+            continue;
+        }
+
+        // Actually extracting the data of the packages in that block into the destination buffer.
+        bytes = process_block(block_description, block_index, dst, expected_bytes, &total);
+        dst += bytes;
+
+
+        // Going to the next block. If the last block has been reached, it starts with the first block again,
+        // after all this is how a ring buffer works.
+        block_index = (block_index + 1) % block_amount;
+        //g_warning("BLOCK : %i", block_index);
+    }
+
+    g_warning("AFTER\nDESTINATION POINTER: %u, PRIV-BUFFER POINTER: %u", dst, priv->buffer);
+
+}
+
+static int setup_raw_socket(struct ring *ring, char *netdev) {
+
+    guint sock_opt;
+    // This will be the variable, into which we are saving the exit codes of all the functions. These functions will
+    // return a negative int (-1) if an error occurred.
+    int err;
+    // This is the file descriptor int, which will later hold the actual socket.
+    int fd;
+    // Here we specify which version of the "packet_mmap(2)" ring buffer we are using. In this
+    // case it is version 3
+    int version = TPACKET_V3;
+
+    // The ring buffer consist of multiple so called blocks. And each block will hold multiple "frames" (The actual
+    // packets send over the network). Here we define How many bytes are assigned to one block and how many bytes one
+    // frame can consume. Also we define the amount of blocks the ring buffer is supposed to have.
+    // These values will later be used to define (the size of) the ring buffer struct.
+    unsigned int block_size = 1 << 22;
+    unsigned int frame_size = 1 << 11;
+    unsigned int block_amount = 64;
+    // The amount of frames is directly derived from the previous config.
+    unsigned int frame_amount = (block_size * block_amount) / frame_size;
+
+    // the total size of the ring is the size of all blocks combined
+    unsigned int ring_size = block_size * block_amount;
+
+    // The socket needs to know where it is operating using a socketaddr. Usually with a TCP socket for example this
+    // would be a combination of a IP and PORT to listen on. But raw sockets use the name if the INTERFACE (ethernet).
+    // This struct, will represent a socket address, to which the listening/receiving socket will be bound.
+    struct sockaddr_ll ll;
+
+
+    // Here we are creating the actual RAW socket
+    fd = socket(AF_PACKET, SOCK_RAW, htons(PROTOCOL));
+    if (fd < 0) {
+        g_warning("Raw Socket creation failed");
+    }
+
+    // reuse socket
+    setsockopt (fd, SOL_SOCKET, SO_REUSEADDR, &sock_opt, sizeof (sock_opt));
+
+    // Now we are telling the socket, that it is supposed to be used in combination with a ring buffer, by configuring
+    // the option for which packet_mmap version is being used.
+    err = setsockopt(fd, SOL_PACKET, PACKET_VERSION, &version, sizeof(version));
+    if (err < 0) {
+        g_warning("Error while setting socket options");
+    }
+
+    // Here we are actually setting up the ring buffer, by telling it how many blocks/frames and their sizes it is
+    // supposed to have.
+    // "req" for "requirement"?
+    memset(&ring->req, 0, sizeof(ring->req));
+    ring->req.tp_block_size         = block_size;
+    ring->req.tp_frame_size         = frame_size;
+    ring->req.tp_block_nr           = block_amount;
+    ring->req.tp_frame_nr           = frame_amount;
+    ring->req.tp_retire_blk_tov     = 60;
+    ring->req.tp_feature_req_word   = TP_FT_REQ_FILL_RXHASH;
+    // Assigning the ring to the socket
+    err = setsockopt(fd, SOL_PACKET, PACKET_RX_RING, &ring->req, sizeof(ring->req));
+    if (err < 0) {
+        g_warning("Error while assigning the ring to the socket");
+    }
+    // This is the actual memory mapping for the ring, previously it was just setting up configuration
+    ring->map = mmap(NULL, ring_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_LOCKED, fd, 0);
+    if (ring->map == MAP_FAILED) {
+        g_warning("Error allocating ring memory");
+    }
+
+    // ?
+    // As far as I have understood it, here we are defining the starting positions of all the blocks in memory
+    // When calling "ring->rd[0].iov_base" for example, that will give us a pointer to the start of the first (index 0)
+    // block.
+    ring->rd = malloc(ring->req.tp_block_nr * sizeof(*ring->rd));
+    for (int i = 0; i < ring->req.tp_block_nr; ++i) {
+        ring->rd[i].iov_base = ring->map + (i * ring->req.tp_block_size);
+        ring->rd[i].iov_len = ring->req.tp_block_size;
+    }
+
+    // BINDING THE SOCKET
+
+    // "netdev" is the name of the interface to be used, but here we need the index of this interface:
+    int interface_index = if_nametoindex(netdev);
+    // Configuration of the socket address to be bound to
+    memset(&ll, 0, sizeof(ll));
+    ll.sll_family       = PF_PACKET;
+    ll.sll_protocol     = htons(PROTOCOL);
+    ll.sll_hatype       = 0;
+    ll.sll_pkttype      = 0;
+    ll.sll_halen        = 0;
+    ll.sll_ifindex      = interface_index;
+
+    err = bind(fd, (struct sockaddr *) &ll, sizeof(ll));
+    if (err < 0) {
+        g_warning("Error binding the socket to the interface");
+    }
+
+    return fd;
+}
+
+static void teardown_raw_socket(struct ring *ring, int fd) {
+
+    // The complete size of the ring
+    unsigned int ring_size = ring->req.tp_block_size * ring->req.tp_block_nr;
+    // This command will delete the memory mapping for the ring, for that it needs the pointer to the start of the
+    // memory map (ring->map) and the ring
+    munmap(ring->map, ring_size);
+
+    // During the setup phase, we dynamically allocated memory (array) to store the information for the starting points
+    // of the blocks inside the ring buffer. This allocated memory has to be free'ed
+    free(ring->rd);
+
+    // Closing the socket properly
+    close(fd);
+}
+
+static gpointer
+accept_ximg_data (UcaPhantomCameraPrivate *priv)
+{
+    Result *result;
+    gint fd;
+    gboolean stop = FALSE;
+
+    struct ifreq if_opts = {0,};
+
+    result = g_new0(Result, 1);
+    result->type = RESULT_READY;
+    result->success = FALSE;
+
+    struct ring ring;
+    struct pollfd poll_fd;
+
+    // This function completely configures the raw socket to be used.
+    memset(&ring, 0, sizeof(ring));
+    fd = setup_raw_socket(&ring, "enp1s0");
+
+    memset(&poll_fd, 0, sizeof(poll_fd));
+    poll_fd.fd      = fd;
+    poll_fd.events  = POLLIN | POLLERR;
+    poll_fd.revents = 0;
+
+    // The ximg command to send to the phantom needs the MAC address of the ethernet interface to send to (the one this
+    // program is using) as a parameter. So we are getting this here.
+    strncpy (if_opts.ifr_name, priv->iface, strlen (priv->iface));
+    ioctl (fd, SIOCGIFHWADDR, &if_opts);
+
+    priv->mac_address[0] = if_opts.ifr_hwaddr.sa_data[0];
+    priv->mac_address[1] = if_opts.ifr_hwaddr.sa_data[1];
+    priv->mac_address[2] = if_opts.ifr_hwaddr.sa_data[2];
+    priv->mac_address[3] = if_opts.ifr_hwaddr.sa_data[3];
+    priv->mac_address[4] = if_opts.ifr_hwaddr.sa_data[4];
+    priv->mac_address[5] = if_opts.ifr_hwaddr.sa_data[5];
+
+    result->success = TRUE;
+    g_async_queue_push (priv->result_queue, result);
+
+    g_warning("10G setup complete");
+
+    while (!stop) {
+        InternalMessage *message;
+
+        result = g_new0 (Result, 1);
+        message = g_async_queue_pop (priv->message_queue);
+
+        switch (message->type) {
+            case MESSAGE_READ_IMAGE:
+
+                // Here we are calling the function, which actually uses the socket to receive the image piece by piece
+                // The actual image will be saved in the buffer of the camra object's "priv" internal buffer
+                // "priv->buffer".
+                read_ximg_data(priv, fd, &ring, &poll_fd, &result->error);
+
+                // Once the image was completely received we push a new message, indicating that image reception was a
+                // success, into the queue, so that the main thread which is watching the queue can retrieve the image
+                // from the buffer.
+                result->type = RESULT_IMAGE;
+                result->success = TRUE;
+
+                // g_warning("ERROR: %s", result->error);
+                g_async_queue_push (priv->result_queue, result);
+                g_warning("PUSHED RESULT ");
+                break;
+
+            case MESSAGE_READ_TIMESTAMP:
+                // Not implemented
+                break;
+
+            case MESSAGE_STOP:
+                stop = TRUE;
+                break;
+        }
+
+    }
+
+    // Closing socket connection and freeing dynamically allocated memory etc
+    g_warning("TEARING DOWN");
+    teardown_raw_socket(&ring, fd);
+    return NULL;
+}
+
 /**
  * @brief Actually receives the image data for 10G network, using raw ethernet frames
  *
  * This function uses a raw socket @p fd to receive ethernet frames, then extracts the payload from it and saves
  * the complete image data into the "buffer" of the given camera @p priv.
  *
+ * @deprecated
+ *
  * @param priv
  * @param fd
  * @param error
  */
 static void
-read_ximg_data (UcaPhantomCameraPrivate *priv,
-                gint fd,
-                GError **error)
+_read_ximg_data (UcaPhantomCameraPrivate *priv,
+                 gint fd,
+                 GError **error)
 {
     g_warning("ATTEMPTING TO RECEIVE RAW DATA");
 
@@ -760,11 +1128,13 @@ read_ximg_data (UcaPhantomCameraPrivate *priv,
  * the main program sends a stop message. The end of one transmission is indicated by this thread pushing a message
  * to the queue. The actual image data will be saved in the buffer of shared object @p priv
  *
+ * @deprecated
+ *
  * @param priv
  * @return
  */
 static void
-accept_ximg_data (UcaPhantomCameraPrivate *priv)
+_accept_ximg_data (UcaPhantomCameraPrivate *priv)
 {
     g_warning("ACCEPTING 10G DATA");
     Result *result;
@@ -836,14 +1206,14 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
                 // Here we are calling the function, which actually uses the socket to receive the image piece by piece
                 // The actual image will be saved in the buffer of the camra object's "priv" internal buffer
                 // "priv->buffer".
-                read_ximg_data (priv, fd, &result->error);
+                _read_ximg_data (priv, fd, &result->error);
 
                 // Once the image was completely received we push a new message, indicating that image reception was a
                 // success, into the queue, so that the main thread which is watching the queue can retrieve the image
                 // from the buffer.
                 result->type = RESULT_IMAGE;
                 result->success = TRUE;
-                g_warning("ERROR: %s", result->error);
+                // g_warning("ERROR: %s", result->error);
                 g_async_queue_push (priv->result_queue, result);
                 break;
 
@@ -880,6 +1250,9 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
     if (priv->enable_10ge && priv->iface == NULL) {
         g_set_error_literal (error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_DEVICE,
                              "Trying to use 10GE but no network adapter is given");
+
+        // Start the socket connection
+
         return;
     }
 
@@ -993,6 +1366,40 @@ uca_phantom_camera_write (UcaCamera *camera,
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 }
 
+
+static void
+unpack_p10 (guint16 *output,
+             const guint8 *input,
+             const guint num_pixels)
+{
+    guint i, j, h, k;
+
+    // guint16 current;
+
+    guint64 temp;
+
+    for (i = 0, j = 0; j < num_pixels; i += 5, j += 4) {
+
+        // Assemble the long number
+        temp = 0;
+        for (k = 0; k < 5; k++) {
+            temp |= input[i + k];
+            temp <<= 8;
+        }
+        temp >>= 8;
+
+        // Extract the bytes from that big number
+        for (h = 0; h < 4; h++) {
+            const guint16 current = (guint16) (temp & 0b1111111111);
+            temp >>= 10;
+            output[j + (3 - h)] = current;
+        }
+    }
+    // g_warning("i:%i j:%i", i, j);
+
+}
+
+
 static void
 unpack_p12l (guint16 *output,
              const guint8 *input,
@@ -1015,6 +1422,8 @@ int a = 0;
 // ***********************************************
 // MAIN INTERFACE FUNCTION FOR RETRIEVING AN IMAGE
 // ***********************************************
+
+
 
 /**
  * @brief Sends the instruction to transmit an image to the phantom and receives the image in separate thread
@@ -1077,10 +1486,13 @@ uca_phantom_camera_grab (UcaCamera *camera,
     // We are only using 16P anyways
     switch (priv->format) {
         case IMAGE_FORMAT_P16:
-            format = "P16";
+            // format = "P16";
+            format = "P10";
+            g_warning("P10");
             break;
         case IMAGE_FORMAT_P12L:
             format = "P12L";
+            g_warning("P12");
             break;
     }
 
@@ -1129,7 +1541,12 @@ uca_phantom_camera_grab (UcaCamera *camera,
     if (result->success) {
         switch (priv->format) {
             case IMAGE_FORMAT_P16:
-                memcpy (data, priv->buffer, get_buffer_size (priv));
+                // memcpy (data, priv->buffer, get_buffer_size (priv));
+                // memcpy (data, priv->buffer, get_buffer_size(priv));
+
+                //print_buffer(priv->buffer, 10000);
+
+                unpack_p10(data, priv->buffer, priv->roi_width * priv->roi_height);
                 break;
             case IMAGE_FORMAT_P12L:
                 unpack_p12l (data, priv->buffer, priv->roi_width * priv->roi_height);
@@ -1723,9 +2140,9 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->features = NULL;
     priv->format = IMAGE_FORMAT_P16;
     priv->acquisition_mode = ACQUISITION_MODE_STANDARD;
-    priv->enable_10ge = TRUE;
+    priv->enable_10ge = FALSE;
     priv->iface = "enp1s0";
-    priv->have_ximg = TRUE;
+    priv->have_ximg = FALSE;
     priv->message_queue = g_async_queue_new ();
     priv->result_queue = g_async_queue_new ();
 
