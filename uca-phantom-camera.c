@@ -855,8 +855,6 @@ static void flush_block(struct block_desc *block_description, gboolean *finished
     // unless it's status isn't changed, the kernel cannot write new packages into this block of the ring buffer.
     if (*finished) {
        block_description->h1.block_status = TP_STATUS_KERNEL;
-    } else {
-        g_warning("NOT FLUSHING");    
     }
 }
 
@@ -946,6 +944,7 @@ int process_block(
             remaining = expected - *total;
 
             if (length > remaining + 1492) {
+                header = (struct tpacket3_hdr *) ((uint8_t *) header + header->tp_next_offset);
                 break;
             }
         //}
@@ -964,7 +963,7 @@ int process_block(
     
     if (packet_amount - 1 > i) {
         *finished = FALSE;
-        g_warning("packet amount: %i, IDX: %i", packet_amount, i);
+        //g_warning("packet amount: %i, IDX: %i", packet_amount, i);
     }
     
     return bytes;
@@ -1006,6 +1005,8 @@ read_ximg_data (
     gsize total = 0;
     int bytes;
     int remaining;
+    
+    unsigned long header_address;
 
     // This is the amount of bytes that has to be received, based on the resolution of the image and the structure of
     // the 10G transfer format (always P10).
@@ -1022,9 +1023,10 @@ read_ximg_data (
     
     //clock_gettime(CLOCK_MONOTONIC, &tstart);
     while (total < expected_bytes) {
+        
         // Creating the block description for the current block index from the ring buffer.
         block_description = (struct block_desc *) ring->rd[block_index].iov_base;
-
+        
         // Polling.
         // Once the kernel has finished writing to a block of the buffer (either because it is full, or because the
         // timer ran out), this block is being released to the user space (-> this program) and only then we can
@@ -1038,6 +1040,7 @@ read_ximg_data (
             //g_warning("PROFILE DELTA %.5f",((double)pend.tv_sec + 1.0e-9*pend.tv_nsec) - ((double)pstart.tv_sec + 1.0e-9*pstart.tv_nsec));
             continue;
         }
+        
         // In case block was finished during the previous run of this function, the header struct will be created
         // to point to the first packet of the current (new) block.
         // Although if it wasn't finished the header for the packet, where the last loop left of will be reused.
@@ -1046,14 +1049,16 @@ read_ximg_data (
             // of course for an entirely new block we start processing the first packet.
             *packet_index = 0;
         } else {
+            header = header_address;
             header = (struct tpacket3_hdr *) ((uint8_t *) header + header->tp_next_offset);
-            g_warning("IDX: %i", *packet_index);
         }
 
         // Actually extracting the data of the packages in that block into the destination buffer.
         
+        
         bytes = process_block(block_description, dst, expected_bytes, &total, finished, header, packet_index);
         flush_block(block_description, finished);
+        header_address = header;
         // We need to increment the buffer pointer address
         dst += bytes;
 
@@ -1063,8 +1068,7 @@ read_ximg_data (
             // Going to the next block. If the last block has been reached, it starts with the first block again,
             // after all this is how a ring buffer works.
             block_index = (block_index + 1) % block_amount;
-        }
-        
+        } 
     }
     //clock_gettime(CLOCK_MONOTONIC, &tend);
     //g_warning("TIME DELTA %.5f", ((double)tend.tv_sec + 1.0e-9*tend.tv_nsec) - ((double)tstart.tv_sec + 1.0e-9*tstart.tv_nsec));
@@ -1099,8 +1103,8 @@ static int setup_raw_socket(struct ring *ring, char *netdev) {
     // packets send over the network). Here we define How many bytes are assigned to one block and how many bytes one
     // frame can consume. Also we define the amount of blocks the ring buffer is supposed to have.
     // These values will later be used to define (the size of) the ring buffer struct.
-    unsigned int block_size = 1 << 22;
-    unsigned int frame_size = 1 << 11;
+    unsigned int block_size = 1 << 14; // 22
+    unsigned int frame_size = 1 << 8;  // 11
     unsigned int block_amount = 64;
     // The amount of frames is directly derived from the previous config.
     unsigned int frame_amount = (block_size * block_amount) / frame_size;
@@ -1728,7 +1732,7 @@ uca_phantom_camera_grab (UcaCamera *camera,
     // The first "%s" is for the specific command identifier: "img" for normal network and "ximg" for 10G transmission
     // the second is for the format identifier to specify the transfer format (how many bytes per pixel used)
     // The last one is for optional additional parameters (only needed for the ximg commad)
-    const gchar *request_fmt = "%s {cine:-1, start:0, cnt:10, fmt:%s %s}\r\n";
+    const gchar *request_fmt = "%s {cine:1, start:0, cnt:4, fmt:%s %s}\r\n";
     gboolean return_value = TRUE;
 
     //g_warning("HERE TO GRAB");
@@ -1820,7 +1824,7 @@ uca_phantom_camera_grab (UcaCamera *camera,
                 unpack_p12l (data, priv->buffer, priv->roi_width * priv->roi_height);
                 break;
             case IMAGE_FORMAT_P10:
-                //unpack_p10(data, priv->buffer, priv->roi_width * priv->roi_height);
+                unpack_p10(data, priv->buffer, priv->roi_width * priv->roi_height);
                 break;
         }
     }
