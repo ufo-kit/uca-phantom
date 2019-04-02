@@ -45,10 +45,10 @@
 // ***************************************
 
 // #define IP_ADDRESS "100.100.189.164"
-// #define IP_ADDRESS      "127.0.0.1"
-#define IP_ADDRESS      "172.16.31.157"
-#define INTERFACE       "enp3s0f0"
-#define PROTOCOL        0x88b7
+#define IP_ADDRESS      "127.0.0.1"
+//#define IP_ADDRESS      "172.16.31.157"
+#define INTERFACE       "enp1s0"
+#define PROTOCOL        ETH_P_ALL
 #define X_NETWORK       TRUE
 
 #define UCA_PHANTOM_CAMERA_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE((obj), UCA_TYPE_PHANTOM_CAMERA, UcaPhantomCameraPrivate))
@@ -161,9 +161,13 @@ typedef enum {
     SYNC_MODE_VIDEO_FRAME_RATE,
 } SyncMode;
 
+// 27.03.2019
+// Added the two formats "IMAGE_FORMAT_P10" and "IMAGE_FORMAT_P8"
 typedef enum {
     IMAGE_FORMAT_P16,
     IMAGE_FORMAT_P12L,
+    IMAGE_FORMAT_P10,
+    IMAGE_FORMAT_P8
 } ImageFormat;
 
 typedef enum {
@@ -181,9 +185,13 @@ static GEnumValue sync_mode_values[] = {
     { 0, NULL, NULL }
 };
 
+// 27.03.2019
+// Added the two formats "IMAGE_FORMAT_P10" and "IMAGE_FORMAT_P8"
 static GEnumValue image_format_values[] = {
     { IMAGE_FORMAT_P16,     "IMAGE_FORMAT_P16",     "image_format_p16" },
     { IMAGE_FORMAT_P12L,    "IMAGE_FORMAT_P12L",    "image_format_p12l" },
+    { IMAGE_FORMAT_P10,     "IMAGE_FORMAT_P10",     "image_format_p10"},
+    { IMAGE_FORMAT_P8,      "IMAGE_FORMAT_P8",      "image_format_p8"},
     { 0, NULL, NULL }
 };
 
@@ -326,6 +334,8 @@ phantom_lookup_by_id (gint property_id)
  * This function sends the given request string @p request to the phantom camera using the socket streams and then
  * received the response and returns it.
  *
+ * @author Matthias Vogelgesang
+ *
  * @param priv
  * @param request
  * @param reply_loc
@@ -414,6 +424,18 @@ phantom_talk (UcaPhantomCameraPrivate *priv,
     return reply;
 }
 
+/**
+ * @brief Acquires the value of the attribute given by its name from the phantom
+ *
+ * Given the @p name of the attribute to be fetched, this function will talk to the phantom, by sending a get request
+ * for that value and then return the response result.
+ *
+ * @author Matthias Vogelgesang
+ *
+ * @param priv
+ * @param name
+ * @return
+ */
 static gchar *
 phantom_get_string_by_name (UcaPhantomCameraPrivate *priv, const gchar *name)
 {
@@ -423,7 +445,11 @@ phantom_get_string_by_name (UcaPhantomCameraPrivate *priv, const gchar *name)
     gchar *value = NULL;
     gchar *reply = NULL;
 
+    gboolean regex_matches;
+
+    // This will assemble the request command by using the "get" keyword and the given attribute name of the camera
     request = g_strdup_printf ("get %s\r\n", name);
+    // Actually sending the request to the camera and receiving its reply.
     reply = phantom_talk (priv, request, NULL, 0, NULL);
     g_free (request);
 
@@ -435,13 +461,20 @@ phantom_get_string_by_name (UcaPhantomCameraPrivate *priv, const gchar *name)
     if (cr != NULL)
         *cr = '\0';
 
-    g_warning(reply);
-    if (!g_regex_match (priv->response_pattern, reply, 0, &info)) {
+    // g_warning(reply);
+    // This function will apply the response pattern defined using the phantom camera network protocol (the regex
+    // format string is now stored in priv->response_pattern) to the reply from the camera.
+    // The function returns a value of whether the match worked or not, but the actual info about the match is being
+    // stored into the info object.
+    regex_matches = g_regex_match (priv->response_pattern, reply, 0, &info);
+    if (!regex_matches) {
         g_warning ("Cannot parse `%s'", reply);
         g_free (reply);
         return NULL;
     }
 
+    // The return from the phantom camera always prepends the name of the attribute we asked for like this:
+    // "defc.res: 1500 x 1000". Thus here we take the second value.
     value = g_match_info_fetch (info, 2);
     g_match_info_free (info);
     g_free (reply);
@@ -449,20 +482,46 @@ phantom_get_string_by_name (UcaPhantomCameraPrivate *priv, const gchar *name)
     return value;
 }
 
+/**
+ * @brief Given the camera and the attribute to acqquire from it, this will return the string reponse
+ *
+ * This function will return the string response for getting the given vriable from it
+ *
+ * @param priv
+ * @param var
+ * @return
+ */
 static gchar *
 phantom_get_string (UcaPhantomCameraPrivate *priv, UnitVariable *var)
 {
     return phantom_get_string_by_name (priv, var->name);
 }
 
+/**
+ * @brief Given the camera object gets the height and width of the images
+ *
+ * This function will send a request to the camera for its resolution property and then extract the height and width
+ * integer values from the response string. The values will be passed out of this function using the two references
+ * @p *width and @p *height passed to the function as arguments. The actual return value of  the function is a boolean
+ * indicating the succcess of retrieving the values.
+ *
+ * @param priv
+ * @param name
+ * @param width
+ * @param height
+ * @return
+ */
 static gboolean
 phantom_get_resolution_by_name (UcaPhantomCameraPrivate *priv,
                                 const gchar *name,
                                 guint *width,
                                 guint *height)
 {
+    // For extracting the resolution from the returned result string, we are going to need yet another regex match,
+    // because the resolution will be encoded in a string like "1500 x 1000", with the numbers being separated by an
+    // x character
     GMatchInfo *info;
-    gchar *s;
+    gchar *result_string;
 
     if (width)
         *width = 0;
@@ -470,23 +529,33 @@ phantom_get_resolution_by_name (UcaPhantomCameraPrivate *priv,
     if (height)
         *height = 0;
 
-    s = phantom_get_string_by_name (priv, name);
+    // This will send the actual request for the resolution property to the phantom an return the response string sent
+    // by the camera
+    result_string = phantom_get_string_by_name (priv, name);
 
-    if (s == NULL)
+    // Of course if the camera response is not even a string we return FALSE, to indicate, that getting the resolution
+    // failed
+    if (result_string == NULL)
         return FALSE;
 
-    if (!g_regex_match (priv->res_pattern, s, 0, &info)) {
-        g_free (s);
+    // Also if the regex match on the given string fails, FALSE is also returned, because then again, getting the
+    // resolution didnt work.
+    if (!g_regex_match (priv->res_pattern, result_string, 0, &info)) {
+        g_free (result_string);
         return FALSE;
     }
 
     if (width)
+        // The width of the image will be in the first field of the regex match info object, but as a string so we need
+        // to convert it to an integer first
         *width = atoi (g_match_info_fetch (info, 1));
 
     if (height)
+        // The height of the image will be in the second field of the regex match info object, but as a string so we need
+        // to convert it to an integer first
         *height = atoi (g_match_info_fetch (info, 2));
 
-    g_free (s);
+    g_free (result_string);
     g_match_info_free (info);
     return TRUE;
 }
@@ -550,13 +619,41 @@ phantom_set_resolution_by_name (UcaPhantomCameraPrivate *priv,
     g_free (request);
 }
 
-// I might have to change this when using the P10 transmission with the phantom camera
+/**
+ * @brief Returns the size of the expected data to be received for the given camera config
+ *
+ * Depending on the total amount of pixels in the image (width * height / resolution) and the used data transfer
+ * format, this function will return the amount of bytes to expect from the transmission.
+ *
+ * @authors Matthias Vogelgesang, Jonas Teufel
+ *
+ * @param priv
+ * @return
+ */
 static gsize
 get_buffer_size (UcaPhantomCameraPrivate *priv)
 {
-    /* Adapt this if we ever use 8 bit modes ... */
-    int buffer_size = (priv->roi_width * priv->roi_height * 5) / 4;
-    g_warning("DATA BUFFER SIZE: %i", buffer_size);
+    // This will hold the actual size of the buffer later on and wil be returned
+    int buffer_size;
+
+    // Depending on the transfer format used, the buffer needs a different size, because the formats use a different
+    // amount of bits to represent a single pixel. Of course the basis of all the buffer sizes is the total amount of
+    // pixels in the image (width * height) but the P16 uses 16 Bit (2 bytes), the P10 uses 10 bit (1.25 bytes) per
+    // pixel etc. These will be the multipliers for the final size.
+    switch (priv->format) {
+        case IMAGE_FORMAT_P16:
+            buffer_size = priv->roi_width * priv->roi_height * 2;
+            break;
+        case IMAGE_FORMAT_P10:
+            buffer_size = (priv->roi_width * priv->roi_height * 5) / 4;
+            break;
+        case IMAGE_FORMAT_P12L:
+            buffer_size = (priv->roi_width * priv->roi_height * 3) / 2;
+            break;
+        default:
+            buffer_size = (priv->roi_width * priv->roi_height);
+    }
+
     return buffer_size;
 }
 
@@ -580,6 +677,8 @@ static void print_buffer(guint8 *buffer, int length) {
  *
  * This function receives all the image bytes from the given @p istream (the socket connected to the camera).
  * The finished bytes for the image are stored int the "buffer" of the @p priv camera.
+ *
+ * @author Matthias Vogelgesang
  *
  * @param priv
  * @param istream
@@ -612,6 +711,8 @@ read_data (UcaPhantomCameraPrivate *priv, GInputStream *istream, GError **error)
  * This thread is connected to the main program using a async message queue. This thread will receive image data until
  * the main program sends a stop message. The end of one transmission is indicated by this thread pushing a message
  * to the queue. The actual image data will be saved in the buffer of shared object @p priv
+ *
+ * @author Matthias Vogelgesang
  *
  * @param priv
  * @return
@@ -713,6 +814,15 @@ accept_img_data (UcaPhantomCameraPrivate *priv)
 // 10G NETWORK IMAGE TRANSMISSION
 // ******************************
 
+/**
+ * @brief Returns the size of the transmitted image in bytes, using the P10 transfer format
+ *
+ * @author Jonas Teufel
+ * @deprecated
+ *
+ * @param priv
+ * @return
+ */
 int
 P10_byte_size(UcaPhantomCameraPrivate *priv)
 {
@@ -728,7 +838,51 @@ P10_byte_size(UcaPhantomCameraPrivate *priv)
     return bytes_amount;
 }
 
-int process_block(struct block_desc *block_description, const int block_number, guint8 *destination, const int expected, gsize *total) {
+/**
+ * @brief If the given block is finished it is being released back to the kernel space
+ *
+ * @author Jonas Teufel
+ *
+ * @param block_description
+ * @param finished
+ */
+static void flush_block(struct block_desc *block_description, gboolean finished) {
+
+    // If the block has been completely processed (all payload data extracted from all the packages in it), then it has
+    // to be flushed, meaning that it has to be "given back" to the kernel, so new data can be written to it.
+    // unless it's status isn't changed, the kernel cannot write new packages into this block of the ring buffer.
+    if (finished == TRUE) {
+       block_description->h1.block_status = TP_STATUS_KERNEL;
+    }
+}
+
+/**
+ * @brief Extracts the data from one block in the ring buffer and adds it to the destination buffer.
+ *
+ * Given the @p destination buffer, where to store the image data in and the @p block_description of the currently
+ * processed block of the ring buffer, this function will read out the payload data of every package inside this block
+ * and copy it to the buffer.
+ * The function returns the total amount of bytes it was able to fetch from this one block.
+ *
+ * @author Jonas Teufel
+ *
+ * @param block_description
+ * @param destination
+ * @param expected
+ * @param total
+ * @param finished
+ * @param header
+ * @return
+ */
+int process_block(
+        struct block_desc *block_description,
+        guint8 *destination,
+        const int expected,
+        gsize *total,
+        gboolean *finished,
+        struct tpacket3_hdr *header,
+        int *packet_index)
+{
 
     // Each block can hold multiple actual packets (frames). But the actual amount how many packets are in one block
     // depends on the size of the packet, speed of transmission etc. In general, the amount is not previously known,
@@ -737,8 +891,6 @@ int process_block(struct block_desc *block_description, const int block_number, 
 
     // This will store the total amount of payload(!) bytes received int the processed block and will also be returned
     int bytes = 0;
-    
-    guint8 *dst_before;
 
     // This will be the pointer directed at the start of the actual packet data! The data contained in a packet is
     // byte wise, which means its a unsigned 8 bit format.
@@ -749,58 +901,80 @@ int process_block(struct block_desc *block_description, const int block_number, 
 
     // g_warning("%u", destination);
     // This is the header, which will be used
-    struct tpacket3_hdr *header;
     uint8_t buffer[2];
     short state = 0;
 
-    // Here we are creating a struct from the the location within the ring buffer which describes the meta data for the
-    // first (!) packet/frame in the block, that is currently being processed.
-    header = (struct tpacket3_hdr *) ((uint8_t *) block_description + block_description->h1.offset_to_first_pkt);
-    for (int i = 0; i < packet_amount; i++) {
+    // The finished boolean variable is an indicator of whether the currently processed block is finished or not.
+    // We have to consider the following case: If the loop below break's because all the expected data has been
+    // received for one package, there could possibly still be data of the next image in that ring buffer block.
+    // and we need to indicate this to know, if we should start in this or the next block when attempting to get the
+    // data for that next image.
+    *finished = TRUE;
+
+    int i;
+    for (i = *packet_index; i < packet_amount; i++) {
+        // Calculation of the actual payload(!) length. The packages sent by the phantom have a overhead of 32 bytes!
         length = header->tp_snaplen - 32;
 
-        // After exactly 96 bytes into the package the payload data starts
+        // After exactly 94 bytes into the package the info about the used protocol can be extracted. And after 114
+        // bytes the overhead ends and the actual payload starts.
         data = (guint8 *) header;
-        //data += 94;
-        //memcpy(buffer, data, 2);
-        //data += 2;
-        //print_buffer(data, 1000);
-        data += 114;
+        data += 94;
+        memcpy(buffer, data, 2);
+        data += 20;
         
-        if (1/*buffer[0] == 136 && buffer[1] == 183*/) {
+        if (buffer[0] == 136 && buffer[1] == 183) {
 
             *total += length;
 
-            g_warning("%i %i", i, packet_amount);
             // With this we copy all the data (using the complete length of the payload) onto the destination buffer (where
             // the final image data will be stored)
-            g_warning("Total %i, length %i, remaining %i", *total, length, remaining);
-            //g_warning("attempting this");
             memcpy (destination, data, length);
-            //g_warning("At least it finished this");
-            //print_buffer((guint *) data, 100);
+
             // After that we need to increment the pointer of the destination buffer, so that with the next memcpy no
             // existing data will be overwritten, but instead be appended
-            dst_before = destination;
             destination += length;
-            //g_warning("DST DIFF: %u", destination - dst_before);
             bytes += length;
 
+            // The amount of remaining bytes can be received
             remaining = expected - *total;
 
-            if (length > remaining + 1492) break;
+            if (length > remaining + 1492) {
+                break;
+            }
         }
 
         // We are incrementing the loop by moving on to the location of the next packet
-        state = ~state;
         header = (struct tpacket3_hdr *) ((uint8_t *) header + header->tp_next_offset);
     }
-    //g_warning("Attempting to flush block");
-    block_description->h1.block_status = TP_STATUS_KERNEL;
-    //g_warning("Flushed block");
+
+    // We need to pass to the outside at which packet index the loop ended, so we ca possibly resume processing at
+    // this point. of course this only be the case if the block exits as unfinished.
+    *packet_index = i + 1;
+
+    // If we reach this point in time, if the loop above simply finished, than the block has been processed completely.
+    // But in case the loop was broken, due to one complete image being received, we need to indicate, that this block
+    // is not finished and that we need to resume processing it with the next call to this function
+    if (packet_amount - 1 > i) *finished = FALSE;
+
     return bytes;
 }
 
+/**
+ * @brief Receives / reads the image data being transmitted over the 10G interface.
+ *
+ * @author Jonas Teufel
+ *
+ * @param priv
+ * @param fd
+ * @param ring
+ * @param poll_fd
+ * @param block_index
+ * @param finished
+ * @param header
+ * @param error
+ * @return
+ */
 static int
 read_ximg_data (
         UcaPhantomCameraPrivate *priv,
@@ -808,48 +982,86 @@ read_ximg_data (
         struct ring *ring,
         struct pollfd *poll_fd,
         unsigned int block_index,
+        gboolean *finished,
+        int *packet_index,
+        struct tpacket3_hdr *header,
         GError **error)
 {
     // I assume the "priv->buffer" is the internal buffer of the PhantomCamera object and the FINISHED image, meaning
     // all bytes have been received has to be put into this buffer at the end.
     guint8 *dst = priv->buffer;
-    g_warning("DESTINATION POINTER: %u, PRIV-BUFFER POINTER: %u", dst, priv->buffer);
+    //g_warning("DESTINATION POINTER: %u, PRIV-BUFFER POINTER: %u", dst, priv->buffer);
 
     // With this we keep track of how many bytes have already been received.
     gsize total = 0;
     int bytes;
     int remaining;
-    // This is the amount of bytes that has to be received, based on the resolution of the image and the structure of
-    // the 10G transfer format
-    int expected_bytes = P10_byte_size(priv);
 
+    // This is the amount of bytes that has to be received, based on the resolution of the image and the structure of
+    // the 10G transfer format (always P10).
+    int expected_bytes = get_buffer_size(priv);
+
+    // This struct will contain all the necessary iformation about the block of the ring buffer, that is currently
+    // being processed
     struct block_desc *block_description;
+
     //unsigned int block_index = 0;
     unsigned int block_amount = 64;
-    g_warning("STARTING TO RECEIVE THE BYTES NOW");
+
     while (total < expected_bytes) {
+        // Creating the block description for the current block index from the ring buffer.
         block_description = (struct block_desc *) ring->rd[block_index].iov_base;
-        
+
+        // Polling.
+        // Once the kernel has finished writing to a block of the buffer (either because it is full, or because the
+        // timer ran out), this block is being released to the user space (-> this program) and only then we can
+        // read it. So the program execution of the loop will be skipped here, if the next block has not yet been
+        // released to the user space.
         if ((block_description->h1.block_status & TP_STATUS_USER) == 0) {
             poll(poll_fd, 1, -1);
             continue;
         }
-        
-        // Actually extracting the data of the packages in that block into the destination buffer.
-        bytes = process_block(block_description, block_index, dst, expected_bytes, &total);
-        dst += bytes;
-        g_warning("BLOCK : %i", block_index);
 
-        // Going to the next block. If the last block has been reached, it starts with the first block again,
-        // after all this is how a ring buffer works.
-        block_index = (block_index + 1) % block_amount;
-        
+        // In case block was finished during the previous run of this function, the header struct will be created
+        // to point to the first packet of the current (new) block.
+        // Although if it wasn't finished the header for the packet, where the last loop left of will be reused.
+        if (*finished == TRUE) {
+            header = (struct tpacket3_hdr *) ((uint8_t *) block_description + block_description->h1.offset_to_first_pkt);
+            // of course for an entirely new block we start processing the first packet.
+            *packet_index = 0;
+        } else {
+            header = (struct tpacket3_hdr *) ((uint8_t *) header + header->tp_next_offset);
+        }
+
+        // Actually extracting the data of the packages in that block into the destination buffer.
+        bytes = process_block(block_description, dst, expected_bytes, &total, finished, header, packet_index);
+        flush_block(block_description, finished);
+        // We need to increment the buffer pointer address
+        dst += bytes;
+
+        // If the block is not yet finished to be processed we cannot increment the index, so that with the next call
+        // of this function the rest of the unfinished block will be processed first.
+        if (*finished == TRUE) {
+            // Going to the next block. If the last block has been reached, it starts with the first block again,
+            // after all this is how a ring buffer works.
+            block_index = (block_index + 1) % block_amount;
+        }
     }
 
-    g_warning("AFTER\nDESTINATION POINTER: %u, PRIV-BUFFER POINTER: %u", dst, priv->buffer);
-    return (block_index + 1) % block_amount;
+    // g_warning("AFTER\nDESTINATION POINTER: %u, PRIV-BUFFER POINTER: %u", dst, priv->buffer);
+    return block_index;
+
 }
 
+/**
+ * @brief sets up the raw socket to be used for the ethernet frames, using the ring buffer
+ *
+ * @author Jonas Teufel
+ *
+ * @param ring
+ * @param netdev
+ * @return
+ */
 static int setup_raw_socket(struct ring *ring, char *netdev) {
 
     guint sock_opt;
@@ -949,6 +1161,14 @@ static int setup_raw_socket(struct ring *ring, char *netdev) {
     return fd;
 }
 
+/**
+ * @brief Porperly closing the used ring buffer and socket at the end of the program
+ *
+ * @author Jonas Teufel
+ *
+ * @param ring
+ * @param fd
+ */
 static void teardown_raw_socket(struct ring *ring, int fd) {
 
     // The complete size of the ring
@@ -965,6 +1185,14 @@ static void teardown_raw_socket(struct ring *ring, int fd) {
     close(fd);
 }
 
+/**
+ * @brief The Thread, which receives the images using the 10G network
+ *
+ * @author Jonas Teufel
+ *
+ * @param priv
+ * @return
+ */
 static gpointer
 accept_ximg_data (UcaPhantomCameraPrivate *priv)
 {
@@ -1007,6 +1235,9 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
 
     g_warning("10G setup complete");
     unsigned int block_index = 0;
+    struct tpacket3_hdr *header;
+    gboolean finished = TRUE;
+    int packet_index = 0;
 
     while (!stop) {
         InternalMessage *message;
@@ -1020,7 +1251,7 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
                 // Here we are calling the function, which actually uses the socket to receive the image piece by piece
                 // The actual image will be saved in the buffer of the camra object's "priv" internal buffer
                 // "priv->buffer".
-                block_index = read_ximg_data(priv, fd, &ring, &poll_fd, block_index, &result->error);
+                block_index = read_ximg_data(priv, fd, &ring, &poll_fd, block_index, &finished, &packet_index, header, &result->error);
 
                 // Once the image was completely received we push a new message, indicating that image reception was a
                 // success, into the queue, so that the main thread which is watching the queue can retrieve the image
@@ -1366,9 +1597,11 @@ static void
 uca_phantom_camera_stop_recording (UcaCamera *camera,
                                    GError **error)
 {
-    g_warning("STOP RECORDING");
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
-    g_warning("STOP RECORDING");
+
+    // Stop the readout
+    uca_phantom_camera_stop_readout(camera, error);
+
 }
 
 static void
@@ -1410,8 +1643,7 @@ unpack_p10 (guint16 *output,
             output[j + (3 - h)] = current;
         }
     }
-    g_warning("i:%i j:%i", i, j);
-
+    // g_warning("i:%i j:%i", i, j);
 }
 
 
@@ -1461,6 +1693,7 @@ uca_phantom_camera_grab (UcaCamera *camera,
                          gpointer data,
                          GError **error)
 {
+    g_warning("ATTEMPTING TO GRAB");
     UcaPhantomCameraPrivate *priv;
     InternalMessage *message;
     Result *result;
@@ -1498,16 +1731,20 @@ uca_phantom_camera_grab (UcaCamera *camera,
     g_async_queue_push (priv->message_queue, message);
     g_warning("PUSHED THE MESSAGE REQUEST INTO QUEUE");
 
-    // We are only using 16P anyways
+    // 27.03.2019
+    // The 10G connection ALWAYS ONLY uses the P10 image transfer format
+    if (priv->enable_10ge) priv->format = IMAGE_FORMAT_P10;
+    // Depending on the chosen transfer format, we need to create an according string, which is being used as a
+    // parameter of the img request, that is being sent to the camera.
     switch (priv->format) {
         case IMAGE_FORMAT_P16:
-            //format = "P16";
-            format = "P10";
-            g_warning("P10");
+            format = "P16";
             break;
         case IMAGE_FORMAT_P12L:
             format = "P12L";
-            g_warning("P12");
+            break;
+        case IMAGE_FORMAT_P10:
+            format = "P10";
             break;
     }
 
@@ -1556,15 +1793,13 @@ uca_phantom_camera_grab (UcaCamera *camera,
     if (result->success) {
         switch (priv->format) {
             case IMAGE_FORMAT_P16:
-                // memcpy (data, priv->buffer, get_buffer_size (priv));
-                // memcpy (data, priv->buffer, get_buffer_size(priv));
-
-                //print_buffer(priv->buffer, 10000);
-
                 unpack_p10(data, priv->buffer, priv->roi_width * priv->roi_height);
                 break;
             case IMAGE_FORMAT_P12L:
                 unpack_p12l (data, priv->buffer, priv->roi_width * priv->roi_height);
+                break;
+            case IMAGE_FORMAT_P10:
+                unpack_p10(data, priv->buffer, priv->roi_width * priv->roi_height);
                 break;
         }
     }
