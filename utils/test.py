@@ -32,12 +32,17 @@ def create_array_from(camera):
 # Suppose 'camera' is a already available, you would get the camera data like
 # this:
 a, buf = create_array_from(camera)
-camera.start_recording()
-camera.grab(buf)
+
+try:
+    camera.start_recording()
+    camera.grab(buf)
+except KeyboardInterrupt:
+    exit()
 
 # Now data is in 'a' and we can use Numpy functions on it
 print(np.mean(a))
 print(a)
+a[a > 255] = 255
 plt.imshow(a, cmap='gray')
 plt.show()
 

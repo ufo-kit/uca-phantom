@@ -49,6 +49,7 @@
 #define IP_ADDRESS      "127.0.0.1"
 //#define IP_ADDRESS      "172.16.31.157"
 //#define INTERFACE       "enp3s0f0"
+#define INTERFACE       "enp1s0"
 #define PROTOCOL        ETH_P_ALL
 //#define PROTOCOL        0x88b7
 #define X_NETWORK       TRUE
@@ -205,6 +206,9 @@ static GEnumValue acquisition_mode_values[] = {
     { 0, NULL, NULL }
 };
 
+// 06.04.2019
+// Added the additional attribute 10g_buffer, which will be used to store the unpacked data (with the transfer format
+// already decoded into the pixel values)
 struct _UcaPhantomCameraPrivate {
     GError              *construct_error;
     gchar               *host;
@@ -228,6 +232,21 @@ struct _UcaPhantomCameraPrivate {
     guint8               mac_address[6];
     ImageFormat          format;
     AcquisitionMode      acquisition_mode;
+
+    struct block_desc   *xg_current_block;
+    gsize                xg_total;
+    gsize                xg_expected;
+    gboolean             xg_block_finished;
+    gint                 xg_block_index;
+    gint                 xg_packet_index;
+    struct tpacket3_hdr *xg_packet_header;
+
+    guint16             *xg_buffer;
+    gint                 xg_buffer_index;
+    guint8              *xg_packet_data;
+    guint8               xg_remaining_data[20];
+    gsize                xg_packet_length;
+    gsize                xg_remaining_length;
 };
 
 typedef struct  {
@@ -848,14 +867,46 @@ P10_byte_size(UcaPhantomCameraPrivate *priv)
  * @param block_description
  * @param finished
  */
-static void flush_block(struct block_desc *block_description, gboolean *finished) {
+static void flush_block(UcaPhantomCameraPrivate *priv) {
 
     // If the block has been completely processed (all payload data extracted from all the packages in it), then it has
     // to be flushed, meaning that it has to be "given back" to the kernel, so new data can be written to it.
     // unless it's status isn't changed, the kernel cannot write new packages into this block of the ring buffer.
-    if (*finished) {
-       block_description->h1.block_status = TP_STATUS_KERNEL;
+    if (priv->xg_block_finished) {
+       priv->xg_current_block->h1.block_status = TP_STATUS_KERNEL;
     }
+}
+
+void unpack_packet(UcaPhantomCameraPrivate *priv) {
+    if (priv->xg_remaining_length > 0) {
+        priv->xg_packet_data -= priv->xg_remaining_length - 0;
+        memcpy(priv->xg_packet_data, priv->xg_remaining_data, priv->xg_remaining_length);
+    }
+
+    int mask = 0b1111111111;
+    int i;
+    int length = (priv->xg_packet_length + priv->xg_remaining_length);
+    int overlap = length % 5;
+    guint64 temp;
+    for (i = 0; i < length - overlap; i += 5) {
+        temp = 0;
+        temp = 0;
+        for (int k = 0; k < 5; k++) {
+            temp |= priv->xg_packet_data[i + k];
+            temp <<= 8;
+        }
+        temp >>= 8;
+
+        priv->xg_buffer[priv->xg_buffer_index + 3] = (guint16) temp & mask;
+        priv->xg_buffer[priv->xg_buffer_index + 2] = (guint16) (temp >> 10) & mask;
+        priv->xg_buffer[priv->xg_buffer_index + 1] = (guint16) (temp >> 20) & mask;
+        priv->xg_buffer[priv->xg_buffer_index + 0] = (guint16) (temp >> 30) & mask;
+        priv->xg_buffer_index += 4;
+    }
+    // Setting up the overlap for the next iteration
+    priv->xg_packet_data += length - overlap;
+    memcpy(priv->xg_remaining_data, priv->xg_packet_data, overlap);
+    priv->xg_remaining_length = overlap;
 }
 
 /**
@@ -877,92 +928,86 @@ static void flush_block(struct block_desc *block_description, gboolean *finished
  * @return
  */
 int process_block(
-        struct block_desc *block_description,
-        guint8 *destination,
-        const int expected,
-        gsize *total,
-        gboolean *finished,
-        struct tpacket3_hdr *header,
-        int *packet_index)
+        UcaPhantomCameraPrivate *priv,
+        guint8 *destination
+        )
 {
     // Each block can hold multiple actual packets (frames). But the actual amount how many packets are in one block
     // depends on the size of the packet, speed of transmission etc. In general, the amount is not previously known,
     // but once the block is done writing, is stored inside the "num_pckts" of its descriptor.
-    int packet_amount = block_description->h1.num_pkts;
+    int packet_amount = priv->xg_current_block->h1.num_pkts;
 
     // This will store the total amount of payload(!) bytes received int the processed block and will also be returned
     int bytes = 0;
+    int remaining;
 
     // This will be the pointer directed at the start of the actual packet data! The data contained in a packet is
     // byte wise, which means its a unsigned 8 bit format.
     guint8 *data;
+
     // This will store the size of the packet's payload
     int length;
-    int remaining;
 
-    // g_warning("%u", destination);
-    // This is the header, which will be used
-    uint8_t buffer[2];
-    short state = 0;
+    struct timespec tstart={0,0}, tend={0,0};
 
     // The finished boolean variable is an indicator of whether the currently processed block is finished or not.
     // We have to consider the following case: If the loop below break's because all the expected data has been
     // received for one package, there could possibly still be data of the next image in that ring buffer block.
     // and we need to indicate this to know, if we should start in this or the next block when attempting to get the
     // data for that next image.
-    *finished = TRUE;
+    priv->xg_block_finished = TRUE;
 
     int i;
     //g_warning("IDX: %i", *packet_index);
-    for (i = *packet_index; i < packet_amount; i++) {
+    for (i = priv->xg_packet_index; i < packet_amount; i++) {
         // Calculation of the actual payload(!) length. The packages sent by the phantom have a overhead of 32 bytes!
-        length = header->tp_snaplen - 32;
+        length = priv->xg_packet_header->tp_snaplen - 32;
 
         // After exactly 94 bytes into the package the info about the used protocol can be extracted. And after 114
         // bytes the overhead ends and the actual payload starts.
-        data = (guint8 *) header;
-        //data += 94;
-        //memcpy(buffer, data, 2);
-        //data += 20;
-        
-        //if (data[94] == 136 && data[95] == 183) {
-            data += 114;
-        // if (buffer[0] == 136 && buffer[1] == 183) {
+        data = (guint8 *) priv->xg_packet_header;
 
-            *total += length;
+        if (data[94] == 136 && data[95] == 183) {
+            data += 114;
+
+            priv->xg_total += length;
 
             // With this we copy all the data (using the complete length of the payload) onto the destination buffer (where
             // the final image data will be stored)
-            memcpy (destination, data, length);
+            clock_gettime(CLOCK_MONOTONIC, &tstart);
+            priv->xg_packet_data = data;
+            priv->xg_packet_length = length;
+            //memcpy(destination, priv->xg_packet_data, priv->xg_packet_length);
+            unpack_packet(priv);
+            clock_gettime(CLOCK_MONOTONIC, &tend);
+            g_warning("TIME DELTA %.7f", ((double)tend.tv_sec + 1.0e-9*tend.tv_nsec) - ((double)tstart.tv_sec + 1.0e-9*tstart.tv_nsec));
 
             // After that we need to increment the pointer of the destination buffer, so that with the next memcpy no
             // existing data will be overwritten, but instead be appended
-            destination += length;
             bytes += length;
 
             // The amount of remaining bytes can be received
-            remaining = expected - *total;
+            remaining = priv->xg_expected - priv->xg_total;
 
-            if (length > remaining + 1492) {
-                header = (struct tpacket3_hdr *) ((uint8_t *) header + header->tp_next_offset);
+            if (length > remaining + 1472) {
+                priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_packet_header + priv->xg_packet_header->tp_next_offset);
                 break;
             }
-        //}
+        }
 
         // We are incrementing the loop by moving on to the location of the next packet
-        header = (struct tpacket3_hdr *) ((uint8_t *) header + header->tp_next_offset);
+        priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_packet_header + priv->xg_packet_header->tp_next_offset);
     }
-
     // We need to pass to the outside at which packet index the loop ended, so we ca possibly resume processing at
     // this point. of course this only be the case if the block exits as unfinished.
-    *packet_index = i + 1;
+    priv->xg_packet_index = i + 1;
 
     // If we reach this point in time, if the loop above simply finished, than the block has been processed completely.
     // But in case the loop was broken, due to one complete image being received, we need to indicate, that this block
     // is not finished and that we need to resume processing it with the next call to this function
     
     if (packet_amount - 1 > i) {
-        *finished = FALSE;
+        priv->xg_block_finished = FALSE;
         //g_warning("packet amount: %i, IDX: %i", packet_amount, i);
     }
     
@@ -990,18 +1035,16 @@ read_ximg_data (
         gint fd,
         struct ring *ring,
         struct pollfd *poll_fd,
-        unsigned int block_index,
-        gboolean *finished,
-        int *packet_index,
-        struct tpacket3_hdr *header,
         GError **error)
 {
     // I assume the "priv->buffer" is the internal buffer of the PhantomCamera object and the FINISHED image, meaning
     // all bytes have been received has to be put into this buffer at the end.
-    guint8 *dst = priv->buffer;
+    guint16 *dst = priv->xg_buffer;
+    priv->xg_buffer_index = 0;
     //g_warning("DESTINATION POINTER: %u, PRIV-BUFFER POINTER: %u", dst, priv->buffer);
 
     // With this we keep track of how many bytes have already been received.
+    priv->xg_total = 0;
     gsize total = 0;
     int bytes;
     int remaining;
@@ -1011,6 +1054,7 @@ read_ximg_data (
     // This is the amount of bytes that has to be received, based on the resolution of the image and the structure of
     // the 10G transfer format (always P10).
     int expected_bytes = get_buffer_size(priv);
+    priv->xg_expected = get_buffer_size(priv);
 
     // This struct will contain all the necessary iformation about the block of the ring buffer, that is currently
     // being processed
@@ -1018,63 +1062,63 @@ read_ximg_data (
 
     //unsigned int block_index = 0;
     unsigned int block_amount = 64;
+
+    // For profiling the code
     struct timespec tstart={0,0}, tend={0,0};
     struct timespec pstart={0,0}, pend={0,0};
-    
+
+
+
     //clock_gettime(CLOCK_MONOTONIC, &tstart);
-    while (total < expected_bytes) {
-        
+    while (priv->xg_total < priv->xg_expected) {
+
         // Creating the block description for the current block index from the ring buffer.
-        block_description = (struct block_desc *) ring->rd[block_index].iov_base;
-        
+        //block_description = (struct block_desc *) ring->rd[block_index].iov_base;
+        priv->xg_current_block = (struct block_desc *) ring->rd[priv->xg_block_index].iov_base;
+
         // Polling.
         // Once the kernel has finished writing to a block of the buffer (either because it is full, or because the
         // timer ran out), this block is being released to the user space (-> this program) and only then we can
         // read it. So the program execution of the loop will be skipped here, if the next block has not yet been
         // released to the user space.
-        
-        if ((block_description->h1.block_status & TP_STATUS_USER) == 0) {
-            //clock_gettime(CLOCK_MONOTONIC, &pstart);
+        if ((priv->xg_current_block->h1.block_status & TP_STATUS_USER) == 0) {
             poll(poll_fd, 1, -1);
-            //clock_gettime(CLOCK_MONOTONIC, &pend);
-            //g_warning("PROFILE DELTA %.5f",((double)pend.tv_sec + 1.0e-9*pend.tv_nsec) - ((double)pstart.tv_sec + 1.0e-9*pstart.tv_nsec));
             continue;
         }
-        
+
         // In case block was finished during the previous run of this function, the header struct will be created
         // to point to the first packet of the current (new) block.
         // Although if it wasn't finished the header for the packet, where the last loop left of will be reused.
-        if (*finished == TRUE) {
-            header = (struct tpacket3_hdr *) ((uint8_t *) block_description + block_description->h1.offset_to_first_pkt);
+        if (priv->xg_block_finished == TRUE) {
+            priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_current_block + priv->xg_current_block->h1.offset_to_first_pkt);
             // of course for an entirely new block we start processing the first packet.
-            *packet_index = 0;
+            //*packet_index = 0;
+            priv->xg_packet_index = 0;
         } else {
-            header = header_address;
-            header = (struct tpacket3_hdr *) ((uint8_t *) header + header->tp_next_offset);
+            priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_packet_header + priv->xg_packet_header->tp_next_offset);
         }
 
         // Actually extracting the data of the packages in that block into the destination buffer.
-        
-        
-        bytes = process_block(block_description, dst, expected_bytes, &total, finished, header, packet_index);
-        flush_block(block_description, finished);
-        header_address = header;
+
+        bytes = process_block(priv, dst);
+        flush_block(priv);
+        header_address = priv->xg_packet_header;
         // We need to increment the buffer pointer address
         dst += bytes;
 
         // If the block is not yet finished to be processed we cannot increment the index, so that with the next call
         // of this function the rest of the unfinished block will be processed first.
-        if (*finished == TRUE) {
+        if (priv->xg_block_finished == TRUE) {
             // Going to the next block. If the last block has been reached, it starts with the first block again,
             // after all this is how a ring buffer works.
-            block_index = (block_index + 1) % block_amount;
+            priv->xg_block_index = (priv->xg_block_index + 1) % block_amount;
         } 
     }
     //clock_gettime(CLOCK_MONOTONIC, &tend);
     //g_warning("TIME DELTA %.5f", ((double)tend.tv_sec + 1.0e-9*tend.tv_nsec) - ((double)tstart.tv_sec + 1.0e-9*tstart.tv_nsec));
 
     // g_warning("AFTER\nDESTINATION POINTER: %u, PRIV-BUFFER POINTER: %u", dst, priv->buffer);
-    return block_index;
+    return 0;
 
 }
 
@@ -1259,10 +1303,10 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
     g_async_queue_push (priv->result_queue, result);
 
     //g_warning("10G setup complete");
-    unsigned int block_index = 0;
-    struct tpacket3_hdr *header;
-    gboolean finished = TRUE;
-    int packet_index = 0;
+
+    priv->xg_packet_index = 0;
+    priv->xg_block_index = 0;
+    priv->xg_block_finished = TRUE;
 
     while (!stop) {
         InternalMessage *message;
@@ -1276,7 +1320,7 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
                 // Here we are calling the function, which actually uses the socket to receive the image piece by piece
                 // The actual image will be saved in the buffer of the camra object's "priv" internal buffer
                 // "priv->buffer".
-                block_index = read_ximg_data(priv, fd, &ring, &poll_fd, block_index, &finished, &packet_index, header, &result->error);
+                read_ximg_data(priv, fd, &ring, &poll_fd, &result->error);
 
                 // Once the image was completely received we push a new message, indicating that image reception was a
                 // success, into the queue, so that the main thread which is watching the queue can retrieve the image
@@ -1527,11 +1571,17 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
     }
 
     g_free (priv->buffer);
-    //priv->buffer = g_malloc0 (get_buffer_size (priv));
-    priv->buffer = g_malloc0(9000000);
+    priv->buffer = g_malloc0 (get_buffer_size (priv));
+    //priv->buffer = g_malloc0(9000000);
 
     if (priv->enable_10ge) {
-        //g_warning("THIS IS WRONG NO 10G");
+        // 06.04.2019
+        // Using the 10G connection, the transfer format is being unpacked inside the actual receive loop (in-time
+        // unpacking). The data is being unpacked into a uint16 buffer already for the actual pixel values. This buffer
+        // needs to be init here with the resolution of the picture.
+        g_free(priv->xg_buffer);
+        priv->xg_buffer = g_malloc0(priv->roi_height * priv->roi_width);
+
         priv->accept_thread = g_thread_new (NULL, (GThreadFunc) accept_ximg_data, priv);
 
         result = (Result *) g_async_queue_pop (priv->result_queue);
@@ -1818,13 +1868,18 @@ uca_phantom_camera_grab (UcaCamera *camera,
     if (result->success) {
         switch (priv->format) {
             case IMAGE_FORMAT_P16:
-                unpack_p10(data, priv->buffer, priv->roi_width * priv->roi_height);
+                memcpy (data, priv->buffer, priv->roi_width * priv->roi_height * 2);
                 break;
             case IMAGE_FORMAT_P12L:
                 unpack_p12l (data, priv->buffer, priv->roi_width * priv->roi_height);
                 break;
             case IMAGE_FORMAT_P10:
-                unpack_p10(data, priv->buffer, priv->roi_width * priv->roi_height);
+                if (priv->enable_10ge) {
+                    //g_warning("MEMCOPY BUFFER");
+                    memcpy (data, priv->xg_buffer, priv->roi_width * priv->roi_height * 2);
+                } else {
+                    unpack_p10(data, priv->buffer, priv->roi_width * priv->roi_height);
+                }
                 break;
         }
     }
@@ -2414,7 +2469,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->accept = NULL;
     priv->buffer = NULL;
     priv->features = NULL;
-    priv->format = IMAGE_FORMAT_P16;
+    priv->format = IMAGE_FORMAT_P10;
     priv->acquisition_mode = ACQUISITION_MODE_STANDARD;
     priv->enable_10ge = X_NETWORK;
     priv->iface = INTERFACE;
