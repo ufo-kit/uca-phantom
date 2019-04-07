@@ -217,6 +217,7 @@ struct _UcaPhantomCameraPrivate {
     GSocketListener     *listener;
     GCancellable        *accept;
     GThread             *accept_thread;
+    GThread             *unpack_thread;
     GAsyncQueue         *message_queue;
     GAsyncQueue         *result_queue;
     GRegex              *response_pattern;
@@ -247,6 +248,9 @@ struct _UcaPhantomCameraPrivate {
     guint8               xg_remaining_data[20];
     gsize                xg_packet_length;
     gsize                xg_remaining_length;
+
+    gint                 xg_unpack_length;
+    gint                 xg_unpack_index;
 };
 
 typedef struct  {
@@ -966,21 +970,17 @@ int process_block(
         // After exactly 94 bytes into the package the info about the used protocol can be extracted. And after 114
         // bytes the overhead ends and the actual payload starts.
         data = (guint8 *) priv->xg_packet_header;
-
+        //g_warning("length: %i", length);
         if (data[94] == 136 && data[95] == 183) {
             data += 114;
 
-            priv->xg_total += length;
-
             // With this we copy all the data (using the complete length of the payload) onto the destination buffer (where
             // the final image data will be stored)
-            clock_gettime(CLOCK_MONOTONIC, &tstart);
             priv->xg_packet_data = data;
             priv->xg_packet_length = length;
-            //memcpy(destination, priv->xg_packet_data, priv->xg_packet_length);
-            unpack_packet(priv);
-            clock_gettime(CLOCK_MONOTONIC, &tend);
-            g_warning("TIME DELTA %.7f", ((double)tend.tv_sec + 1.0e-9*tend.tv_nsec) - ((double)tstart.tv_sec + 1.0e-9*tstart.tv_nsec));
+            memcpy(destination, priv->xg_packet_data, priv->xg_packet_length);
+
+            priv->xg_total += length;
 
             // After that we need to increment the pointer of the destination buffer, so that with the next memcpy no
             // existing data will be overwritten, but instead be appended
@@ -1039,7 +1039,7 @@ read_ximg_data (
 {
     // I assume the "priv->buffer" is the internal buffer of the PhantomCamera object and the FINISHED image, meaning
     // all bytes have been received has to be put into this buffer at the end.
-    guint16 *dst = priv->xg_buffer;
+    guint8 *dst = priv->buffer;
     priv->xg_buffer_index = 0;
     //g_warning("DESTINATION POINTER: %u, PRIV-BUFFER POINTER: %u", dst, priv->buffer);
 
@@ -1071,6 +1071,9 @@ read_ximg_data (
 
     //clock_gettime(CLOCK_MONOTONIC, &tstart);
     while (priv->xg_total < priv->xg_expected) {
+
+        priv->xg_total = priv->xg_expected;
+        break;
 
         // Creating the block description for the current block index from the ring buffer.
         //block_description = (struct block_desc *) ring->rd[block_index].iov_base;
@@ -1114,6 +1117,7 @@ read_ximg_data (
             priv->xg_block_index = (priv->xg_block_index + 1) % block_amount;
         } 
     }
+    //struct timespec tstart={0,0}, tend={0,0};
     //clock_gettime(CLOCK_MONOTONIC, &tend);
     //g_warning("TIME DELTA %.5f", ((double)tend.tv_sec + 1.0e-9*tend.tv_nsec) - ((double)tstart.tv_sec + 1.0e-9*tstart.tv_nsec));
 
@@ -1254,6 +1258,97 @@ static void teardown_raw_socket(struct ring *ring, int fd) {
     close(fd);
 }
 
+void unpack_image(UcaPhantomCameraPrivate *priv) {
+
+    int new_length;
+    int usable_length;
+    int mask = 0b1111111111;
+    guint64 temp;
+    struct timespec tstart={0,0}, tend={0,0};
+
+
+    gsize pixel_count = priv->roi_width * priv->roi_height;
+    clock_gettime(CLOCK_MONOTONIC, &tstart);
+    while (priv->xg_buffer_index < pixel_count) {
+        new_length = priv->xg_total - priv->xg_unpack_index;
+
+        usable_length = new_length - (new_length % 20);
+        if (usable_length > 0) {
+
+            for (int i = 0; i < usable_length; i += 5) {
+                temp = 0;
+
+                for (int k = 0; k < 5; k++) {
+                    temp |= priv->buffer[priv->xg_unpack_index + i + k];
+                    temp <<= 8;
+                }
+                temp >>= 8;
+
+                priv->xg_buffer[priv->xg_buffer_index + 3] = (guint16) temp & mask;
+                priv->xg_buffer[priv->xg_buffer_index + 2] = (guint16) (temp >> 10) & mask;
+                priv->xg_buffer[priv->xg_buffer_index + 1] = (guint16) (temp >> 20) & mask;
+                priv->xg_buffer[priv->xg_buffer_index + 0] = (guint16) (temp >> 30) & mask;
+
+                priv->xg_buffer_index += 4;
+            }
+            priv->xg_unpack_index += usable_length;
+
+             //g_warning("%i %i", priv->xg_total, priv->xg_buffer_index);
+
+        } else {
+            continue;
+        }
+    }
+    clock_gettime(CLOCK_MONOTONIC, &tend);
+    g_warning("TIME DELTA %.5f", ((double)tend.tv_sec + 1.0e-9*tend.tv_nsec) - ((double)tstart.tv_sec + 1.0e-9*tstart.tv_nsec));
+}
+
+static gpointer
+unpack_ximg_data (UcaPhantomCameraPrivate *priv)
+{
+    Result *result;
+    gint fd;
+    gboolean stop = FALSE;
+
+    result = g_new0(Result, 1);
+    result->type = RESULT_READY;
+    result->success = FALSE;
+
+    while (!stop) {
+        InternalMessage *message;
+
+        result = g_new0 (Result, 1);
+        message = g_async_queue_pop (priv->message_queue);
+
+        switch (message->type) {
+            case MESSAGE_READ_IMAGE:
+
+                // IMPLEMENT THE UNPACKING
+                priv->xg_unpack_index = 0;
+                unpack_image(priv);
+
+                result->type = RESULT_IMAGE;
+                result->success = TRUE;
+
+                // g_warning("ERROR: %s", result->error);
+                g_async_queue_push (priv->result_queue, result);
+                //g_warning("PUSHED RESULT ");
+                break;
+
+            case MESSAGE_READ_TIMESTAMP:
+                // Not implemented
+                break;
+
+            case MESSAGE_STOP:
+                stop = TRUE;
+                break;
+        }
+
+    }
+
+    return NULL;
+}
+
 /**
  * @brief The Thread, which receives the images using the 10G network
  *
@@ -1325,11 +1420,11 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
                 // Once the image was completely received we push a new message, indicating that image reception was a
                 // success, into the queue, so that the main thread which is watching the queue can retrieve the image
                 // from the buffer.
-                result->type = RESULT_IMAGE;
-                result->success = TRUE;
+                // result->type = RESULT_IMAGE;
+                // result->success = TRUE;
 
                 // g_warning("ERROR: %s", result->error);
-                g_async_queue_push (priv->result_queue, result);
+                // g_async_queue_push (priv->result_queue, result);
                 //g_warning("PUSHED RESULT ");
                 break;
 
@@ -1583,6 +1678,7 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
         priv->xg_buffer = g_malloc0(priv->roi_height * priv->roi_width);
 
         priv->accept_thread = g_thread_new (NULL, (GThreadFunc) accept_ximg_data, priv);
+        priv->unpack_thread = g_thread_new (NULL, (GThreadFunc) unpack_ximg_data, priv);
 
         result = (Result *) g_async_queue_pop (priv->result_queue);
         g_assert (result->type == RESULT_READY);
@@ -1630,7 +1726,7 @@ static void
 uca_phantom_camera_stop_readout (UcaCamera *camera,
                                  GError **error)
 {
-    //g_warning("STOP READOUT");
+    g_warning("STOP READOUT");
 
     UcaPhantomCameraPrivate *priv;
     InternalMessage *message;
@@ -1645,8 +1741,12 @@ uca_phantom_camera_stop_readout (UcaCamera *camera,
     /* stop listener */
     g_cancellable_cancel (priv->accept);
     g_socket_listener_close (priv->listener);
+
     g_thread_join (priv->accept_thread);
     g_thread_unref (priv->accept_thread);
+
+    //g_thread_join(priv->unpack_thread);
+    //g_thread_unref(priv->unpack_thread);
 
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 }
@@ -1803,6 +1903,7 @@ uca_phantom_camera_grab (UcaCamera *camera,
     message = g_new0 (InternalMessage, 1);
     message->data = data;
     message->type = MESSAGE_READ_IMAGE;
+    g_async_queue_push (priv->message_queue, message);
     g_async_queue_push (priv->message_queue, message);
     //g_warning("PUSHED THE MESSAGE REQUEST INTO QUEUE");
 
