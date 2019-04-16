@@ -46,12 +46,12 @@
 // ***************************************
 
 //#define IP_ADDRESS "100.100.189.164"
-#define IP_ADDRESS      "127.0.0.1"
-//#define IP_ADDRESS      "172.16.31.157"
-//#define INTERFACE       "enp3s0f0"
-#define INTERFACE       "enp1s0"
-#define PROTOCOL        ETH_P_ALL
-//#define PROTOCOL        0x88b7
+//#define IP_ADDRESS      "127.0.0.1"
+#define IP_ADDRESS      "172.16.31.157"
+#define INTERFACE       "enp3s0f0"
+//#define INTERFACE       "enp1s0"
+//#define PROTOCOL        ETH_P_ALL
+#define PROTOCOL        0x88b7
 #define X_NETWORK       TRUE
 
 #define UCA_PHANTOM_CAMERA_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE((obj), UCA_TYPE_PHANTOM_CAMERA, UcaPhantomCameraPrivate))
@@ -1825,7 +1825,7 @@ uca_phantom_camera_grab (UcaCamera *camera,
                 unpack_p12l (data, priv->buffer, priv->roi_width * priv->roi_height);
                 break;
             case IMAGE_FORMAT_P10:
-                unpack_p10(data, priv->buffer, priv->roi_width * priv->roi_height);
+                //unpack_p10(data, priv->buffer, priv->roi_width * priv->roi_height);
                 break;
         }
     }
