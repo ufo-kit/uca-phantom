@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <inttypes.h>
 #include <time.h>
+//#include <math.h>
 
 #include <gio/gio.h>
 #include <gmodule.h>
@@ -40,6 +41,8 @@
 #include <uca/uca-camera.h>
 #include "uca-phantom-camera.h"
 
+// SSE instructions AVX; library intrisincs 
+// UCA UFO SSE 
 
 // ***************************************
 // HARDCODING THE IP ADDRESS OF THE CAMERA
@@ -73,6 +76,9 @@ GQuark uca_phantom_camera_error_quark ()
 // STRUCTS FOR THE RAW SOCKET CONNECTION
 // *************************************
 
+uint8_t zero[4] = {0,0,0,0};
+uint8_t *zero_pointer = (uint8_t *) zero;
+
 struct block_desc {
     uint32_t version;
     uint32_t offset_to_priv;
@@ -84,6 +90,11 @@ struct ring {
     uint8_t *map;
     struct tpacket_req3 req;
 };
+
+typedef union {
+    uint8_t *in;
+    uint64_t *out;
+} xbuffer;
 
 
 // ***************************
@@ -241,11 +252,13 @@ struct _UcaPhantomCameraPrivate {
     gint                 xg_block_index;
     gint                 xg_packet_index;
     struct tpacket3_hdr *xg_packet_header;
-
-    guint16             *xg_buffer;
+    
+    xbuffer              xg_data_buffer;
+    uint8_t             *xg_data_in;
+    uint16_t            *xg_buffer;
     gint                 xg_buffer_index;
     guint8              *xg_packet_data;
-    guint8               xg_remaining_data[20];
+    guint8               xg_remaining_data[40];
     gsize                xg_packet_length;
     gsize                xg_remaining_length;
 
@@ -296,6 +309,7 @@ static UnitVariable variables[] = {
 typedef struct {
     enum {
         MESSAGE_READ_IMAGE = 1,
+        MESSAGE_UNPACK_IMAGE = 2,
         MESSAGE_READ_TIMESTAMP,
         MESSAGE_STOP,
     } type;
@@ -913,6 +927,26 @@ void unpack_packet(UcaPhantomCameraPrivate *priv) {
     priv->xg_remaining_length = overlap;
 }
 
+void mem_copy_packet(UcaPhantomCameraPrivate *priv) {
+    if (priv->xg_remaining_length > 0) {
+        priv->xg_packet_data -= priv->xg_remaining_length;
+        memcpy(priv->xg_packet_data, priv->xg_remaining_data, priv->xg_remaining_length);
+    }
+
+    int length = (priv->xg_packet_length + priv->xg_remaining_length);
+    int overlap = length % 20;
+    int a = 0, b = 0;
+    for (int i = 0; i < length - overlap; i+=20) {
+        memcpy(priv->xg_data_buffer.in, priv->xg_packet_data, 20);
+        memcpy(priv->xg_data_buffer.in, zero_pointer, 4);
+        priv->xg_data_buffer.in += 24; a += 24;
+        priv->xg_packet_data += 20; b += 20;
+    }
+
+    memcpy(priv->xg_remaining_data, priv->xg_packet_data, overlap);
+    priv->xg_remaining_length = overlap;
+}
+
 /**
  * @brief Extracts the data from one block in the ring buffer and adds it to the destination buffer.
  *
@@ -954,6 +988,8 @@ int process_block(
 
     struct timespec tstart={0,0}, tend={0,0};
 
+    g_warning("processing block");
+
     // The finished boolean variable is an indicator of whether the currently processed block is finished or not.
     // We have to consider the following case: If the loop below break's because all the expected data has been
     // received for one package, there could possibly still be data of the next image in that ring buffer block.
@@ -971,14 +1007,15 @@ int process_block(
         // bytes the overhead ends and the actual payload starts.
         data = (guint8 *) priv->xg_packet_header;
         //g_warning("length: %i", length);
-        if (data[94] == 136 && data[95] == 183) {
+        //if (data[94] == 136 && data[95] == 183) {
+            //g_warning("length %i", length);
             data += 114;
 
             // With this we copy all the data (using the complete length of the payload) onto the destination buffer (where
             // the final image data will be stored)
             priv->xg_packet_data = data;
             priv->xg_packet_length = length;
-            memcpy(destination, priv->xg_packet_data, priv->xg_packet_length);
+            mem_copy_packet(priv);
 
             priv->xg_total += length;
 
@@ -993,7 +1030,7 @@ int process_block(
                 priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_packet_header + priv->xg_packet_header->tp_next_offset);
                 break;
             }
-        }
+        //}
 
         // We are incrementing the loop by moving on to the location of the next packet
         priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_packet_header + priv->xg_packet_header->tp_next_offset);
@@ -1040,7 +1077,7 @@ read_ximg_data (
     // I assume the "priv->buffer" is the internal buffer of the PhantomCamera object and the FINISHED image, meaning
     // all bytes have been received has to be put into this buffer at the end.
     guint8 *dst = priv->buffer;
-    priv->xg_buffer_index = 0;
+    //priv->xg_buffer_index = 0;
     //g_warning("DESTINATION POINTER: %u, PRIV-BUFFER POINTER: %u", dst, priv->buffer);
 
     // With this we keep track of how many bytes have already been received.
@@ -1048,6 +1085,9 @@ read_ximg_data (
     gsize total = 0;
     int bytes;
     int remaining;
+    
+    // Resetting state variables
+    priv->xg_remaining_length = 0;
     
     unsigned long header_address;
 
@@ -1122,6 +1162,7 @@ read_ximg_data (
     //g_warning("TIME DELTA %.5f", ((double)tend.tv_sec + 1.0e-9*tend.tv_nsec) - ((double)tstart.tv_sec + 1.0e-9*tstart.tv_nsec));
 
     // g_warning("AFTER\nDESTINATION POINTER: %u, PRIV-BUFFER POINTER: %u", dst, priv->buffer);
+    priv->xg_data_buffer.in -= priv->xg_total;
     return 0;
 
 }
@@ -1263,44 +1304,54 @@ void unpack_image(UcaPhantomCameraPrivate *priv) {
     int new_length;
     int usable_length;
     int mask = 0b1111111111;
+    int limit;
     guint64 temp;
+    int i, j;
     struct timespec tstart={0,0}, tend={0,0};
-
+    priv->xg_buffer_index = 0;
+    priv->xg_unpack_index = 0;
 
     gsize pixel_count = priv->roi_width * priv->roi_height;
     clock_gettime(CLOCK_MONOTONIC, &tstart);
     while (priv->xg_buffer_index < pixel_count) {
-        new_length = priv->xg_total - priv->xg_unpack_index;
-
-        usable_length = new_length - (new_length % 20);
+        new_length = floor(priv->xg_total * ((float) 24 / 20) * ((float) 1 / 8)) - priv->xg_unpack_index;
+        usable_length = new_length - (new_length % 3);
+        limit = priv->xg_unpack_index + usable_length;
         if (usable_length > 0) {
-
-            for (int i = 0; i < usable_length; i += 5) {
-                temp = 0;
-
-                for (int k = 0; k < 5; k++) {
-                    temp |= priv->buffer[priv->xg_unpack_index + i + k];
-                    temp <<= 8;
-                }
-                temp >>= 8;
-
-                priv->xg_buffer[priv->xg_buffer_index + 3] = (guint16) temp & mask;
-                priv->xg_buffer[priv->xg_buffer_index + 2] = (guint16) (temp >> 10) & mask;
-                priv->xg_buffer[priv->xg_buffer_index + 1] = (guint16) (temp >> 20) & mask;
-                priv->xg_buffer[priv->xg_buffer_index + 0] = (guint16) (temp >> 30) & mask;
-
-                priv->xg_buffer_index += 4;
+            for (i=priv->xg_unpack_index, j=priv->xg_buffer_index; i < limit; i+=3, j+=16) {
+                
+                //g_warning("i %i j %i", i, j);
+                
+                priv->xg_buffer[j + 0] = (uint16_t) (mask & priv->xg_data_buffer.out[i]);
+                priv->xg_buffer[j + 1] = (uint16_t) (mask & (priv->xg_data_buffer.out[i] >> 10));
+                priv->xg_buffer[j + 2] = (uint16_t) (mask & (priv->xg_data_buffer.out[i] >> 20));
+                priv->xg_buffer[j + 3] = (uint16_t) (mask & (priv->xg_data_buffer.out[i] >> 30));
+                priv->xg_buffer[j + 4] = (uint16_t) (mask & (priv->xg_data_buffer.out[i] >> 40));
+                priv->xg_buffer[j + 5] = (uint16_t) (mask & (priv->xg_data_buffer.out[i] >> 50));
+                priv->xg_buffer[j + 6] = (uint16_t) (mask & ((priv->xg_data_buffer.out[i] >> 60) | (priv->xg_data_buffer.out[i + 1] << 6)));
+                priv->xg_buffer[j + 7] = (uint16_t) (mask & (priv->xg_data_buffer.out[i + 1] >> 6));
+                priv->xg_buffer[j + 8] = (uint16_t) (mask & (priv->xg_data_buffer.out[i + 1] >> 16));
+                priv->xg_buffer[j + 9] = (uint16_t) (mask & (priv->xg_data_buffer.out[i + 1] >> 26));
+                priv->xg_buffer[j + 10] = (uint16_t) (mask & (priv->xg_data_buffer.out[i + 1] >> 36));
+                priv->xg_buffer[j + 11] = (uint16_t) (mask & (priv->xg_data_buffer.out[i + 1] >> 46));
+                priv->xg_buffer[j + 12] = (uint16_t) (mask & ((priv->xg_data_buffer.out[i + 1] >> 56) | (priv->xg_data_buffer.out[i + 2] << 2)));
+                priv->xg_buffer[j + 13] = (uint16_t) (mask & (priv->xg_data_buffer.out[i + 2] >> 2));
+                priv->xg_buffer[j + 14] = (uint16_t) (mask & (priv->xg_data_buffer.out[i + 2] >> 12));
+                priv->xg_buffer[j + 15] = (uint16_t) (mask & (priv->xg_data_buffer.out[i + 2] >> 22));
+                
+                priv->xg_unpack_index += 3;
+                priv->xg_buffer_index += 16;
             }
-            priv->xg_unpack_index += usable_length;
-
-             //g_warning("%i %i", priv->xg_total, priv->xg_buffer_index);
-
+            g_warning("INDEX  unpack %i buffer %i < pixel count: %i, total: %i", priv->xg_unpack_index, priv->xg_buffer_index, pixel_count, priv->xg_total);
+            g_warning("In Pointer: %u", priv->xg_data_buffer);
         } else {
             continue;
         }
     }
     clock_gettime(CLOCK_MONOTONIC, &tend);
-    g_warning("TIME DELTA %.5f", ((double)tend.tv_sec + 1.0e-9*tend.tv_nsec) - ((double)tstart.tv_sec + 1.0e-9*tstart.tv_nsec));
+    //g_warning("TIMEs DELTA %.5f", ((double)tend.tv_sec + 1.0e-9*tend.tv_nsec) - ((double)tstart.tv_sec + 1.0e-9*tstart.tv_nsec));
+
+    //free(priv->xg_data_buffer.in);
 }
 
 static gpointer
@@ -1321,8 +1372,9 @@ unpack_ximg_data (UcaPhantomCameraPrivate *priv)
         message = g_async_queue_pop (priv->message_queue);
 
         switch (message->type) {
-            case MESSAGE_READ_IMAGE:
-
+            case MESSAGE_UNPACK_IMAGE:
+                
+                g_warning("Init the unpacking");
                 // IMPLEMENT THE UNPACKING
                 priv->xg_unpack_index = 0;
                 unpack_image(priv);
@@ -1334,6 +1386,9 @@ unpack_ximg_data (UcaPhantomCameraPrivate *priv)
                 g_async_queue_push (priv->result_queue, result);
                 //g_warning("PUSHED RESULT ");
                 break;
+
+            case MESSAGE_READ_IMAGE:
+                g_async_queue_push(priv->message_queue, message);
 
             case MESSAGE_READ_TIMESTAMP:
                 // Not implemented
@@ -1411,7 +1466,8 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
 
         switch (message->type) {
             case MESSAGE_READ_IMAGE:
-
+                
+                g_warning("Receiving the actual image");
                 // Here we are calling the function, which actually uses the socket to receive the image piece by piece
                 // The actual image will be saved in the buffer of the camra object's "priv" internal buffer
                 // "priv->buffer".
@@ -1427,6 +1483,9 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
                 // g_async_queue_push (priv->result_queue, result);
                 //g_warning("PUSHED RESULT ");
                 break;
+
+            case MESSAGE_UNPACK_IMAGE:
+                g_async_queue_push(priv->message_queue, message);
 
             case MESSAGE_READ_TIMESTAMP:
                 // Not implemented
@@ -1657,6 +1716,7 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
     if (priv->enable_10ge && priv->iface == NULL) {
+        
         g_set_error_literal (error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_DEVICE,
                              "Trying to use 10GE but no network adapter is given");
 
@@ -1674,9 +1734,10 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
         // Using the 10G connection, the transfer format is being unpacked inside the actual receive loop (in-time
         // unpacking). The data is being unpacked into a uint16 buffer already for the actual pixel values. This buffer
         // needs to be init here with the resolution of the picture.
-        g_free(priv->xg_buffer);
-        priv->xg_buffer = g_malloc0(priv->roi_height * priv->roi_width);
-
+        //g_free(priv->xg_buffer);
+        priv->xg_buffer = g_malloc0(priv->roi_height * priv->roi_width * 4);
+        priv->xg_data_buffer.in = g_malloc(priv->roi_height * priv->roi_width * 4);
+        
         priv->accept_thread = g_thread_new (NULL, (GThreadFunc) accept_ximg_data, priv);
         priv->unpack_thread = g_thread_new (NULL, (GThreadFunc) unpack_ximg_data, priv);
 
@@ -1737,6 +1798,9 @@ uca_phantom_camera_stop_readout (UcaCamera *camera,
     message = g_new0 (InternalMessage, 1);
     message->type = MESSAGE_STOP;
     g_async_queue_push (priv->message_queue, message);
+    message = g_new0 (InternalMessage, 1);
+    message->type = MESSAGE_STOP;
+    g_async_queue_push (priv->message_queue, message);
 
     /* stop listener */
     g_cancellable_cancel (priv->accept);
@@ -1747,6 +1811,11 @@ uca_phantom_camera_stop_readout (UcaCamera *camera,
 
     //g_thread_join(priv->unpack_thread);
     //g_thread_unref(priv->unpack_thread);
+    
+    //g_free(priv->xg_data_buffer.in);
+    //g_free(priv->xg_buffer);
+    
+    g_warning("STOP READOUT");
 
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 }
@@ -1904,6 +1973,10 @@ uca_phantom_camera_grab (UcaCamera *camera,
     message->data = data;
     message->type = MESSAGE_READ_IMAGE;
     g_async_queue_push (priv->message_queue, message);
+    
+    message = g_new0 (InternalMessage, 1);
+    message->data = data;
+    message->type = MESSAGE_UNPACK_IMAGE;
     g_async_queue_push (priv->message_queue, message);
     //g_warning("PUSHED THE MESSAGE REQUEST INTO QUEUE");
 
@@ -1976,7 +2049,7 @@ uca_phantom_camera_grab (UcaCamera *camera,
                 break;
             case IMAGE_FORMAT_P10:
                 if (priv->enable_10ge) {
-                    //g_warning("MEMCOPY BUFFER");
+                    g_warning("MEMCOPY BUFFER");
                     memcpy (data, priv->xg_buffer, priv->roi_width * priv->roi_height * 2);
                 } else {
                     unpack_p10(data, priv->buffer, priv->roi_width * priv->roi_height);

@@ -40,6 +40,8 @@ add_library(ucaphantom SHARED uca-phantom-camera.c)
 target_link_libraries(ucaphantom
     ${UCA_LIBRARIES}
     ${GIO_LIBRARIES})
+    
+target_link_libraries(ucaphantom m)
 
 set_property(TARGET ucaphantom PROPERTY C_STANDARD 99)
 
