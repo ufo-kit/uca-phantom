@@ -49,12 +49,12 @@
 // ***************************************
 
 //#define IP_ADDRESS "100.100.189.164"
-//#define IP_ADDRESS      "127.0.0.1"
-#define IP_ADDRESS      "172.16.31.157"
-#define INTERFACE       "enp3s0f0"
-//#define INTERFACE       "enp1s0"
-//#define PROTOCOL        ETH_P_ALL
-#define PROTOCOL        0x88b7
+#define IP_ADDRESS      "127.0.0.1"
+//#define IP_ADDRESS      "172.16.31.157"
+//#define INTERFACE       "enp3s0f0"
+#define INTERFACE       "enp1s0"
+#define PROTOCOL        ETH_P_ALL
+//#define PROTOCOL        0x88b7
 #define X_NETWORK       TRUE
 
 #define UCA_PHANTOM_CAMERA_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE((obj), UCA_TYPE_PHANTOM_CAMERA, UcaPhantomCameraPrivate))
@@ -937,9 +937,9 @@ void mem_copy_packet(UcaPhantomCameraPrivate *priv) {
     int overlap = length % 20;
     int a = 0, b = 0;
     for (int i = 0; i < length - overlap; i+=20) {
-        memcpy(priv->xg_data_buffer.in, priv->xg_packet_data, 20);
-        memcpy(priv->xg_data_buffer.in, zero_pointer, 4);
-        priv->xg_data_buffer.in += 24; a += 24;
+        memcpy(priv->xg_data_in, priv->xg_packet_data, 20);
+        memcpy(priv->xg_data_in, zero_pointer, 4);
+        priv->xg_data_in += 24; a += 24;
         priv->xg_packet_data += 20; b += 20;
     }
 
@@ -1007,7 +1007,7 @@ int process_block(
         // bytes the overhead ends and the actual payload starts.
         data = (guint8 *) priv->xg_packet_header;
         //g_warning("length: %i", length);
-        //if (data[94] == 136 && data[95] == 183) {
+        if (data[94] == 136 && data[95] == 183) {
             //g_warning("length %i", length);
             data += 114;
 
@@ -1030,7 +1030,7 @@ int process_block(
                 priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_packet_header + priv->xg_packet_header->tp_next_offset);
                 break;
             }
-        //}
+        }
 
         // We are incrementing the loop by moving on to the location of the next packet
         priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_packet_header + priv->xg_packet_header->tp_next_offset);
@@ -1088,6 +1088,7 @@ read_ximg_data (
     
     // Resetting state variables
     priv->xg_remaining_length = 0;
+    priv->xg_data_in = priv->xg_data_buffer.in;
     
     unsigned long header_address;
 
@@ -1162,7 +1163,7 @@ read_ximg_data (
     //g_warning("TIME DELTA %.5f", ((double)tend.tv_sec + 1.0e-9*tend.tv_nsec) - ((double)tstart.tv_sec + 1.0e-9*tstart.tv_nsec));
 
     // g_warning("AFTER\nDESTINATION POINTER: %u, PRIV-BUFFER POINTER: %u", dst, priv->buffer);
-    priv->xg_data_buffer.in -= priv->xg_total;
+    //priv->xg_data_buffer.in -= priv->xg_total;
     return 0;
 
 }
@@ -1342,8 +1343,8 @@ void unpack_image(UcaPhantomCameraPrivate *priv) {
                 priv->xg_unpack_index += 3;
                 priv->xg_buffer_index += 16;
             }
-            g_warning("INDEX  unpack %i buffer %i < pixel count: %i, total: %i", priv->xg_unpack_index, priv->xg_buffer_index, pixel_count, priv->xg_total);
-            g_warning("In Pointer: %u", priv->xg_data_buffer);
+            //g_warning("INDEX  unpack %i buffer %i < pixel count: %i, total: %i", priv->xg_unpack_index, priv->xg_buffer_index, pixel_count, priv->xg_total);
+            //g_warning("In Pointer: %u", priv->xg_data_buffer);
         } else {
             continue;
         }
@@ -1374,7 +1375,7 @@ unpack_ximg_data (UcaPhantomCameraPrivate *priv)
         switch (message->type) {
             case MESSAGE_UNPACK_IMAGE:
                 
-                g_warning("Init the unpacking");
+                //g_warning("Init the unpacking");
                 // IMPLEMENT THE UNPACKING
                 priv->xg_unpack_index = 0;
                 unpack_image(priv);
@@ -1467,7 +1468,7 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
         switch (message->type) {
             case MESSAGE_READ_IMAGE:
                 
-                g_warning("Receiving the actual image");
+                //g_warning("Receiving the actual image");
                 // Here we are calling the function, which actually uses the socket to receive the image piece by piece
                 // The actual image will be saved in the buffer of the camra object's "priv" internal buffer
                 // "priv->buffer".
@@ -2049,7 +2050,7 @@ uca_phantom_camera_grab (UcaCamera *camera,
                 break;
             case IMAGE_FORMAT_P10:
                 if (priv->enable_10ge) {
-                    g_warning("MEMCOPY BUFFER");
+                    // g_warning("MEMCOPY BUFFER");
                     memcpy (data, priv->xg_buffer, priv->roi_width * priv->roi_height * 2);
                 } else {
                     unpack_p10(data, priv->buffer, priv->roi_width * priv->roi_height);
