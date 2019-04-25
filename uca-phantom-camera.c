@@ -25,6 +25,7 @@
 #include <gmodule.h>
 #include <string.h>
 #include <unistd.h>
+#include <nmmintrin.h>
 
 #include <sys/socket.h>
 #include <sys/mman.h>
@@ -49,12 +50,12 @@
 // ***************************************
 
 //#define IP_ADDRESS "100.100.189.164"
-#define IP_ADDRESS      "127.0.0.1"
-//#define IP_ADDRESS      "172.16.31.157"
-//#define INTERFACE       "enp3s0f0"
-#define INTERFACE       "enp1s0"
-#define PROTOCOL        ETH_P_ALL
-//#define PROTOCOL        0x88b7
+//#define IP_ADDRESS      "127.0.0.1"
+#define IP_ADDRESS      "172.16.31.157"
+#define INTERFACE       "enp3s0f0"
+//#define INTERFACE       "enp1s0"
+//#define PROTOCOL        ETH_P_ALL
+#define PROTOCOL        0x88b7
 #define X_NETWORK       TRUE
 
 #define UCA_PHANTOM_CAMERA_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE((obj), UCA_TYPE_PHANTOM_CAMERA, UcaPhantomCameraPrivate))
@@ -988,8 +989,6 @@ int process_block(
 
     struct timespec tstart={0,0}, tend={0,0};
 
-    g_warning("processing block");
-
     // The finished boolean variable is an indicator of whether the currently processed block is finished or not.
     // We have to consider the following case: If the loop below break's because all the expected data has been
     // received for one package, there could possibly still be data of the next image in that ring buffer block.
@@ -1002,7 +1001,6 @@ int process_block(
     for (i = priv->xg_packet_index; i < packet_amount; i++) {
         // Calculation of the actual payload(!) length. The packages sent by the phantom have a overhead of 32 bytes!
         length = priv->xg_packet_header->tp_snaplen - 32;
-
         // After exactly 94 bytes into the package the info about the used protocol can be extracted. And after 114
         // bytes the overhead ends and the actual payload starts.
         data = (guint8 *) priv->xg_packet_header;
@@ -1112,9 +1110,6 @@ read_ximg_data (
 
     //clock_gettime(CLOCK_MONOTONIC, &tstart);
     while (priv->xg_total < priv->xg_expected) {
-
-        priv->xg_total = priv->xg_expected;
-        break;
 
         // Creating the block description for the current block index from the ring buffer.
         //block_description = (struct block_desc *) ring->rd[block_index].iov_base;
@@ -1301,7 +1296,106 @@ static void teardown_raw_socket(struct ring *ring, int fd) {
 }
 
 void unpack_image(UcaPhantomCameraPrivate *priv) {
+    uint16_t output[100000];
+    unsigned long data = 100000000;
+    unsigned long* data_pointer = &data;
+    int converted_size = (int)(((priv->roi_height * priv->roi_height) * ((float)24/20)) * ((float)1/8));
+    // DOING IT WITH SSE
+__m128i sse_temp_vector1;
+__m128i sse_temp_vector2;
+__m128i sse_load_mask_full = _mm_setr_epi32(-1, -1, -1, -1);
+__m128i sse_load_mask_partial= _mm_setr_epi32(-1, -1, 1, 1);
+__m128i sse_bit_mask = _mm_set_epi64x(0b1111111111, 0b1111111111);
 
+unsigned long* sse_fetch1;
+unsigned long* sse_fetch2;
+
+    int new_length;
+    int usable_length;
+    int limit;
+    int i, j;
+    struct timespec tstart={0,0}, tend={0,0};
+    priv->xg_buffer_index = 0;
+    priv->xg_unpack_index = 0;
+
+    gsize pixel_count = priv->roi_width * priv->roi_height;
+    clock_gettime(CLOCK_MONOTONIC, &tstart);
+    while (priv->xg_buffer_index < pixel_count) {
+        new_length = floor(priv->xg_total * ((float) 24 / 20) * ((float) 1 / 8)) - priv->xg_unpack_index;
+        usable_length = new_length - (new_length % 3);
+        limit = priv->xg_unpack_index + usable_length;
+        g_warning("usable length %i", usable_length);
+        if (usable_length > 0) {
+            for (i=priv->xg_unpack_index, j=priv->xg_buffer_index; i < limit; i+=3, j+=16) {
+                
+                sse_temp_vector1 = _mm_loadl_epi64((long long*) data_pointer);
+    sse_temp_vector2 = _mm_loadl_epi64((long long*) data_pointer);
+
+    sse_fetch1 = (unsigned long*) &sse_temp_vector1;
+    sse_fetch2 = (unsigned long*) &sse_temp_vector2;
+    // Masking the first 10 bytes
+    _mm_blendv_epi8(sse_temp_vector1, sse_temp_vector1, sse_bit_mask);
+    _mm_blendv_epi8(sse_temp_vector2, sse_temp_vector2, sse_bit_mask);
+
+    output[j + 0] = sse_fetch1[0];
+    output[j + 1] = sse_fetch1[1];
+    output[j + 3] = sse_fetch2[0];
+
+    sse_temp_vector1 >>= 10;
+    sse_temp_vector2 >>= 10;
+    //mm_bitshift_left(sse_temp_vector1, 10);
+    //mm_bitshift_left(sse_temp_vector2, 10);
+    _mm_blendv_epi8(sse_temp_vector1, sse_temp_vector1, sse_bit_mask);
+    _mm_blendv_epi8(sse_temp_vector2, sse_temp_vector2, sse_bit_mask);
+
+    output[j + 4] = sse_fetch1[0];
+    output[j + 5] = sse_fetch1[1];
+    output[j + 6] = sse_fetch2[0];
+
+    sse_temp_vector1 >>= 10;
+    sse_temp_vector2 >>= 10;
+    //mm_bitshift_left(sse_temp_vector1, 10);
+    //mm_bitshift_left(sse_temp_vector2, 10);
+    _mm_blendv_epi8(sse_temp_vector1, sse_temp_vector1, sse_bit_mask);
+    _mm_blendv_epi8(sse_temp_vector2, sse_temp_vector2, sse_bit_mask);
+
+    output[j + 7] = sse_fetch1[0];
+    output[j + 8] = sse_fetch1[1];
+    output[j + 9] = sse_fetch2[0];
+
+    sse_temp_vector1 >>= 10;
+    sse_temp_vector2 >>= 10;
+    //mm_bitshift_left(sse_temp_vector1, 10);
+    //mm_bitshift_left(sse_temp_vector2, 10);
+    _mm_blendv_epi8(sse_temp_vector1, sse_temp_vector1, sse_bit_mask);
+    _mm_blendv_epi8(sse_temp_vector2, sse_temp_vector2, sse_bit_mask);
+
+    output[j + 10] = sse_fetch1[0];
+    output[j + 11] = sse_fetch1[1];
+    output[j + 12] = sse_fetch2[0];
+
+    sse_temp_vector1 >>= 10;
+    sse_temp_vector2 >>= 10;
+    //mm_bitshift_left(sse_temp_vector1, 10);
+    //mm_bitshift_left(sse_temp_vector2, 10);
+    _mm_blendv_epi8(sse_temp_vector1, sse_temp_vector1, sse_bit_mask);
+    _mm_blendv_epi8(sse_temp_vector2, sse_temp_vector2, sse_bit_mask);
+
+    output[j + 13] = sse_fetch1[0];
+    output[j + 14] = sse_fetch1[1];
+    output[j + 15] = sse_fetch2[0];
+                
+                priv->xg_unpack_index += 3;
+                priv->xg_buffer_index += 16;
+            }
+            //g_warning("INDEX  unpack %i buffer %i < pixel count: %i, total: %i", priv->xg_unpack_index, priv->xg_buffer_index, pixel_count, priv->xg_total);
+            //g_warning("In Pointer: %u", priv->xg_data_buffer);
+        } else {
+            continue;
+        }
+    }
+    // THE OLD ALGORITHM
+    /*
     int new_length;
     int usable_length;
     int mask = 0b1111111111;
@@ -1353,6 +1447,7 @@ void unpack_image(UcaPhantomCameraPrivate *priv) {
     //g_warning("TIMEs DELTA %.5f", ((double)tend.tv_sec + 1.0e-9*tend.tv_nsec) - ((double)tstart.tv_sec + 1.0e-9*tstart.tv_nsec));
 
     //free(priv->xg_data_buffer.in);
+    */
 }
 
 static gpointer
@@ -1416,6 +1511,7 @@ unpack_ximg_data (UcaPhantomCameraPrivate *priv)
 static gpointer
 accept_ximg_data (UcaPhantomCameraPrivate *priv)
 {
+    //g_warning("START ACCEPTING");
     Result *result;
     gint fd;
     gboolean stop = FALSE;
@@ -1711,6 +1807,7 @@ static void
 uca_phantom_camera_start_readout (UcaCamera *camera,
                                   GError **error)
 {
+    //g_warning("START READOUT");
     UcaPhantomCameraPrivate *priv;
     Result *result;
 
@@ -1788,7 +1885,7 @@ static void
 uca_phantom_camera_stop_readout (UcaCamera *camera,
                                  GError **error)
 {
-    g_warning("STOP READOUT");
+    //g_warning("STOP READOUT");
 
     UcaPhantomCameraPrivate *priv;
     InternalMessage *message;
@@ -1816,7 +1913,7 @@ uca_phantom_camera_stop_readout (UcaCamera *camera,
     //g_free(priv->xg_data_buffer.in);
     //g_free(priv->xg_buffer);
     
-    g_warning("STOP READOUT");
+    //g_warning("STOP READOUT");
 
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 }
@@ -1826,8 +1923,6 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
                                     GError **error)
 {
     uca_phantom_camera_start_readout(camera, error);
-
-    //g_warning("START RECORDING");
 
     const gchar *rec_request = "rec 1\r\n";
     const gchar *trig_request = "trig\r\n";
@@ -2632,7 +2727,6 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
 static void
 uca_phantom_camera_init (UcaPhantomCamera *self)
 {
-    g_warning("HELLO");
     UcaPhantomCameraPrivate *priv;
 
     self->priv = priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (self);
@@ -2659,7 +2753,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     uca_camera_register_unit (UCA_CAMERA (self), "frame-delay", UCA_UNIT_SECOND);
     uca_camera_register_unit (UCA_CAMERA (self), "sensor-temperature", UCA_UNIT_DEGREE_CELSIUS);
     uca_camera_register_unit (UCA_CAMERA (self), "camera-temperature", UCA_UNIT_DEGREE_CELSIUS);
-    g_warning("finished init");
+    g_warning("finished init!!");
 }
 
 G_MODULE_EXPORT GType

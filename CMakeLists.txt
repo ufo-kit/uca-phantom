@@ -18,7 +18,9 @@ include(FindPackageHandleStandardArgs)
 include(PkgConfigVars)
 include(GNUInstallDirs)
 
-add_definitions("-std=c99 -Wall -fPIC")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -msse4 -maes")
+
+add_definitions("-std=c99 -O3 -Wall -Wextra -fPIC")
 add_definitions(-DG_LOG_DOMAIN="Uca-Phantom")
 
 pkg_check_modules(GIO gio-2.0>=2.22 REQUIRED)
