@@ -41,6 +41,7 @@ except KeyboardInterrupt:
 
 # Now data is in 'a' and we can use Numpy functions on it
 print(np.mean(a))
+print(np.max(a))
 print(a)
 a[a > 255] = 255
 plt.imshow(a, cmap='gray')

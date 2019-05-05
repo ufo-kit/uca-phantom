@@ -45,4 +45,7 @@ decoding happened after the complete image data was been received and
 before the data was copied into the final output buffer. Now the 
 decoding runs step by step in a separate thread, in an attempt to 
 squeeze out some additional performance.
+- Created a new decoding algorithm, which uses SSE4 intrinsics to speed 
+up the unpacking process of the 10 bit pixel data stream into the 
+16 bit output buffer.
 

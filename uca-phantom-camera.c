@@ -16,6 +16,7 @@
    Franklin St, Fifth Floor, Boston, MA 02110, USA */
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <inttypes.h>
 #include <time.h>
@@ -50,12 +51,12 @@
 // ***************************************
 
 //#define IP_ADDRESS "100.100.189.164"
-//#define IP_ADDRESS      "127.0.0.1"
-#define IP_ADDRESS      "172.16.31.157"
-#define INTERFACE       "enp3s0f0"
-//#define INTERFACE       "enp1s0"
-//#define PROTOCOL        ETH_P_ALL
-#define PROTOCOL        0x88b7
+#define IP_ADDRESS      "127.0.0.1"
+//#define IP_ADDRESS      "172.16.31.157"
+//#define INTERFACE       "enp3s0f0"
+#define INTERFACE       "enp1s0"
+#define PROTOCOL        ETH_P_ALL
+//#define PROTOCOL        0x88b7
 #define X_NETWORK       TRUE
 
 #define UCA_PHANTOM_CAMERA_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE((obj), UCA_TYPE_PHANTOM_CAMERA, UcaPhantomCameraPrivate))
@@ -929,6 +930,10 @@ void unpack_packet(UcaPhantomCameraPrivate *priv) {
 }
 
 void mem_copy_packet(UcaPhantomCameraPrivate *priv) {
+
+    memcpy(priv->xg_data_in, priv->xg_packet_data, priv->xg_packet_length);
+    priv->xg_data_in += priv->xg_packet_length;
+    /*
     if (priv->xg_remaining_length > 0) {
         priv->xg_packet_data -= priv->xg_remaining_length;
         memcpy(priv->xg_packet_data, priv->xg_remaining_data, priv->xg_remaining_length);
@@ -946,6 +951,7 @@ void mem_copy_packet(UcaPhantomCameraPrivate *priv) {
 
     memcpy(priv->xg_remaining_data, priv->xg_packet_data, overlap);
     priv->xg_remaining_length = overlap;
+    */
 }
 
 /**
@@ -1140,6 +1146,7 @@ read_ximg_data (
         // Actually extracting the data of the packages in that block into the destination buffer.
 
         bytes = process_block(priv, dst);
+        //g_warning("Block index %i", priv->xg_block_index);
         flush_block(priv);
         header_address = priv->xg_packet_header;
         // We need to increment the buffer pointer address
@@ -1295,159 +1302,136 @@ static void teardown_raw_socket(struct ring *ring, int fd) {
     close(fd);
 }
 
+unsigned int create_mask(int length) {
+    return (1 << (length)) - 1;
+}
+
+void clean_up(unsigned long A, unsigned long B, unsigned long C, unsigned long D, unsigned int carry_length, int *carry, __m128i *v1, __m128i *v2) {
+    const unsigned int data_length = 60;
+    const unsigned int overlap_length = 16;
+    const unsigned int free_length = 4;
+
+    unsigned long a, b, c, d;
+
+    unsigned int temp_length1, temp_length2;
+
+    unsigned int combined_length = overlap_length + carry_length;
+    int new_carry = create_mask(combined_length) & D;
+
+
+    temp_length1 = combined_length - free_length;
+    d = (D >> combined_length) | (C & create_mask(temp_length1) << (data_length - combined_length));
+
+    temp_length2 = temp_length1 - free_length;
+    c = (C >> temp_length1) | (B & create_mask(temp_length2) << (data_length - temp_length1));
+
+    temp_length1 = temp_length2 - free_length;
+    b = (B >> temp_length2) | (A & create_mask(temp_length1) << (data_length - temp_length2));
+
+    a = (A >> temp_length1) | (*carry << (data_length - temp_length1));
+
+    *carry = new_carry;
+    *v1 = _mm_set_epi64x(b, a);
+    *v2 = _mm_set_epi64x(d, c);
+}
+
+/*
+unsigned int process_carry(unsigned int carry_length, unsigned long *carry, __m128i *v) {
+    // Creating a bit mask with the length of the carry and the additional 8 bit to be carried over with this vector.
+    // Then using this length to get the new carry for the next iteration.
+    unsigned int mask_length = carry_length + 8;
+    int new_carry = create_mask(mask_length) & ((unsigned long *)v)[0];
+
+    // Shifting all those bits, that were just saved as a carry out of existance
+    *v >>= mask_length;
+    // Adding the given carry to the front of the vector
+    __m128i temp = _mm_set_epi64x(*carry << (64 - mask_length), 0);
+    *v = _mm_or_si128(temp, *v);
+
+    return mask_length;
+}
+*/
+
+unsigned int process_carry(unsigned int carry_length, unsigned long *carry, unsigned long *value) {
+
+    unsigned int mask_length = carry_length + 4;
+    int new_carry = create_mask(mask_length) & *value;
+    *value = (*value >> carry_length) | (*carry << (64 - carry_length));
+    *value >>= 4;
+    *carry = new_carry;
+    return mask_length;
+}
+
 void unpack_image(UcaPhantomCameraPrivate *priv) {
-    uint16_t output[100000];
-    unsigned long data = 100000000;
-    unsigned long* data_pointer = &data;
-    int converted_size = (int)(((priv->roi_height * priv->roi_height) * ((float)24/20)) * ((float)1/8));
-    // DOING IT WITH SSE
-__m128i sse_temp_vector1;
-__m128i sse_temp_vector2;
-__m128i sse_load_mask_full = _mm_setr_epi32(-1, -1, -1, -1);
-__m128i sse_load_mask_partial= _mm_setr_epi32(-1, -1, 1, 1);
-__m128i sse_bit_mask = _mm_set_epi64x(0b1111111111, 0b1111111111);
 
-unsigned long* sse_fetch1;
-unsigned long* sse_fetch2;
+    int new_length = 0;
+    int usable_length = 0;
+    int limit = 0;
 
-    int new_length;
-    int usable_length;
-    int limit;
-    int i, j;
-    struct timespec tstart={0,0}, tend={0,0};
+    int i,j;
+
     priv->xg_buffer_index = 0;
     priv->xg_unpack_index = 0;
 
-    gsize pixel_count = priv->roi_width * priv->roi_height;
-    clock_gettime(CLOCK_MONOTONIC, &tstart);
-    while (priv->xg_buffer_index < pixel_count) {
-        new_length = floor(priv->xg_total * ((float) 24 / 20) * ((float) 1 / 8)) - priv->xg_unpack_index;
-        usable_length = new_length - (new_length % 3);
-        limit = priv->xg_unpack_index + usable_length;
-        g_warning("usable length %i", usable_length);
-        if (usable_length > 0) {
-            for (i=priv->xg_unpack_index, j=priv->xg_buffer_index; i < limit; i+=3, j+=16) {
-                
-                sse_temp_vector1 = _mm_loadl_epi64((long long*) data_pointer);
-    sse_temp_vector2 = _mm_loadl_epi64((long long*) data_pointer);
+    __m128i vector, t0, t1, t2, t3, t4, t5, t6, t7, vector_out, k0, k1, k2, k3, k4, k5, k6;
+    __m128i temp;
 
-    sse_fetch1 = (unsigned long*) &sse_temp_vector1;
-    sse_fetch2 = (unsigned long*) &sse_temp_vector2;
-    // Masking the first 10 bytes
-    _mm_blendv_epi8(sse_temp_vector1, sse_temp_vector1, sse_bit_mask);
-    _mm_blendv_epi8(sse_temp_vector2, sse_temp_vector2, sse_bit_mask);
+    __m128i sm0 = _mm_setr_epi8(1, 0, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 6, 5, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80);
+    __m128i sm1 = _mm_setr_epi8(0x80, 0x80, 2, 1, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 7, 6, 0x80, 0x80, 0x80, 0x80);
+    __m128i sm2 = _mm_setr_epi8(0x80, 0x80, 0x80, 0x80, 3, 2, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 8, 7, 0x80, 0x80);
+    __m128i sm3 = _mm_setr_epi8(0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 4, 3, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 9, 8);
 
-    output[j + 0] = sse_fetch1[0];
-    output[j + 1] = sse_fetch1[1];
-    output[j + 3] = sse_fetch2[0];
+    uint8_t mb0[16] = {0b11000000, 0b11111111, 0, 0, 0, 0, 0, 0, 0b11000000, 0b11111111, 0, 0, 0, 0, 0, 0};
+    uint8_t mb1[16] = {0, 0, 0b11110000, 0b00111111, 0, 0, 0, 0, 0, 0, 0b11110000, 0b00111111, 0, 0, 0, 0};
+    uint8_t mb2[16] = {0, 0, 0, 0, 0b11111100, 0b00001111, 0, 0, 0, 0, 0, 0, 0b11111100, 0b00001111, 0, 0};
+    uint8_t mb3[16] = {0, 0, 0, 0, 0, 0, 0b11111111, 0b00000011, 0, 0, 0, 0, 0, 0, 0b11111111, 0b00000011};
+    uint8_t maskb[16] = {0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0, 0, 0, 0, 0, 0};
 
-    sse_temp_vector1 >>= 10;
-    sse_temp_vector2 >>= 10;
-    //mm_bitshift_left(sse_temp_vector1, 10);
-    //mm_bitshift_left(sse_temp_vector2, 10);
-    _mm_blendv_epi8(sse_temp_vector1, sse_temp_vector1, sse_bit_mask);
-    _mm_blendv_epi8(sse_temp_vector2, sse_temp_vector2, sse_bit_mask);
+    __m128i mask2 = _mm_loadu_si128((__m128i*)&maskb);
+    __m128i m0 = _mm_loadu_si128((__m128i*)&mb0);
+    __m128i m1 = _mm_loadu_si128((__m128i*)&mb1);
+    __m128i m2 = _mm_loadu_si128((__m128i*)&mb2);
+    __m128i m3 = _mm_loadu_si128((__m128i*)&mb3);
 
-    output[j + 4] = sse_fetch1[0];
-    output[j + 5] = sse_fetch1[1];
-    output[j + 6] = sse_fetch2[0];
+    uint16_t *buffer_pointer = priv->xg_buffer;
 
-    sse_temp_vector1 >>= 10;
-    sse_temp_vector2 >>= 10;
-    //mm_bitshift_left(sse_temp_vector1, 10);
-    //mm_bitshift_left(sse_temp_vector2, 10);
-    _mm_blendv_epi8(sse_temp_vector1, sse_temp_vector1, sse_bit_mask);
-    _mm_blendv_epi8(sse_temp_vector2, sse_temp_vector2, sse_bit_mask);
-
-    output[j + 7] = sse_fetch1[0];
-    output[j + 8] = sse_fetch1[1];
-    output[j + 9] = sse_fetch2[0];
-
-    sse_temp_vector1 >>= 10;
-    sse_temp_vector2 >>= 10;
-    //mm_bitshift_left(sse_temp_vector1, 10);
-    //mm_bitshift_left(sse_temp_vector2, 10);
-    _mm_blendv_epi8(sse_temp_vector1, sse_temp_vector1, sse_bit_mask);
-    _mm_blendv_epi8(sse_temp_vector2, sse_temp_vector2, sse_bit_mask);
-
-    output[j + 10] = sse_fetch1[0];
-    output[j + 11] = sse_fetch1[1];
-    output[j + 12] = sse_fetch2[0];
-
-    sse_temp_vector1 >>= 10;
-    sse_temp_vector2 >>= 10;
-    //mm_bitshift_left(sse_temp_vector1, 10);
-    //mm_bitshift_left(sse_temp_vector2, 10);
-    _mm_blendv_epi8(sse_temp_vector1, sse_temp_vector1, sse_bit_mask);
-    _mm_blendv_epi8(sse_temp_vector2, sse_temp_vector2, sse_bit_mask);
-
-    output[j + 13] = sse_fetch1[0];
-    output[j + 14] = sse_fetch1[1];
-    output[j + 15] = sse_fetch2[0];
-                
-                priv->xg_unpack_index += 3;
-                priv->xg_buffer_index += 16;
-            }
-            //g_warning("INDEX  unpack %i buffer %i < pixel count: %i, total: %i", priv->xg_unpack_index, priv->xg_buffer_index, pixel_count, priv->xg_total);
-            //g_warning("In Pointer: %u", priv->xg_data_buffer);
-        } else {
-            continue;
-        }
-    }
-    // THE OLD ALGORITHM
-    /*
-    int new_length;
-    int usable_length;
-    int mask = 0b1111111111;
-    int limit;
-    guint64 temp;
-    int i, j;
-    struct timespec tstart={0,0}, tend={0,0};
-    priv->xg_buffer_index = 0;
-    priv->xg_unpack_index = 0;
+    uint8_t *data_pointer = priv->xg_data_buffer.in;
+    uint16_t *output_pointer = priv->xg_buffer;
 
     gsize pixel_count = priv->roi_width * priv->roi_height;
-    clock_gettime(CLOCK_MONOTONIC, &tstart);
-    while (priv->xg_buffer_index < pixel_count) {
-        new_length = floor(priv->xg_total * ((float) 24 / 20) * ((float) 1 / 8)) - priv->xg_unpack_index;
-        usable_length = new_length - (new_length % 3);
-        limit = priv->xg_unpack_index + usable_length;
-        if (usable_length > 0) {
-            for (i=priv->xg_unpack_index, j=priv->xg_buffer_index; i < limit; i+=3, j+=16) {
-                
-                //g_warning("i %i j %i", i, j);
-                
-                priv->xg_buffer[j + 0] = (uint16_t) (mask & priv->xg_data_buffer.out[i]);
-                priv->xg_buffer[j + 1] = (uint16_t) (mask & (priv->xg_data_buffer.out[i] >> 10));
-                priv->xg_buffer[j + 2] = (uint16_t) (mask & (priv->xg_data_buffer.out[i] >> 20));
-                priv->xg_buffer[j + 3] = (uint16_t) (mask & (priv->xg_data_buffer.out[i] >> 30));
-                priv->xg_buffer[j + 4] = (uint16_t) (mask & (priv->xg_data_buffer.out[i] >> 40));
-                priv->xg_buffer[j + 5] = (uint16_t) (mask & (priv->xg_data_buffer.out[i] >> 50));
-                priv->xg_buffer[j + 6] = (uint16_t) (mask & ((priv->xg_data_buffer.out[i] >> 60) | (priv->xg_data_buffer.out[i + 1] << 6)));
-                priv->xg_buffer[j + 7] = (uint16_t) (mask & (priv->xg_data_buffer.out[i + 1] >> 6));
-                priv->xg_buffer[j + 8] = (uint16_t) (mask & (priv->xg_data_buffer.out[i + 1] >> 16));
-                priv->xg_buffer[j + 9] = (uint16_t) (mask & (priv->xg_data_buffer.out[i + 1] >> 26));
-                priv->xg_buffer[j + 10] = (uint16_t) (mask & (priv->xg_data_buffer.out[i + 1] >> 36));
-                priv->xg_buffer[j + 11] = (uint16_t) (mask & (priv->xg_data_buffer.out[i + 1] >> 46));
-                priv->xg_buffer[j + 12] = (uint16_t) (mask & ((priv->xg_data_buffer.out[i + 1] >> 56) | (priv->xg_data_buffer.out[i + 2] << 2)));
-                priv->xg_buffer[j + 13] = (uint16_t) (mask & (priv->xg_data_buffer.out[i + 2] >> 2));
-                priv->xg_buffer[j + 14] = (uint16_t) (mask & (priv->xg_data_buffer.out[i + 2] >> 12));
-                priv->xg_buffer[j + 15] = (uint16_t) (mask & (priv->xg_data_buffer.out[i + 2] >> 22));
-                
-                priv->xg_unpack_index += 3;
-                priv->xg_buffer_index += 16;
-            }
-            //g_warning("INDEX  unpack %i buffer %i < pixel count: %i, total: %i", priv->xg_unpack_index, priv->xg_buffer_index, pixel_count, priv->xg_total);
-            //g_warning("In Pointer: %u", priv->xg_data_buffer);
-        } else {
-            continue;
-        }
-    }
-    clock_gettime(CLOCK_MONOTONIC, &tend);
-    //g_warning("TIMEs DELTA %.5f", ((double)tend.tv_sec + 1.0e-9*tend.tv_nsec) - ((double)tstart.tv_sec + 1.0e-9*tstart.tv_nsec));
 
-    //free(priv->xg_data_buffer.in);
-    */
+    int counter = 0;
+
+    while (priv->xg_buffer_index < pixel_count) {
+        //counter += 1;
+        g_debug("");
+        new_length = priv->xg_total - priv->xg_unpack_index;
+        usable_length = new_length - (new_length % 10);
+        limit = priv->xg_unpack_index + usable_length;
+
+        for (i = priv->xg_unpack_index, j = priv->xg_buffer_index; i<limit ; i+=10, j+=8) {
+
+            vector = _mm_loadu_si128((__m128i*)data_pointer);
+
+            vector = _mm_and_si128(vector, mask2);
+            t0 = _mm_and_si128(_mm_shuffle_epi8(vector, sm0), m0) >> 6;
+            t1 = _mm_and_si128(_mm_shuffle_epi8(vector, sm1), m1) >> 4;
+            t2 = _mm_and_si128(_mm_shuffle_epi8(vector, sm2), m2) >> 2;
+            t3 = _mm_and_si128(_mm_shuffle_epi8(vector, sm3), m3);
+
+            vector_out = _mm_or_si128(_mm_or_si128(t0, t1), _mm_or_si128(t2, t3));
+
+            _mm_storeu_si128((__m128i*)output_pointer, vector_out);
+
+            data_pointer += 10;
+            output_pointer += 8;
+
+            priv->xg_buffer_index += 8;
+            priv->xg_unpack_index += 10;
+        }
+
+    }
+    g_warning("TOTAL %i Unpack index %i buffer index %i", priv->xg_total, priv->xg_unpack_index, priv->xg_buffer_index);
 }
 
 static gpointer
@@ -2145,7 +2129,8 @@ uca_phantom_camera_grab (UcaCamera *camera,
                 break;
             case IMAGE_FORMAT_P10:
                 if (priv->enable_10ge) {
-                    // g_warning("MEMCOPY BUFFER");
+                    g_warning("MEMCOPY BUFFER");
+                    //unpack_p10(data, priv->xg_data_buffer.in, priv->roi_width * priv->roi_height);
                     memcpy (data, priv->xg_buffer, priv->roi_width * priv->roi_height * 2);
                 } else {
                     unpack_p10(data, priv->buffer, priv->roi_width * priv->roi_height);
