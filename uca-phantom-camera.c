@@ -1402,9 +1402,10 @@ void unpack_image(UcaPhantomCameraPrivate *priv) {
 
     int counter = 0;
 
+    g_debug("");
     while (priv->xg_buffer_index < pixel_count) {
         //counter += 1;
-        g_debug("");
+
         new_length = priv->xg_total - priv->xg_unpack_index;
         usable_length = new_length - (new_length % 10);
         limit = priv->xg_unpack_index + usable_length;
@@ -1431,7 +1432,7 @@ void unpack_image(UcaPhantomCameraPrivate *priv) {
         }
 
     }
-    g_warning("TOTAL %i Unpack index %i buffer index %i", priv->xg_total, priv->xg_unpack_index, priv->xg_buffer_index);
+    g_debug("");
 }
 
 static gpointer
