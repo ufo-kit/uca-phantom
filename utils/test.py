@@ -36,6 +36,10 @@ a, buf = create_array_from(camera)
 try:
     camera.start_recording()
     camera.grab(buf)
+    camera.grab(buf)
+    print("making the third grab")
+    camera.grab(buf)
+    #camera.grab(buf)
 except KeyboardInterrupt:
     exit()
 

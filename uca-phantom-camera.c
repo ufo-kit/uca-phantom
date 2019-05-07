@@ -51,12 +51,12 @@
 // ***************************************
 
 //#define IP_ADDRESS "100.100.189.164"
-#define IP_ADDRESS      "127.0.0.1"
-//#define IP_ADDRESS      "172.16.31.157"
-//#define INTERFACE       "enp3s0f0"
-#define INTERFACE       "enp1s0"
-#define PROTOCOL        ETH_P_ALL
-//#define PROTOCOL        0x88b7
+//#define IP_ADDRESS      "127.0.0.1"
+#define IP_ADDRESS      "172.16.31.157"
+#define INTERFACE       "enp3s0f0"
+//#define INTERFACE       "enp1s0"
+//#define PROTOCOL        ETH_P_ALL
+#define PROTOCOL        0x88b7
 #define X_NETWORK       TRUE
 
 #define UCA_PHANTOM_CAMERA_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE((obj), UCA_TYPE_PHANTOM_CAMERA, UcaPhantomCameraPrivate))
@@ -146,6 +146,16 @@ enum {
     PROP_IMAGE_FORMAT,
     PROP_ENABLE_10GE,
     PROP_NETWORK_INTERFACE,
+    
+    // 07.05.2019
+    // Introducing an additional mode of operation for the camera: "memread" mode.
+    // In this mode the camera is not actively recording. Instead the memory of the camera is being
+    // read. The amount of frames to be read can be specified and each consecutive call to the 
+    // "grab" function of the camera after entering this call will be used to read one of these images.
+    PROP_ENABLE_MEMREAD,
+    PROP_MEMREAD_CINE,
+    PROP_MEMREAD_START,
+    PROP_MEMREAD_COUNT,
     N_PROPERTIES
 };
 
@@ -1012,6 +1022,7 @@ int process_block(
         data = (guint8 *) priv->xg_packet_header;
         //g_warning("length: %i", length);
         if (data[94] == 136 && data[95] == 183) {
+                
             //g_warning("length %i", length);
             data += 114;
 
@@ -1027,13 +1038,22 @@ int process_block(
             // existing data will be overwritten, but instead be appended
             bytes += length;
 
-            // The amount of remaining bytes can be received
-            remaining = priv->xg_expected - priv->xg_total;
-
-            if (length > remaining + 1472) {
+            if (priv->xg_remaining_length > length) {
+                //g_warning("STILL MORE");
+            } else if (priv->xg_remaining_length == length) {
+                //g_warning("DONE");
+                priv->xg_remaining_length = 0;
                 priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_packet_header + priv->xg_packet_header->tp_next_offset);
                 break;
             }
+            else if(priv->xg_remaining_length < length) {
+                g_warning("FUCK");
+            }
+            
+            // The amount of remaining bytes can be received
+            priv->xg_remaining_length = priv->xg_expected - priv->xg_total;
+            //g_warning("ending it with expected %i total %i remaining %i length %i", priv->xg_expected, priv->xg_total, remaining, length);
+            
         }
 
         // We are incrementing the loop by moving on to the location of the next packet
@@ -1106,12 +1126,13 @@ read_ximg_data (
     struct block_desc *block_description;
 
     //unsigned int block_index = 0;
-    unsigned int block_amount = 64;
+    unsigned int block_amount = 10000;
 
     // For profiling the code
     struct timespec tstart={0,0}, tend={0,0};
     struct timespec pstart={0,0}, pend={0,0};
-
+    
+    priv->xg_remaining_length = priv->xg_expected;
 
 
     //clock_gettime(CLOCK_MONOTONIC, &tstart);
@@ -1159,6 +1180,8 @@ read_ximg_data (
             // after all this is how a ring buffer works.
             priv->xg_block_index = (priv->xg_block_index + 1) % block_amount;
         } 
+        
+        //g_warning("%i/%i", priv->xg_total, priv->xg_expected);
     }
     //struct timespec tstart={0,0}, tend={0,0};
     //clock_gettime(CLOCK_MONOTONIC, &tend);
@@ -1195,9 +1218,9 @@ static int setup_raw_socket(struct ring *ring, char *netdev) {
     // packets send over the network). Here we define How many bytes are assigned to one block and how many bytes one
     // frame can consume. Also we define the amount of blocks the ring buffer is supposed to have.
     // These values will later be used to define (the size of) the ring buffer struct.
-    unsigned int block_size = 1 << 14; // 22
+    unsigned int block_size = 1 << 16; // 22
     unsigned int frame_size = 1 << 8;  // 11
-    unsigned int block_amount = 64;
+    unsigned int block_amount = 10000;
     // The amount of frames is directly derived from the previous config.
     unsigned int frame_amount = (block_size * block_amount) / frame_size;
 
@@ -1404,8 +1427,6 @@ void unpack_image(UcaPhantomCameraPrivate *priv) {
 
     g_debug("");
     while (priv->xg_buffer_index < pixel_count) {
-        //counter += 1;
-
         new_length = priv->xg_total - priv->xg_unpack_index;
         usable_length = new_length - (new_length % 10);
         limit = priv->xg_unpack_index + usable_length;
@@ -1558,11 +1579,11 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
                 // Once the image was completely received we push a new message, indicating that image reception was a
                 // success, into the queue, so that the main thread which is watching the queue can retrieve the image
                 // from the buffer.
-                // result->type = RESULT_IMAGE;
-                // result->success = TRUE;
+                //result->type = RESULT_IMAGE;
+                //result->success = TRUE;
 
                 // g_warning("ERROR: %s", result->error);
-                // g_async_queue_push (priv->result_queue, result);
+                //g_async_queue_push (priv->result_queue, result);
                 //g_warning("PUSHED RESULT ");
                 break;
 
@@ -2032,7 +2053,7 @@ uca_phantom_camera_grab (UcaCamera *camera,
     // The first "%s" is for the specific command identifier: "img" for normal network and "ximg" for 10G transmission
     // the second is for the format identifier to specify the transfer format (how many bytes per pixel used)
     // The last one is for optional additional parameters (only needed for the ximg commad)
-    const gchar *request_fmt = "%s {cine:1, start:0, cnt:4, fmt:%s %s}\r\n";
+    const gchar *request_fmt = "%s {cine:-1, start:0, cnt:1, fmt:%s %s}\r\n";
     gboolean return_value = TRUE;
 
     //g_warning("HERE TO GRAB");
@@ -2130,9 +2151,9 @@ uca_phantom_camera_grab (UcaCamera *camera,
                 break;
             case IMAGE_FORMAT_P10:
                 if (priv->enable_10ge) {
-                    g_warning("MEMCOPY BUFFER");
+                    //g_warning("MEMCOPY BUFFER");
                     //unpack_p10(data, priv->xg_data_buffer.in, priv->roi_width * priv->roi_height);
-                    memcpy (data, priv->xg_buffer, priv->roi_width * priv->roi_height * 2);
+                    //memcpy (data, priv->xg_buffer, priv->roi_width * priv->roi_height * 2);
                 } else {
                     unpack_p10(data, priv->buffer, priv->roi_width * priv->roi_height);
                 }
@@ -2543,6 +2564,8 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
     camera_class->grab = uca_phantom_camera_grab;
     camera_class->trigger = uca_phantom_camera_trigger;
 
+    // Here we set the additional function for reading out multiple cines
+
     /*
      * XXX: we should try to construct the table from the UnitVariable table.
      */
@@ -2700,6 +2723,30 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             "Network interface name of the 10GE device",
             "Network interface name of the 10GE device",
             "", G_PARAM_READWRITE);
+            
+    phantom_properties[PROP_ENABLE_MEMREAD] = 
+        g_param_spec_boolean ("enable-memread", 
+            "Enable readout of cine memory",
+            "Enable readout of cine memory",
+            "", G_PARAM_READWRITE);
+    
+    phantom_properties[PROP_MEMREAD_CINE] = 
+    g_param_spec_uint ("memread-cine",
+            "The index of the cine, from which to read frames",
+            "The index of the cine, from which to read frames",
+            0, G_MAXUINT, 0, G_PARAM_READWRITE);
+            
+    phantom_properties[PROP_MEMREAD_COUNT] = 
+    g_param_spec_uint ("memread-count",
+            "The number of frames to be read from memory",
+            "The number of frames to be read from memory",
+            0, G_MAXUINT, 0, G_PARAM_READWRITE);
+            
+    phantom_properties[PROP_MEMREAD_START] = 
+    g_param_spec_uint ("memread-start",
+            "The number of the frame, after which to start the readout in the cine",
+            "The number of the frame, after which to start the readout in the cine",
+            0, G_MAXUINT, 0, G_PARAM_READWRITE);
 
     for (guint i = 0; i < base_overrideables[i]; i++)
         g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
@@ -2739,7 +2786,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     uca_camera_register_unit (UCA_CAMERA (self), "frame-delay", UCA_UNIT_SECOND);
     uca_camera_register_unit (UCA_CAMERA (self), "sensor-temperature", UCA_UNIT_DEGREE_CELSIUS);
     uca_camera_register_unit (UCA_CAMERA (self), "camera-temperature", UCA_UNIT_DEGREE_CELSIUS);
-    g_warning("finished init!!");
+    //g_warning("finished init!!");
 }
 
 G_MODULE_EXPORT GType
