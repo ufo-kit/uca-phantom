@@ -12,8 +12,10 @@ from gi.repository import Uca
 
 pm = Uca.PluginManager()
 
+print("\nTHE AVAILABLE CAMERAS")
 print(pm.get_available_cameras())
 
+print("\nGETTING THE PHANTOM CAMERA NOW")
 camera = pm.get_camerav('phantom', [])
 
 import numpy as np
@@ -33,13 +35,13 @@ def create_array_from(camera):
 # this:
 a, buf = create_array_from(camera)
 
+print("/nTESTING MEMREAD MODE")
+camera.props.memread_count = 3
+camera.props.enable_memread = True
+
 try:
     camera.start_recording()
     camera.grab(buf)
-    camera.grab(buf)
-    print("making the third grab")
-    camera.grab(buf)
-    #camera.grab(buf)
 except KeyboardInterrupt:
     exit()
 
@@ -47,7 +49,6 @@ except KeyboardInterrupt:
 print(np.mean(a))
 print(np.max(a))
 print(a)
-a[a > 255] = 255
 plt.imshow(a, cmap='gray')
 plt.show()
 
