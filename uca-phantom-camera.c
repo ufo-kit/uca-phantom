@@ -146,7 +146,11 @@ enum {
     PROP_IMAGE_FORMAT,
     PROP_ENABLE_10GE,
     PROP_NETWORK_INTERFACE,
-    
+    // 26.05.2019
+    // Adding this additional property for the IP address string. This can be used to manually assign the IP address
+    // in case the discovery protocol does not work
+    PROP_NETWORK_ADDRESS,
+
     // 07.05.2019
     // Introducing an additional mode of operation for the camera: "memread" mode.
     // In this mode the camera is not actively recording. Instead the memory of the camera is being
@@ -253,6 +257,7 @@ struct _UcaPhantomCameraPrivate {
     gboolean             have_ximg;
     gboolean             enable_10ge;
     gchar               *iface;
+    gchar               *ip_address;
     guint8               mac_address[6];
     ImageFormat          format;
     AcquisitionMode      acquisition_mode;
@@ -263,6 +268,7 @@ struct _UcaPhantomCameraPrivate {
     gboolean             xg_block_finished;
     gint                 xg_block_index;
     gint                 xg_packet_index;
+    gint                 xg_data_index;
     struct tpacket3_hdr *xg_packet_header;
     
     xbuffer              xg_data_buffer;
@@ -876,6 +882,55 @@ accept_img_data (UcaPhantomCameraPrivate *priv)
 // 10G NETWORK IMAGE TRANSMISSION
 // ******************************
 
+
+
+/**
+ *
+ * @deprecated
+ * @param priv
+ */
+void unpack_packet(UcaPhantomCameraPrivate *priv) {
+    if (priv->xg_remaining_length > 0) {
+        priv->xg_packet_data -= priv->xg_remaining_length - 0;
+        memcpy(priv->xg_packet_data, priv->xg_remaining_data, priv->xg_remaining_length);
+    }
+
+    int mask = 0b1111111111;
+    int i;
+    int length = (priv->xg_packet_length + priv->xg_remaining_length);
+    int overlap = length % 5;
+    guint64 temp;
+    for (i = 0; i < length - overlap; i += 5) {
+        temp = 0;
+        temp = 0;
+        for (int k = 0; k < 5; k++) {
+            temp |= priv->xg_packet_data[i + k];
+            temp <<= 8;
+        }
+        temp >>= 8;
+
+        priv->xg_buffer[priv->xg_buffer_index + 3] = (guint16) temp & mask;
+        priv->xg_buffer[priv->xg_buffer_index + 2] = (guint16) (temp >> 10) & mask;
+        priv->xg_buffer[priv->xg_buffer_index + 1] = (guint16) (temp >> 20) & mask;
+        priv->xg_buffer[priv->xg_buffer_index + 0] = (guint16) (temp >> 30) & mask;
+        priv->xg_buffer_index += 4;
+    }
+    // Setting up the overlap for the next iteration
+    priv->xg_packet_data += length - overlap;
+    memcpy(priv->xg_remaining_data, priv->xg_packet_data, overlap);
+    priv->xg_remaining_length = overlap;
+}
+
+/**
+ * @deprecated
+ * @param priv
+ */
+void mem_copy_packet(UcaPhantomCameraPrivate *priv) {
+
+    memcpy(priv->xg_data_in, priv->xg_packet_data, priv->xg_packet_length);
+    priv->xg_data_in += priv->xg_packet_length;
+}
+
 /**
  * @brief Returns the size of the transmitted image in bytes, using the P10 transfer format
  *
@@ -914,74 +969,75 @@ static void flush_block(UcaPhantomCameraPrivate *priv) {
     // to be flushed, meaning that it has to be "given back" to the kernel, so new data can be written to it.
     // unless it's status isn't changed, the kernel cannot write new packages into this block of the ring buffer.
     if (priv->xg_block_finished) {
-       priv->xg_current_block->h1.block_status = TP_STATUS_KERNEL;
+        priv->xg_current_block->h1.block_status = TP_STATUS_KERNEL;
     }
 }
 
-void unpack_packet(UcaPhantomCameraPrivate *priv) {
-    if (priv->xg_remaining_length > 0) {
-        priv->xg_packet_data -= priv->xg_remaining_length - 0;
-        memcpy(priv->xg_packet_data, priv->xg_remaining_data, priv->xg_remaining_length);
-    }
-
-    int mask = 0b1111111111;
-    int i;
-    int length = (priv->xg_packet_length + priv->xg_remaining_length);
-    int overlap = length % 5;
-    guint64 temp;
-    for (i = 0; i < length - overlap; i += 5) {
-        temp = 0;
-        temp = 0;
-        for (int k = 0; k < 5; k++) {
-            temp |= priv->xg_packet_data[i + k];
-            temp <<= 8;
-        }
-        temp >>= 8;
-
-        priv->xg_buffer[priv->xg_buffer_index + 3] = (guint16) temp & mask;
-        priv->xg_buffer[priv->xg_buffer_index + 2] = (guint16) (temp >> 10) & mask;
-        priv->xg_buffer[priv->xg_buffer_index + 1] = (guint16) (temp >> 20) & mask;
-        priv->xg_buffer[priv->xg_buffer_index + 0] = (guint16) (temp >> 30) & mask;
-        priv->xg_buffer_index += 4;
-    }
-    // Setting up the overlap for the next iteration
-    priv->xg_packet_data += length - overlap;
-    memcpy(priv->xg_remaining_data, priv->xg_packet_data, overlap);
-    priv->xg_remaining_length = overlap;
+/**
+ * @brief Increments the pointer and the index of the currently processed package from the ring buffer.
+ *
+ * @author Jonas Teufel
+ *
+ * @param priv
+ */
+void increment_packet(UcaPhantomCameraPrivate *priv) {
+    priv->xg_packet_index += 1;
+    priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_packet_header + priv->xg_packet_header->tp_next_offset);
 }
 
-void mem_copy_packet(UcaPhantomCameraPrivate *priv) {
+/**
+ * @brief Copies the packet data into the image buffer and prepares the pointers for the next iteration
+ *
+ * This function processes the data from one packet from the ring buffer
+ *
+ * @author Jonas Teufel
+ *
+ * @param priv
+ */
+void process_packet(UcaPhantomCameraPrivate *priv) {
 
-    memcpy(priv->xg_data_in, priv->xg_packet_data, priv->xg_packet_length);
-    priv->xg_data_in += priv->xg_packet_length;
-    /*
-    if (priv->xg_remaining_length > 0) {
-        priv->xg_packet_data -= priv->xg_remaining_length;
-        memcpy(priv->xg_packet_data, priv->xg_remaining_data, priv->xg_remaining_length);
+    // If the remaining length of the data is bigger, than the length of the packet, we can just use all the packet
+    // data to append it to the buffer
+    if (priv->xg_remaining_length >= priv->xg_packet_length) {
+
+        // Here we copy the packet data into the image buffer and increment the pointer to the top of the image buffer
+        // for the next iteration
+        memcpy(priv->xg_data_in, priv->xg_packet_data, priv->xg_packet_length);
+        priv->xg_data_in += priv->xg_packet_length;
+
+        // Now we need to update the count of the total bytes received and the remaining bytes
+        priv->xg_total += priv->xg_packet_length;
+        priv->xg_remaining_length -= priv->xg_packet_length;
+
+        // We also need to update the pointer to the packet, so that it points to the next packet
+        increment_packet(priv);
     }
+    // This is the tricky case. This means the image would be completely finished with just a fraction of the data from
+    // the current package. This also means, that some portion of the data from this package belongs to the next image
+    // already... So we have to make sure to set the pointers up correctly, so the next image grab call will pick up
+    // excatly where we left...
+    else if (priv->xg_remaining_length < priv->xg_packet_length) {
 
-    int length = (priv->xg_packet_length + priv->xg_remaining_length);
-    int overlap = length % 20;
-    int a = 0, b = 0;
-    for (int i = 0; i < length - overlap; i+=20) {
-        memcpy(priv->xg_data_in, priv->xg_packet_data, 20);
-        memcpy(priv->xg_data_in, zero_pointer, 4);
-        priv->xg_data_in += 24; a += 24;
-        priv->xg_packet_data += 20; b += 20;
+        // Here we will take as many bytes from the buffer, as there are remaining to get the full image...
+        memcpy(priv->xg_data_in, priv->xg_packet_data, priv->xg_remaining_length);
+
+        // Now we update the stats for the image, signaling that all the bytes for this image have been received now
+        // and that there are none remaining
+        priv->xg_total += priv->xg_remaining_length;
+        priv->xg_remaining_length = 0;
+
+        // Now we can update the pointers for the next iteration / the next image. We can make sure that the next
+        // iteration picks up here by just moving the data pointer accordingly by as many bytes as we have just used
+        // and adjusting the data length accordingly. This way we dont need another special case.
+        priv->xg_packet_data += priv->xg_remaining_length;
+        priv->xg_packet_length -= priv->xg_remaining_length;
+
+        // Also we will NOT increment the packet index, as we want the next iteration to pick up with this packet...
     }
-
-    memcpy(priv->xg_remaining_data, priv->xg_packet_data, overlap);
-    priv->xg_remaining_length = overlap;
-    */
 }
 
 /**
  * @brief Extracts the data from one block in the ring buffer and adds it to the destination buffer.
- *
- * Given the @p destination buffer, where to store the image data in and the @p block_description of the currently
- * processed block of the ring buffer, this function will read out the payload data of every package inside this block
- * and copy it to the buffer.
- * The function returns the total amount of bytes it was able to fetch from this one block.
  *
  * @author Jonas Teufel
  *
@@ -993,19 +1049,11 @@ void mem_copy_packet(UcaPhantomCameraPrivate *priv) {
  * @param header
  * @return
  */
-int process_block(
-        UcaPhantomCameraPrivate *priv,
-        guint8 *destination
-        )
-{
+void process_block(UcaPhantomCameraPrivate *priv) {
     // Each block can hold multiple actual packets (frames). But the actual amount how many packets are in one block
     // depends on the size of the packet, speed of transmission etc. In general, the amount is not previously known,
     // but once the block is done writing, is stored inside the "num_pckts" of its descriptor.
     int packet_amount = priv->xg_current_block->h1.num_pkts;
-
-    // This will store the total amount of payload(!) bytes received int the processed block and will also be returned
-    int bytes = 0;
-    int remaining;
 
     // This will be the pointer directed at the start of the actual packet data! The data contained in a packet is
     // byte wise, which means its a unsigned 8 bit format.
@@ -1013,8 +1061,6 @@ int process_block(
 
     // This will store the size of the packet's payload
     int length;
-
-    struct timespec tstart={0,0}, tend={0,0};
 
     // The finished boolean variable is an indicator of whether the currently processed block is finished or not.
     // We have to consider the following case: If the loop below break's because all the expected data has been
@@ -1024,8 +1070,14 @@ int process_block(
     priv->xg_block_finished = TRUE;
 
     int i;
-    //g_warning("IDX: %i", *packet_index);
+
     for (i = priv->xg_packet_index; i < packet_amount; i++) {
+
+        if (priv->xg_remaining_length <= 0) {
+            //g_warning("Breaking the loop, because all data has been received");
+            break;
+        }
+
         // Calculation of the actual payload(!) length. The packages sent by the phantom have a overhead of 32 bytes!
         length = priv->xg_packet_header->tp_snaplen - 32;
         // After exactly 94 bytes into the package the info about the used protocol can be extracted. And after 114
@@ -1033,58 +1085,30 @@ int process_block(
         data = (guint8 *) priv->xg_packet_header;
         //g_warning("length: %i", length);
         if (data[94] == 136 && data[95] == 183) {
-                
-            //g_warning("length %i", length);
             data += 114;
 
             // With this we copy all the data (using the complete length of the payload) onto the destination buffer (where
             // the final image data will be stored)
             priv->xg_packet_data = data;
             priv->xg_packet_length = length;
-            mem_copy_packet(priv);
 
-            priv->xg_total += length;
-
-            // After that we need to increment the pointer of the destination buffer, so that with the next memcpy no
-            // existing data will be overwritten, but instead be appended
-            bytes += length;
-
-            if (priv->xg_remaining_length > length) {
-                //g_warning("STILL MORE");
-            } else if (priv->xg_remaining_length == length) {
-                //g_warning("DONE");
-                priv->xg_remaining_length = 0;
-                priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_packet_header + priv->xg_packet_header->tp_next_offset);
-                break;
-            }
-            else if(priv->xg_remaining_length < length) {
-                g_warning("FUCK");
-            }
-            
-            // The amount of remaining bytes can be received
-            priv->xg_remaining_length = priv->xg_expected - priv->xg_total;
-            //g_warning("ending it with expected %i total %i remaining %i length %i", priv->xg_expected, priv->xg_total, remaining, length);
-            
+            process_packet(priv);
+        } else {
+            increment_packet(priv);
         }
-
-        // We are incrementing the loop by moving on to the location of the next packet
-        priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_packet_header + priv->xg_packet_header->tp_next_offset);
     }
-    // We need to pass to the outside at which packet index the loop ended, so we ca possibly resume processing at
-    // this point. of course this only be the case if the block exits as unfinished.
-    priv->xg_packet_index = i + 1;
 
-    // If we reach this point in time, if the loop above simply finished, than the block has been processed completely.
-    // But in case the loop was broken, due to one complete image being received, we need to indicate, that this block
-    // is not finished and that we need to resume processing it with the next call to this function
-    
-    if (packet_amount - 1 > i) {
+    // Here we are simply checking "Did the loop process all the packets of the blog?". Because if it did than obviously
+    // This block is finished and we can flag it as such. But if it is not, than the next image has to pick up with
+    // this block.
+    if (packet_amount - 1 > priv->xg_packet_index) {
         priv->xg_block_finished = FALSE;
-        //g_warning("packet amount: %i, IDX: %i", packet_amount, i);
+        //g_warning("packet amount: %i, IDX: %i. Block is not finished yet.", packet_amount, priv->xg_packet_index);
+    } else {
+        priv->xg_block_finished = TRUE;
     }
-    
-    return bytes;
 }
+
 
 /**
  * @brief Receives / reads the image data being transmitted over the 10G interface.
@@ -1109,11 +1133,6 @@ read_ximg_data (
         struct pollfd *poll_fd,
         GError **error)
 {
-    // I assume the "priv->buffer" is the internal buffer of the PhantomCamera object and the FINISHED image, meaning
-    // all bytes have been received has to be put into this buffer at the end.
-    guint8 *dst = priv->buffer;
-    //priv->xg_buffer_index = 0;
-    //g_warning("DESTINATION POINTER: %u, PRIV-BUFFER POINTER: %u", dst, priv->buffer);
 
     // With this we keep track of how many bytes have already been received.
     priv->xg_total = 0;
@@ -1168,21 +1187,16 @@ read_ximg_data (
         // Although if it wasn't finished the header for the packet, where the last loop left of will be reused.
         if (priv->xg_block_finished == TRUE) {
             priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_current_block + priv->xg_current_block->h1.offset_to_first_pkt);
-            // of course for an entirely new block we start processing the first packet.
-            //*packet_index = 0;
             priv->xg_packet_index = 0;
         } else {
-            priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_packet_header + priv->xg_packet_header->tp_next_offset);
+            //priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_packet_header + priv->xg_packet_header->tp_next_offset);
         }
 
         // Actually extracting the data of the packages in that block into the destination buffer.
 
-        bytes = process_block(priv, dst);
-        //g_warning("Block index %i", priv->xg_block_index);
+        process_block(priv);
         flush_block(priv);
         header_address = priv->xg_packet_header;
-        // We need to increment the buffer pointer address
-        dst += bytes;
 
         // If the block is not yet finished to be processed we cannot increment the index, so that with the next call
         // of this function the rest of the unfinished block will be processed first.
@@ -1190,18 +1204,9 @@ read_ximg_data (
             // Going to the next block. If the last block has been reached, it starts with the first block again,
             // after all this is how a ring buffer works.
             priv->xg_block_index = (priv->xg_block_index + 1) % block_amount;
-        } 
-        
-        //g_warning("%i/%i", priv->xg_total, priv->xg_expected);
+        }
     }
-    //struct timespec tstart={0,0}, tend={0,0};
-    //clock_gettime(CLOCK_MONOTONIC, &tend);
-    //g_warning("TIME DELTA %.5f", ((double)tend.tv_sec + 1.0e-9*tend.tv_nsec) - ((double)tstart.tv_sec + 1.0e-9*tstart.tv_nsec));
-
-    // g_warning("AFTER\nDESTINATION POINTER: %u, PRIV-BUFFER POINTER: %u", dst, priv->buffer);
-    //priv->xg_data_buffer.in -= priv->xg_total;
     return 0;
-
 }
 
 /**
@@ -1339,52 +1344,6 @@ static void teardown_raw_socket(struct ring *ring, int fd) {
 unsigned int create_mask(int length) {
     return (1 << (length)) - 1;
 }
-
-void clean_up(unsigned long A, unsigned long B, unsigned long C, unsigned long D, unsigned int carry_length, int *carry, __m128i *v1, __m128i *v2) {
-    const unsigned int data_length = 60;
-    const unsigned int overlap_length = 16;
-    const unsigned int free_length = 4;
-
-    unsigned long a, b, c, d;
-
-    unsigned int temp_length1, temp_length2;
-
-    unsigned int combined_length = overlap_length + carry_length;
-    int new_carry = create_mask(combined_length) & D;
-
-
-    temp_length1 = combined_length - free_length;
-    d = (D >> combined_length) | (C & create_mask(temp_length1) << (data_length - combined_length));
-
-    temp_length2 = temp_length1 - free_length;
-    c = (C >> temp_length1) | (B & create_mask(temp_length2) << (data_length - temp_length1));
-
-    temp_length1 = temp_length2 - free_length;
-    b = (B >> temp_length2) | (A & create_mask(temp_length1) << (data_length - temp_length2));
-
-    a = (A >> temp_length1) | (*carry << (data_length - temp_length1));
-
-    *carry = new_carry;
-    *v1 = _mm_set_epi64x(b, a);
-    *v2 = _mm_set_epi64x(d, c);
-}
-
-/*
-unsigned int process_carry(unsigned int carry_length, unsigned long *carry, __m128i *v) {
-    // Creating a bit mask with the length of the carry and the additional 8 bit to be carried over with this vector.
-    // Then using this length to get the new carry for the next iteration.
-    unsigned int mask_length = carry_length + 8;
-    int new_carry = create_mask(mask_length) & ((unsigned long *)v)[0];
-
-    // Shifting all those bits, that were just saved as a carry out of existance
-    *v >>= mask_length;
-    // Adding the given carry to the front of the vector
-    __m128i temp = _mm_set_epi64x(*carry << (64 - mask_length), 0);
-    *v = _mm_or_si128(temp, *v);
-
-    return mask_length;
-}
-*/
 
 unsigned int process_carry(unsigned int carry_length, unsigned long *carry, unsigned long *value) {
 
@@ -1816,6 +1775,206 @@ _accept_ximg_data (UcaPhantomCameraPrivate *priv)
 }
 
 
+// ***********************************************
+// CONNECTION PROCESS & PHANTOM DISCOVERY PROTOCOL
+// ***********************************************
+
+/**
+ * @brief Whether or not a static IP address has been manually set for the camera
+ *
+ * @author Jonas Teufel
+ *
+ * CHANGELOG
+ *
+ * Added 26.05.2019
+ *
+ * @param priv
+ * @return
+ */
+gboolean
+phantom_has_static_ip(UcaPhantomCameraPrivate *priv) {
+    // The default value for the IP address is an empty string. So if the property contains anything longer than an
+    // empty string, we know it has to be a IP address set by the user.
+    if (g_strcmp0(priv->ip_address, "") > 0) {
+        return TRUE;
+    } else {
+        return FALSE;
+    };
+}
+
+/**
+ * @brief returns a GSocketAddress object for the static IP address, that has been set to the camera property
+ *
+ * @author Jonas Teufel
+ *
+ * CHANGELOG
+ *
+ * Added 26.05.2019
+ *
+ * @param priv
+ * @param error
+ * @return
+ */
+static GSocketAddress *
+phantom_get_static_address (UcaPhantomCameraPrivate *priv, GError **error) {
+    GInetAddress *ip_addr;
+    GSocketAddress *socket_addr;
+
+    // We are creating the IP address from the string, which has been set to the property
+    ip_addr = g_inet_address_new_from_string(priv->ip_address);
+
+    // And then the socket address using the just created IP address and the default port for the control connection
+    // of a phantom camera: 7115 (it is reasonable to assume, that this port has not been altered)
+    socket_addr = g_inet_socket_address_new(ip_addr, 7115);
+
+    g_object_unref(ip_addr);
+    return socket_addr;
+}
+
+/**
+ * @brief Returns the network address of the phantom camera
+ *
+ * Usually the phantom cameras have a broadcast discovery protcol, so the code doesnt have to know their IP address.
+ * That is not working at the moment though. So instead of executing the discovery routine, this function returns the
+ * hardcoded IP address defined at the top of this file.
+ *
+ * @authors Matthias Vogelgesang, Jonas Teufel
+ *
+ * @param error
+ * @return
+ */
+static GSocketAddress *
+phantom_discover (UcaPhantomCameraPrivate *priv, GError **error)
+{
+    GInetAddress *bcast_addr;
+    GSocketAddress *bcast_socket_addr;
+    GSocketAddress *remote_socket_addr;
+    GSocket *socket;
+    GRegex *regex;
+    GMatchInfo *info;
+    gchar *port_string;
+    guint port;
+    const gchar request[] = "phantom?";
+    gchar reply[128] = {0,};
+    GSocketAddress *result = NULL;
+
+    // The way every phantom camera works is that, if the normal 1G network is used the camera has a address in the
+    // range 100.100.*.* and if the 10G network is used every camera has an IP in the range 172.16.*.* When using the
+    // discovery protocol and the UDP broadcast it is important to only send the broadcast to these IP ranges because
+    // otherwise it wont work.
+    // Thus, we need to check if 10G is enabled or not.
+    if (priv->enable_10ge) {
+        bcast_addr = g_inet_address_new_from_string ("172.16.255.255");
+    } else {
+        bcast_addr = g_inet_address_new_from_string ("100.100.255.255");
+    }
+
+    bcast_socket_addr = g_inet_socket_address_new (bcast_addr, 7380);
+    socket = g_socket_new (G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_DATAGRAM, G_SOCKET_PROTOCOL_UDP, error);
+
+    if (socket == NULL) {
+        result = FALSE;
+        goto cleanup_discovery_addr;
+    }
+
+    g_socket_set_broadcast (socket, TRUE);
+
+    if (g_socket_send_to (socket, bcast_socket_addr, request, sizeof (request), NULL, error) < 0)
+        goto cleanup_discovery_socket;
+
+    if (g_socket_receive_from (socket, &remote_socket_addr, reply, sizeof (reply), NULL, error) < 0)
+        goto cleanup_discovery_socket;
+
+    g_debug ("Phantom UDP discovery reply: `%s'", reply);
+    regex = g_regex_new ("PH16 (\\d+) (\\d+) (\\d+)", 0, 0, error);
+
+    if (!g_regex_match (regex, reply, 0, &info)) {
+        g_set_error (error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_DEVICE,
+                     "`%s' does not match expected reply", reply);
+        goto cleanup_discovery_addr;
+    }
+
+    port_string = g_match_info_fetch (info, 1);
+    port = atoi (port_string);
+
+    g_free (port_string);
+    result = g_inet_socket_address_new (g_inet_socket_address_get_address ((GInetSocketAddress *) remote_socket_addr), port);
+    g_match_info_free (info);
+
+    cleanup_discovery_addr:
+    g_regex_unref (regex);
+    g_object_unref (bcast_addr);
+    g_object_unref (bcast_socket_addr);
+
+    cleanup_discovery_socket:
+    g_object_unref (socket);
+
+    return result;
+}
+
+/**
+ * @brief Returns the GSocketAddress object for the network address of the phantom camera
+ *
+ * This function checks, whether a ip address has been manually set for the camera, by setting one of its properties.
+ * If that is the case a socket address will be created from that static ip address. If it is not the case, the phantom
+ * discovery protocol will be used to obtain the IP address of a phantom camera automatically using a UDP broadcast.
+ *
+ * @author Jonas Teufel
+ *
+ * CHANGELOG
+ *
+ * Added 26.05.2019
+ *
+ * @param priv
+ * @param error
+ * @return
+ */
+static GSocketAddress *
+phantom_get_address(UcaPhantomCameraPrivate *priv, GError **error) {
+
+    if (phantom_has_static_ip(priv)) {
+        return phantom_get_static_address(priv, error);
+    } else {
+        return phantom_discover(priv, error);
+    }
+}
+
+/**
+ * @brief Creates the control socket connection to the phantom camera
+ *
+ * First the address of the phantom camera is obtained, then the control socket connection is being established and
+ * finally some important properties of the camera are being read out.
+ *
+ * @author Matthias Vogelgesang
+ *
+ * CHANGELOG
+ *
+ * Added 26.05.2019
+ *
+ * @param priv
+ * @param error
+ */
+static void
+phantom_connect (UcaPhantomCameraPrivate *priv, GError **error) {
+    GSocketAddress *addr;
+    addr = phantom_get_address (priv, &priv->construct_error);
+
+    if (addr != NULL) {
+        gchar *addr_string;
+        // Establishing a control connection to the camera
+        priv->connection = g_socket_client_connect (priv->client, G_SOCKET_CONNECTABLE (addr), NULL, &priv->construct_error);
+        addr_string = g_inet_address_to_string (g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (addr)));
+        g_debug ("Connected to %s\n", addr_string);
+        g_free (addr_string);
+        g_object_unref (addr);
+
+        phantom_get_resolution_by_name (priv, "defc.res", &priv->roi_width, &priv->roi_height);
+        priv->features = phantom_get_string_by_name (priv, "info.features");
+        priv->have_ximg = strstr (priv->features, "ximg") != NULL;
+    }
+}
+
+
 // *********************************
 // STARTING AND STOPPING THE READOUT
 // *********************************
@@ -1931,19 +2090,38 @@ uca_phantom_camera_stop_readout (UcaCamera *camera,
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 }
 
+
+/**
+ * @brief Initializes the connection with the camera
+ *
+ * !NOTE: This function has to be called before any other operations on the camera are being performed.
+ * This function will create the control connection to the camera and also creates the threads to manage the data
+ * connection and decoding.
+ *
+ * @authors Matthias Vogelgesang, Jonas Teufel
+ *
+ * CHANGELOG
+ *
+ * Added ?
+ *
+ * Changed 26.05.2019
+ * Removed the sending of the rec and trig request to the camera, because that functionality can already be achieved
+ * by using the "trigger" command.
+ * Added a call to the connect function here. The reason is the following: Connecting to the camera doesnt make sense
+ * right after the camera object is created, because the user then doesnt even have the chance to make pre-connect
+ * property configurations like enabeling 10G etc. So connecting is now being done here.
+ *
+ * @param camera
+ * @param error
+ */
 static void
 uca_phantom_camera_start_recording (UcaCamera *camera,
                                     GError **error)
 {
+    UcaPhantomCameraPrivate *priv;
+    priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
+    phantom_connect(priv, error);
     uca_phantom_camera_start_readout(camera, error);
-
-    const gchar *rec_request = "rec 1\r\n";
-    const gchar *trig_request = "trig\r\n";
-
-    g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
-    //g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), rec_request, NULL, 0, error));
-    /* TODO: check previous error */
-    //g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), trig_request, NULL, 0, error));
 }
 
 static void
@@ -2018,93 +2196,6 @@ unpack_p12l (guint16 *output,
 }
 
 int a = 0;
-
-
-// **************************
-// PHANTOM DISCOVERY PROTOCOL
-// **************************
-
-/**
- * @brief Returns the network address of the phantom camera
- *
- * Usually the phantom cameras have a broadcast discovery protcol, so the code doesnt have to know their IP address.
- * That is not working at the moment though. So instead of executing the discovery routine, this function returns the
- * hardcoded IP address defined at the top of this file.
- *
- * @param error
- * @return
- */
-static GSocketAddress *
-phantom_discover (GError **error)
-{
-    GInetAddress *bcast_addr;
-    GSocketAddress *bcast_socket_addr;
-    GSocketAddress *remote_socket_addr;
-    GSocket *socket;
-    GRegex *regex;
-    GMatchInfo *info;
-    gchar *port_string;
-    guint port;
-    const gchar request[] = "phantom?";
-    gchar reply[128] = {0,};
-    GSocketAddress *result = NULL;
-    bcast_addr = g_inet_address_new_from_string ("255.255.255.255");
-    bcast_socket_addr = g_inet_socket_address_new (bcast_addr, 7380);
-    socket = g_socket_new (G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_DATAGRAM, G_SOCKET_PROTOCOL_UDP, error);
-
-
-
-    if (socket == NULL) {
-        result = FALSE;
-        goto cleanup_discovery_addr;
-    }
-
-    g_socket_set_broadcast (socket, TRUE);
-
-    if (g_socket_send_to (socket, bcast_socket_addr, request, sizeof (request), NULL, error) < 0)
-        goto cleanup_discovery_socket;
-
-    g_warning("IT HAS SENT THE REQUEST");
-
-    if (g_socket_receive_from (socket, &remote_socket_addr, reply, sizeof (reply), NULL, error) < 0)
-        goto cleanup_discovery_socket;
-
-    g_warning("IT HAS RECEIVED A RESPONSE");
-
-
-
-    g_debug ("Phantom UDP discovery reply: `%s'", reply);
-    regex = g_regex_new ("PH16 (\\d+) (\\d+) (\\d+)", 0, 0, error);
-
-    if (!g_regex_match (regex, reply, 0, &info)) {
-        g_set_error (error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_DEVICE,
-                     "`%s' does not match expected reply", reply);
-        goto cleanup_discovery_addr;
-    }
-
-    port_string = g_match_info_fetch (info, 1);
-    port = atoi (port_string);
-
-    /*
-    port = 7115;
-    result = g_inet_socket_address_new (g_inet_address_new_from_string (IP_ADDRESS), port);
-    return result;
-    */
-
-    g_free (port_string);
-    result = g_inet_socket_address_new (g_inet_socket_address_get_address ((GInetSocketAddress *) remote_socket_addr), port);
-    g_match_info_free (info);
-
-    cleanup_discovery_addr:
-    g_regex_unref (regex);
-    g_object_unref (bcast_addr);
-    g_object_unref (bcast_socket_addr);
-
-    cleanup_discovery_socket:
-    g_object_unref (socket);
-
-    return result;
-}
 
 
 // ***********************************************
@@ -2482,7 +2573,7 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     // To simplify things for the user, whenever a trigger is issued, we are assuming that the frames are to be saved
     // into the first cine. Like this, the user does not have to know about the cone structure, but can simply use
     // the camera as a black box for image recording into a generic storage unit.
-    const gchar *request = "trig 1\r\n";
+    const gchar *request = "trig\r\n";
 
     // "phantom talk" actually sends the request string over the network to the camera
     g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), request, NULL, 0, error));
@@ -2568,6 +2659,12 @@ uca_phantom_camera_set_property (GObject *object,
             break;
         case PROP_MEMREAD_COUNT:
             priv->memread_count = g_value_get_uint(value);
+            break;
+        // 26.05.2019
+        // Adding an additional property to manually set the IP address in cases, where the discovery mode might not
+        // work
+        case PROP_NETWORK_ADDRESS:
+            priv->ip_address = g_value_dup_string (value);
             break;
     }
 }
@@ -2743,22 +2840,6 @@ uca_phantom_camera_constructed (GObject *object)
     GSocketAddress *addr;
 
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (object);
-
-    addr = phantom_discover (&priv->construct_error);
-
-    if (addr != NULL) {
-        gchar *addr_string;
-
-        priv->connection = g_socket_client_connect (priv->client, G_SOCKET_CONNECTABLE (addr), NULL, &priv->construct_error);
-        addr_string = g_inet_address_to_string (g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (addr)));
-        g_debug ("Connected to %s\n", addr_string);
-        g_free (addr_string);
-        g_object_unref (addr);
-
-        phantom_get_resolution_by_name (priv, "defc.res", &priv->roi_width, &priv->roi_height);
-        priv->features = phantom_get_string_by_name (priv, "info.features");
-        priv->have_ximg = strstr (priv->features, "ximg") != NULL;
-    }
 }
 
 static void
@@ -2982,6 +3063,12 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             "The number of the frame, after which to start the readout in the cine",
             0, G_MAXUINT, 0, G_PARAM_READWRITE);
 
+    phantom_properties[PROP_NETWORK_ADDRESS] =
+    g_param_spec_string ("network-address",
+            "The network IP address of the phantom camera",
+            "The network IP address of the phantom camera",
+            "", G_PARAM_READWRITE);
+
     for (guint i = 0; i < base_overrideables[i]; i++)
         g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
 
@@ -3007,9 +3094,9 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->features = NULL;
     priv->format = IMAGE_FORMAT_P10;
     priv->acquisition_mode = ACQUISITION_MODE_STANDARD;
-    priv->enable_10ge = X_NETWORK;
-    priv->iface = INTERFACE;
-    priv->have_ximg = X_NETWORK;
+    priv->enable_10ge = FALSE;
+    priv->iface = NULL;
+    priv->have_ximg = TRUE;
     priv->message_queue = g_async_queue_new ();
     priv->result_queue = g_async_queue_new ();
 

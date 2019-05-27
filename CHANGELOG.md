@@ -21,7 +21,7 @@ build on the machine for that!)
 - Changed the "mock" script to use the special library 
 [phantom-cli](https://github.com/the16thpythonist/phantom-cli)
 
-### 0.0.0.1 
+### 0.0.0.1 - 27.05.2019
 
 - Reworked the implementation for the transmission of 10G imaga data. 
 The previous implementation used standard socket read operations to wait 
@@ -48,4 +48,8 @@ squeeze out some additional performance.
 - Created a new decoding algorithm, which uses SSE4 intrinsics to speed 
 up the unpacking process of the 10 bit pixel data stream into the 
 16 bit output buffer.
+- Reworked the /utils/test.py to use the python command line 
+library [Click](https://click.palletsprojects.com/en/7.x/). The new 
+test script now also accepts parameters, that maintain compatibility 
+with the phantom-cli mock server.
 

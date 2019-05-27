@@ -3,6 +3,17 @@
 [libuca](https://github.com/ufo-kit/libuca) plugin for the Vision Research
 Phantom high-speed cameras.
 
+
+### Documentation
+
+Since this is still a private repository, the public documentation for 
+this project is hosted on a separate Github Repository. To view the 
+Documentation source code jump to 
+[uca-phantom-doc](https://github.com/the16thpythonist/uca-phantom-doc). 
+Or visit the indepth documentation directly at
+[uca-phantom Documentation](https://uca-phantom-doc.readthedocs.io/en/latest/)!
+
+
 ### User information
 
 #### Changing the acquisition mode
@@ -49,3 +60,7 @@ still need to react on API calls this is handled in a separate thread that runs
 message and return queues. The thread picks up a message and once done places a
 result object on the return queue. Messages and results carry type information,
 meta and real data.
+
+
+
+
