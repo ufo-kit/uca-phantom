@@ -53,3 +53,11 @@ library [Click](https://click.palletsprojects.com/en/7.x/). The new
 test script now also accepts parameters, that maintain compatibility 
 with the phantom-cli mock server.
 
+### 0.0.0.2 - 29.05.2019
+
+- Fixed a bug, where single packages would disappear during 10G 
+transmission when the edge case occurred, that an image was finished 
+with the pre last packet in a block of the ring buffer.
+- Fixed the bug with the "trigger" method not containing the "rec" 
+command being send to the camera previous to the "trig" command, which 
+is being expected by the camera. 

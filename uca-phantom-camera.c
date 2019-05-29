@@ -59,6 +59,8 @@
 //#define PROTOCOL        0x88b7
 #define X_NETWORK       TRUE
 
+#define MEMREAD_CHUNK_SIZE  20
+
 #define UCA_PHANTOM_CAMERA_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE((obj), UCA_TYPE_PHANTOM_CAMERA, UcaPhantomCameraPrivate))
 
 #define CHECK_ETHERNET_HEADER   0
@@ -279,6 +281,10 @@ struct _UcaPhantomCameraPrivate {
     guint8               xg_remaining_data[40];
     gsize                xg_packet_length;
     gsize                xg_remaining_length;
+    // 29.05.2019
+    // We need to keep track of the amount of packages inside a block of the ring buffer as an attribute of the camera
+    // object, because it is used in several different methods.
+    gsize                xg_packet_amount;
 
     gint                 xg_unpack_length;
     gint                 xg_unpack_index;
@@ -293,6 +299,9 @@ struct _UcaPhantomCameraPrivate {
     guint                memread_count;
     guint                memread_cine;      // not implemented yet
     guint                memread_start;     // not implemented yet
+    // 29.05.2019
+    guint                memread_remaining;
+    guint                memread_index;
 };
 
 typedef struct  {
@@ -992,6 +1001,16 @@ void increment_packet(UcaPhantomCameraPrivate *priv) {
  *
  * @author Jonas Teufel
  *
+ * CHANGELOG
+ *
+ * Added 20.05.2019
+ *
+ * Changed 29.05.2019
+ * There was a bug here. When the processed package was the pre-last one in a block, but also the last one for an image
+ * that cause the program to flag the block as finished even though the last block would never be looked at. Thus the
+ * last packet in the block would disappear...
+ * Added a if clause that checks for the edge case now.
+ *
  * @param priv
  */
 void process_packet(UcaPhantomCameraPrivate *priv) {
@@ -1010,8 +1029,14 @@ void process_packet(UcaPhantomCameraPrivate *priv) {
         priv->xg_remaining_length -= priv->xg_packet_length;
 
         // We also need to update the pointer to the packet, so that it points to the next packet
-        increment_packet(priv);
+        // 29.05.2019
+        // The edge case of incrementing a packet when ist is the pre-last in a block but the last one for an image
+        // caused a nasty bug with disappearing packages... So we have to check for that now.
+        if (!(priv->xg_remaining_length <= 0 && priv->xg_packet_index == priv->xg_packet_amount - 2)) {
+            increment_packet(priv);
+        }
     }
+    // THIS BASICALLY NEVER GETS EXECUTED...
     // This is the tricky case. This means the image would be completely finished with just a fraction of the data from
     // the current package. This also means, that some portion of the data from this package belongs to the next image
     // already... So we have to make sure to set the pointers up correctly, so the next image grab call will pick up
@@ -1041,6 +1066,18 @@ void process_packet(UcaPhantomCameraPrivate *priv) {
  *
  * @author Jonas Teufel
  *
+ * CHANGELOG
+ *
+ * Added 28.04.2019
+ *
+ * Changed 20.05.2019
+ * Completely moved the whole processing of the actual package data of a single packet (memcopy the contents and
+ * incrementing of the pointers) to the method "process_packet"
+ *
+ * Changed 29.05.2019
+ * Also saving the amount of packages inside a block into a attribute of the camera object now, so it can be used
+ * in the process_packet method without explicitly passing it.
+ *
  * @param block_description
  * @param destination
  * @param expected
@@ -1054,6 +1091,7 @@ void process_block(UcaPhantomCameraPrivate *priv) {
     // depends on the size of the packet, speed of transmission etc. In general, the amount is not previously known,
     // but once the block is done writing, is stored inside the "num_pckts" of its descriptor.
     int packet_amount = priv->xg_current_block->h1.num_pkts;
+    priv->xg_packet_amount = packet_amount;
 
     // This will be the pointer directed at the start of the actual packet data! The data contained in a packet is
     // byte wise, which means its a unsigned 8 bit format.
@@ -1071,10 +1109,10 @@ void process_block(UcaPhantomCameraPrivate *priv) {
 
     int i;
 
-    for (i = priv->xg_packet_index; i < packet_amount; i++) {
+    for (i = priv->xg_packet_index; i < priv->xg_packet_amount; i++) {
 
         if (priv->xg_remaining_length <= 0) {
-            //g_warning("Breaking the loop, because all data has been received");
+
             break;
         }
 
@@ -1093,6 +1131,7 @@ void process_block(UcaPhantomCameraPrivate *priv) {
             priv->xg_packet_length = length;
 
             process_packet(priv);
+
         } else {
             increment_packet(priv);
         }
@@ -1101,7 +1140,7 @@ void process_block(UcaPhantomCameraPrivate *priv) {
     // Here we are simply checking "Did the loop process all the packets of the blog?". Because if it did than obviously
     // This block is finished and we can flag it as such. But if it is not, than the next image has to pick up with
     // this block.
-    if (packet_amount - 1 > priv->xg_packet_index) {
+    if (priv->xg_packet_amount - 1 > priv->xg_packet_index) {
         priv->xg_block_finished = FALSE;
         //g_warning("packet amount: %i, IDX: %i. Block is not finished yet.", packet_amount, priv->xg_packet_index);
     } else {
@@ -1182,21 +1221,19 @@ read_ximg_data (
             continue;
         }
 
-        // In case block was finished during the previous run of this function, the header struct will be created
-        // to point to the first packet of the current (new) block.
-        // Although if it wasn't finished the header for the packet, where the last loop left of will be reused.
         if (priv->xg_block_finished == TRUE) {
-            priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_current_block + priv->xg_current_block->h1.offset_to_first_pkt);
+            // In case block was finished during the previous run of this function, the header struct will be created
+            // to point to the first packet of the current (new) block.
+            // Although if it wasn't finished the header for the packet, where the last loop left of will be reused.
+            priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_current_block +
+                                                              priv->xg_current_block->h1.offset_to_first_pkt);
             priv->xg_packet_index = 0;
-        } else {
-            //priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_packet_header + priv->xg_packet_header->tp_next_offset);
         }
 
         // Actually extracting the data of the packages in that block into the destination buffer.
 
         process_block(priv);
         flush_block(priv);
-        header_address = priv->xg_packet_header;
 
         // If the block is not yet finished to be processed we cannot increment the index, so that with the next call
         // of this function the rest of the unfinished block will be processed first.
@@ -2081,13 +2118,14 @@ uca_phantom_camera_stop_readout (UcaCamera *camera,
     g_thread_join (priv->accept_thread);
     g_thread_unref (priv->accept_thread);
 
-    //g_thread_join(priv->unpack_thread);
-    //g_thread_unref(priv->unpack_thread);
+    g_thread_join(priv->unpack_thread);
+    g_thread_unref(priv->unpack_thread);
     
     //g_free(priv->xg_data_buffer.in);
     //g_free(priv->xg_buffer);
 
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
+
 }
 
 
@@ -2218,6 +2256,10 @@ int a = 0;
  *
  * Added 10.05.2019
  *
+ * Changed 29.05.2019
+ * Added the additional parameter "frames_start", as the need to additionally supply the offset for chunk transmission
+ * arose.
+ *
  * @param priv
  * @param cine
  * @param frame_count
@@ -2226,6 +2268,7 @@ int a = 0;
 static gchar *
 create_grab_request(UcaPhantomCameraPrivate *priv,
                                     gchar *cine,
+                                    guint frame_start,
                                     guint frame_count)
 {
     // These will hold the strings for the command and the format parameters. These will not be passed as arguments,
@@ -2238,11 +2281,14 @@ create_grab_request(UcaPhantomCameraPrivate *priv,
     gchar *request;
 
     // The phantom camera expects a string, which
-    const gchar *request_fmt = "%s {cine:%s, start:0, cnt:%s, fmt:%s %s}\r\n";
+    const gchar *request_fmt = "%s {cine:%s, start:%s, cnt:%s, fmt:%s %s}\r\n";
 
     // Since the format string expects strings for every value, but the frame count is given as an integer, we need to
     // convert the int into a string first
     const gchar *frames = g_strdup_printf("%i", frame_count);
+    // 29.05.2019
+    // Same thing goes for the starting frame index
+    const gchar *start = g_strdup_printf("%i", frame_start);
 
     // Now we check the camera object for its setting regarding the transfer format and the network type used.
     switch (priv->format) {
@@ -2272,7 +2318,7 @@ create_grab_request(UcaPhantomCameraPrivate *priv,
     }
 
     // Actually using all the parameters to create the request string
-    request = g_strdup_printf (request_fmt, command, cine, frames, format, additional);
+    request = g_strdup_printf (request_fmt, command, cine, start, frames, format, additional);
     return request;
 }
 
@@ -2410,6 +2456,7 @@ camera_grab_single (UcaPhantomCameraPrivate *priv,
     // And obviously just a single image will be transmitted.
     const gchar *cine = "-1";
     const guint frame_count = 1;
+    const guint frame_start = 0;
 
     gchar *request;
     gchar *reply;
@@ -2418,7 +2465,7 @@ camera_grab_single (UcaPhantomCameraPrivate *priv,
     // Given the frame count and the cine source, this function will generate a request string for the camera, that is
     // based on the configuration of the camera object (10G/1G, transfer format etc..).
     // The final string will be put into the given request pointer.
-    request = create_grab_request(priv, cine, frame_count);
+    request = create_grab_request(priv, cine, frame_start, frame_count);
 
     // Before we send the actual request to the camera, we need to tell the worker threads that actually receive the
     // image to start working
@@ -2454,6 +2501,8 @@ camera_grab_single (UcaPhantomCameraPrivate *priv,
  *
  * Added 10.05.2019
  *
+ * Changed 29.05.2019
+ *
  * @param priv
  * @param data
  * @param error
@@ -2469,7 +2518,7 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
     // calls to grab will not send any more requests to the camera, but just read all the received frames from the
     // buffer.
     const gchar *cine = "1";
-    const guint frame_count = priv->memread_count;
+    guint frame_count;
 
     gchar *request;
     gchar *reply;
@@ -2479,11 +2528,23 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
     // image to start working
     start_receiving_image(priv);
 
-    if (!priv->memread_request_sent) {
+    if (!priv->memread_request_sent || priv->memread_index % MEMREAD_CHUNK_SIZE == 0) {
+        g_warning("New chunk with index %i and remaining %i", priv->memread_index, priv->memread_remaining);
+        // The frame count to be calculated is either the chunk size or the remaining amount, if the remaining amount
+        // is less than the chunk size. We also need to the update the remaining count afterwards
+        if (priv->memread_remaining < MEMREAD_CHUNK_SIZE) {
+            frame_count = priv->memread_remaining;
+            priv->memread_remaining = 0;
+        } else {
+            frame_count = MEMREAD_CHUNK_SIZE;
+            priv->memread_remaining -= MEMREAD_CHUNK_SIZE;
+        }
+
+        // Here we have to send a new request
         // Given the frame count and the cine source, this function will generate a request string for the camera,
         // that is based on the configuration of the camera object (10G/1G, transfer format etc..).
         // The final string will be put into the given request pointer.
-        request = create_grab_request(priv, cine, frame_count);
+        request = create_grab_request(priv, cine, priv->memread_index, frame_count);
 
         // Sending the request to the camera. In case there is not reply we will return FALSE to indicate that the grab
         // process was not successful. The reply content itself is not relevant. It is only important (just an "OK!")
@@ -2496,6 +2557,9 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
         // After the request has been sent we set the flag to TRUE to prevent any more requests from being sent.
         priv->memread_request_sent = TRUE;
     }
+
+    // At the end of each memread grab, we increment the index to know at which position we are
+    priv->memread_index ++;
 
     // This function will wait (blocking call) until the worker thread has published its results into the internal
     // result queue and then decode the image based on the used image format before copying the results into the
@@ -2563,6 +2627,10 @@ uca_phantom_camera_grab (UcaCamera *camera,
  * Changed 10.05.2019
  * Added the explicit assumption to always save all the frames into the first cine.
  *
+ * Changed 29.05.2019
+ * Added the "rec" command, which is being send before the trig command, to tell the camera into which cine to
+ * put the recording.
+ *
  * @param camera
  * @param error
  */
@@ -2573,10 +2641,14 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     // To simplify things for the user, whenever a trigger is issued, we are assuming that the frames are to be saved
     // into the first cine. Like this, the user does not have to know about the cone structure, but can simply use
     // the camera as a black box for image recording into a generic storage unit.
-    const gchar *request = "trig\r\n";
+    const gchar *record_request = "rec 1\r\n";
+    const gchar *trigger_request = "trig\r\n";
+    gchar *reply;
 
     // "phantom talk" actually sends the request string over the network to the camera
-    g_free (phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), request, NULL, 0, error));
+    reply = phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), record_request, NULL, 0, error);
+    reply = phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), trigger_request, NULL, 0, error);
+    g_free(reply);
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 }
 
@@ -2585,6 +2657,31 @@ uca_phantom_camera_trigger (UcaCamera *camera,
 // GETTING AND SETTING CAMERA ATTRIBUTES
 // *************************************
 
+/**
+ * @brief Sets the properties of the phantom camera
+ *
+ * CHANGELOG
+ *
+ * Added ?
+ *
+ * Changed 10.05.2019
+ * Added the cases for the properties of the memread mode, which are the boolean flag PROP_ENABLE_MEMREAD and the
+ * amount of images to load from the camera PROP_MEMREAD_COUNT
+ *
+ * Changed 26.05.2019
+ * Added the additional case for the property PROP_NETWORK_ADDRESS, which enables the manual setting of the phantoms
+ * IP address in cases, where the discovery protocol fails/is unavailable.
+ *
+ * Changed 29.05.2019
+ * Added additional initialization of properties to the case for PROP_MEMREAD_COUNT, which include setting the index,
+ * that keeps track of the memread grab calls back to 0 and also setting the remaining amount to the count specified
+ * for the memread count.
+ *
+ * @param object
+ * @param property_id
+ * @param value
+ * @param pspec
+ */
 static void
 uca_phantom_camera_set_property (GObject *object,
                                  guint property_id,
@@ -2659,6 +2756,13 @@ uca_phantom_camera_set_property (GObject *object,
             break;
         case PROP_MEMREAD_COUNT:
             priv->memread_count = g_value_get_uint(value);
+            // 29.05.2019
+            // Whenever a new memread count is specified (indicating the intention to read out more frames) the index,
+            // which keeps track of the grab calls needs to be reset and the remaining count is set to the total amount
+            // initially.
+            priv->memread_remaining = priv->memread_count;
+            priv->memread_request_sent = FALSE;
+            priv->memread_index = 0;
             break;
         // 26.05.2019
         // Adding an additional property to manually set the IP address in cases, where the discovery mode might not
@@ -3097,6 +3201,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->enable_10ge = FALSE;
     priv->iface = NULL;
     priv->have_ximg = TRUE;
+    priv->xg_packet_amount = 0;
     priv->message_queue = g_async_queue_new ();
     priv->result_queue = g_async_queue_new ();
 
