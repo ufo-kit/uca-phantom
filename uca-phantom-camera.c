@@ -59,7 +59,7 @@
 //#define PROTOCOL        0x88b7
 #define X_NETWORK       TRUE
 
-#define MEMREAD_CHUNK_SIZE  20
+#define MEMREAD_CHUNK_SIZE  400
 
 #define UCA_PHANTOM_CAMERA_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE((obj), UCA_TYPE_PHANTOM_CAMERA, UcaPhantomCameraPrivate))
 
@@ -268,6 +268,7 @@ struct _UcaPhantomCameraPrivate {
     gsize                xg_total;
     gsize                xg_expected;
     gboolean             xg_block_finished;
+    gboolean             xg_packet_skipped;
     gint                 xg_block_index;
     gint                 xg_packet_index;
     gint                 xg_data_index;
@@ -281,6 +282,7 @@ struct _UcaPhantomCameraPrivate {
     guint8               xg_remaining_data[40];
     gsize                xg_packet_length;
     gsize                xg_remaining_length;
+    
     // 29.05.2019
     // We need to keep track of the amount of packages inside a block of the ring buffer as an attribute of the camera
     // object, because it is used in several different methods.
@@ -977,7 +979,7 @@ static void flush_block(UcaPhantomCameraPrivate *priv) {
     // If the block has been completely processed (all payload data extracted from all the packages in it), then it has
     // to be flushed, meaning that it has to be "given back" to the kernel, so new data can be written to it.
     // unless it's status isn't changed, the kernel cannot write new packages into this block of the ring buffer.
-    if (priv->xg_block_finished) {
+    if (priv->xg_block_finished == TRUE) {
         priv->xg_current_block->h1.block_status = TP_STATUS_KERNEL;
     }
 }
@@ -1034,6 +1036,9 @@ void process_packet(UcaPhantomCameraPrivate *priv) {
         // caused a nasty bug with disappearing packages... So we have to check for that now.
         if (!(priv->xg_remaining_length <= 0 && priv->xg_packet_index == priv->xg_packet_amount - 2)) {
             increment_packet(priv);
+        } else {
+            priv->xg_packet_skipped = TRUE;
+            //g_warning("I AM ACTUALLY USEFUL");
         }
     }
     // THIS BASICALLY NEVER GETS EXECUTED...
@@ -1105,14 +1110,20 @@ void process_block(UcaPhantomCameraPrivate *priv) {
     // received for one package, there could possibly still be data of the next image in that ring buffer block.
     // and we need to indicate this to know, if we should start in this or the next block when attempting to get the
     // data for that next image.
-    priv->xg_block_finished = TRUE;
+    //priv->xg_block_finished = TRUE;
 
     int i;
+    
+    // Ugly hack, should improve this
+    if (priv->xg_packet_skipped == TRUE) {
+        //g_warning("ALSO USEFUL");
+        increment_packet(priv);
+        priv->xg_packet_skipped = FALSE;
+    }
 
     for (i = priv->xg_packet_index; i < priv->xg_packet_amount; i++) {
 
         if (priv->xg_remaining_length <= 0) {
-
             break;
         }
 
@@ -1142,9 +1153,9 @@ void process_block(UcaPhantomCameraPrivate *priv) {
     // this block.
     if (priv->xg_packet_amount - 1 > priv->xg_packet_index) {
         priv->xg_block_finished = FALSE;
-        //g_warning("packet amount: %i, IDX: %i. Block is not finished yet.", packet_amount, priv->xg_packet_index);
     } else {
         priv->xg_block_finished = TRUE;
+        //g_warning("block finished");
     }
 }
 
@@ -3197,8 +3208,9 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->buffer = NULL;
     priv->features = NULL;
     priv->format = IMAGE_FORMAT_P10;
-    priv->acquisition_mode = ACQUISITION_MODE_STANDARD;
+    priv->acquisition_mode = ACQUISITION_MODE_HS;
     priv->enable_10ge = FALSE;
+    priv->xg_packet_skipped = FALSE;
     priv->iface = NULL;
     priv->have_ximg = TRUE;
     priv->xg_packet_amount = 0;
