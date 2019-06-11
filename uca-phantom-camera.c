@@ -3261,6 +3261,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->iface = NULL;
     priv->have_ximg = TRUE;
     priv->xg_packet_amount = 0;
+    priv->connected = FALSE;
     priv->message_queue = g_async_queue_new ();
     priv->result_queue = g_async_queue_new ();
 
