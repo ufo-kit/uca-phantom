@@ -156,6 +156,8 @@ enum {
     // Instead of using the "start_recording" function to connect to the camera (this would break existing programs
     // using libuca with other cameras), The camera is now connected by setting a boolean flag to True
     PROP_CONNECT,
+    // This will be a boolean value, that returns, whether or not the triggered frame acquisition is done yet or not
+    PROP_TRIGGER_RELEASED,
 
     // 07.05.2019
     // Introducing an additional mode of operation for the camera: "memread" mode.
@@ -2684,6 +2686,15 @@ uca_phantom_camera_trigger (UcaCamera *camera,
 }
 
 
+static void
+check_trigger_status(UcaPhantomCameraPrivate *priv) {
+    gchar *reply;
+    reply = phantom_get_string_by_name(priv, "c1.start");
+    g_warning("REPLY %s", reply);
+    return FALSE;
+}
+
+
 // *************************************
 // GETTING AND SETTING CAMERA ATTRIBUTES
 // *************************************
@@ -2896,6 +2907,10 @@ uca_phantom_camera_get_property (GObject *object,
         case PROP_CONNECT:
             g_value_set_boolean(value, priv->connected);
             break;
+        // Returns the boolean value of whether the frame trigger process is done yet or not
+        case PROP_TRIGGER_RELEASED:
+            gboolean status = check_trigger_status(priv);
+            g_value_set_boolean(value, status);
     };
 }
 
@@ -3229,6 +3244,13 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             g_param_spec_boolean ("connect",
                                   "Connect to the camera using the ethernet connection",
                                   "Connect to the camera using the ethernet connection",
+                                  FALSE, G_PARAM_READWRITE);
+
+    // A boolean flag to indicate, whether the frame acquisition caused by a trigger is done yet
+    phantom_properties[PROP_TRIGGER_RELEASED] =
+            g_param_spec_boolean ("trigger-released",
+                                  "Whether the triggered frame acquisition process has finished",
+                                  "Whether the triggered frame acquisition process has finished",
                                   FALSE, G_PARAM_READWRITE);
 
     for (guint i = 0; i < base_overrideables[i]; i++)
