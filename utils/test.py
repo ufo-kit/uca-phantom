@@ -105,8 +105,12 @@ def command(log, ip, interface, xnetwork):
         logger.debug("Using 10G network, connected on INTERFACE '%s'", interface)
 
     # Connecting the camera
-    camera.start_recording()
+    camera.props.connect = True
     logger.info("Camera connected!")
+
+    # Starting the readout
+    camera.start_recording()
+    logger.info("Readout threads started!")
 
     # Grabbing a frame for testing and then displaying it
     a, buf = create_array_from(camera)

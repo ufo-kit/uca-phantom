@@ -152,6 +152,10 @@ enum {
     // Adding this additional property for the IP address string. This can be used to manually assign the IP address
     // in case the discovery protocol does not work
     PROP_NETWORK_ADDRESS,
+    // 11.06.2019
+    // Instead of using the "start_recording" function to connect to the camera (this would break existing programs
+    // using libuca with other cameras), The camera is now connected by setting a boolean flag to True
+    PROP_CONNECT,
 
     // 07.05.2019
     // Introducing an additional mode of operation for the camera: "memread" mode.
@@ -263,6 +267,10 @@ struct _UcaPhantomCameraPrivate {
     guint8               mac_address[6];
     ImageFormat          format;
     AcquisitionMode      acquisition_mode;
+    // 11.06.2019
+    // The boolean flag indicating if the plugin is actaully connected (via socket on the ethernet interface) to the
+    // camera
+    gboolean             connected;
 
     struct block_desc   *xg_current_block;
     gsize                xg_total;
@@ -302,6 +310,11 @@ struct _UcaPhantomCameraPrivate {
     // 29.05.2019
     guint                memread_remaining;
     guint                memread_index;
+    // 11.06.2019
+    // This is the index, that is being incremented by the unpacking thread, when the program is in memread mode.
+    // The theory is to delay the sending of the next chunk request until the last image has been unpacked.
+    // To hopefully not overflow the ring buffer
+    guint                memread_unpack_index;
 };
 
 typedef struct  {
@@ -1461,6 +1474,10 @@ void unpack_image(UcaPhantomCameraPrivate *priv) {
 
     }
     g_debug("");
+
+    // 11.06.2019
+    // Incrementing the memread unpack index, after the image has been received
+    priv->memread_unpack_index += 1;
 }
 
 static gpointer
@@ -2149,6 +2166,10 @@ uca_phantom_camera_stop_readout (UcaCamera *camera,
  * right after the camera object is created, because the user then doesnt even have the chance to make pre-connect
  * property configurations like enabeling 10G etc. So connecting is now being done here.
  *
+ * Changed 11.06.2019
+ * Removed the call to the "phantom_connect" function. The  camera is now no longer connected by calling the
+ * "start_recording" function, but rather by setting the "connect" property to true!
+ *
  * @param camera
  * @param error
  */
@@ -2158,7 +2179,6 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
 {
     UcaPhantomCameraPrivate *priv;
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
-    phantom_connect(priv, error);
     uca_phantom_camera_start_readout(camera, error);
 }
 
@@ -2528,7 +2548,7 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
     // image to start working
     start_receiving_image(priv);
 
-    if (!priv->memread_request_sent || priv->memread_index % MEMREAD_CHUNK_SIZE == 0) {
+    if (!priv->memread_request_sent || priv->memread_unpack_index % MEMREAD_CHUNK_SIZE == 0) {
         g_warning("New chunk with index %i and remaining %i", priv->memread_index, priv->memread_remaining);
         // The frame count to be calculated is either the chunk size or the remaining amount, if the remaining amount
         // is less than the chunk size. We also need to the update the remaining count afterwards
@@ -2763,12 +2783,27 @@ uca_phantom_camera_set_property (GObject *object,
             priv->memread_remaining = priv->memread_count;
             priv->memread_request_sent = FALSE;
             priv->memread_index = 0;
+            // 11.06.2019
+            // We obviously also need to reset the unpack index
+            priv->memread_unpack_index = 0;
             break;
         // 26.05.2019
         // Adding an additional property to manually set the IP address in cases, where the discovery mode might not
         // work
         case PROP_NETWORK_ADDRESS:
             priv->ip_address = g_value_dup_string (value);
+            break;
+        // 11.06.2019
+        // Connecting to the camera with the "start_recodring" call doesnt make a whole lot of sense. So the connection
+        // process is now handled by setting this boolean flag to TRUE.
+        case PROP_CONNECT:
+            // Setting the boolean flag of the object to indicate the state
+            priv->connected = g_value_get_boolean(value);
+            // if it was set to TRUE, the "connect" function will be executed
+            if (priv->connected) {
+                GError *error = NULL;
+                phantom_connect(priv, &error);
+            }
             break;
     }
 }
@@ -2844,6 +2879,11 @@ uca_phantom_camera_get_property (GObject *object,
             break;
         case PROP_HAS_CAMRAM_RECORDING:
             g_value_set_boolean (value, TRUE);
+            break;
+        // 11.06.2019
+        // Returns the boolean value of whether or nor the camera is currently connected to the program.
+        case PROP_CONNECT:
+            g_value_set_boolean(value, priv->connected);
             break;
     };
 }
@@ -3172,6 +3212,13 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             "The network IP address of the phantom camera",
             "The network IP address of the phantom camera",
             "", G_PARAM_READWRITE);
+
+    // A boolean flag to initialize the connection process
+    phantom_properties[PROP_CONNECT] =
+            g_param_spec_boolean ("connect",
+                                  "Connect to the camera using the ethernet connection",
+                                  "Connect to the camera using the ethernet connection",
+                                  FALSE, G_PARAM_READWRITE);
 
     for (guint i = 0; i < base_overrideables[i]; i++)
         g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
