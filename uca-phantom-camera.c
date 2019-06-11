@@ -572,7 +572,6 @@ phantom_get_string_by_name (UcaPhantomCameraPrivate *priv, const gchar *name)
     value = g_match_info_fetch (info, 2);
     g_match_info_free (info);
     g_free (reply);
-
     return value;
 }
 
@@ -2686,12 +2685,19 @@ uca_phantom_camera_trigger (UcaCamera *camera,
 }
 
 
-static void
+static gboolean
 check_trigger_status(UcaPhantomCameraPrivate *priv) {
+    const gchar *request = "get c1.state\r\n";
     gchar *reply;
-    reply = phantom_get_string_by_name(priv, "c1.start");
-    g_warning("REPLY %s", reply);
-    return FALSE;
+    gboolean status;
+    // Actually sending the request to the camera and receiving its reply.
+    reply = phantom_talk (priv, request, NULL, 0, NULL);
+    if (strstr(reply, "STR") != NULL) {
+        status = TRUE;   
+    } else {
+        status = FALSE;
+    }
+    return status;
 }
 
 
@@ -2909,9 +2915,9 @@ uca_phantom_camera_get_property (GObject *object,
             break;
         // Returns the boolean value of whether the frame trigger process is done yet or not
         case PROP_TRIGGER_RELEASED:
-            gboolean status = check_trigger_status(priv);
-            g_value_set_boolean(value, status);
-    };
+            g_value_set_boolean(value, check_trigger_status(priv));
+            break;
+    }
 }
 
 
@@ -3251,7 +3257,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             g_param_spec_boolean ("trigger-released",
                                   "Whether the triggered frame acquisition process has finished",
                                   "Whether the triggered frame acquisition process has finished",
-                                  FALSE, G_PARAM_READWRITE);
+                                  FALSE, G_PARAM_READABLE);
 
     for (guint i = 0; i < base_overrideables[i]; i++)
         g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
