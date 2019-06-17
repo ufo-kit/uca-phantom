@@ -60,4 +60,9 @@ transmission when the edge case occurred, that an image was finished
 with the pre last packet in a block of the ring buffer.
 - Fixed the bug with the "trigger" method not containing the "rec" 
 command being send to the camera previous to the "trig" command, which 
-is being expected by the camera. 
+is being expected by the camera.
+
+### 0.1.0 - 18.05.2019
+
+- Removed the debugging messages
+- First stable version to be used in production

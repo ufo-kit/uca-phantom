@@ -80,7 +80,7 @@ def create_array_from(camera):
 @click.option('--log', '-l', default=LOG_DEFAULT, help=LOG_HELP)
 def command(log, ip, interface, xnetwork):
     # First we set up the logging for the command
-    logging.basicConfig(
+    loggisetng.basicConfig(
         format=LOG_FORMAT,
         level=LOG_CONFIG[log]
     )
