@@ -38,7 +38,7 @@
 #include <net/if.h> // This is making trouble
 #include <linux/ip.h>
 #include <linux/if_packet.h>
-#include <linux/if_ether.h>
+#include <linux/if_ether.h>b        
 #include <netdb.h>
 #include <uca/uca-camera.h>
 #include "uca-phantom-camera.h"
@@ -46,20 +46,17 @@
 // SSE(128) instructions AVX(256); library intrisincs 
 // UCA UFO SSE 
 
-// ***************************************
-// HARDCODING THE IP ADDRESS OF THE CAMERA
-// ***************************************
+// **************************************
+// HARDCODING CONFIGURATION OF THE CAMERA
+// **************************************
 
-//#define IP_ADDRESS "100.100.189.164"
-#define IP_ADDRESS      "127.0.0.1"
-//#define IP_ADDRESS      "172.16.31.157"
-//#define INTERFACE       "enp3s0f0"
-#define INTERFACE       "enp1s0"
 #define PROTOCOL        ETH_P_ALL
 //#define PROTOCOL        0x88b7
-#define X_NETWORK       TRUE
 
-#define MEMREAD_CHUNK_SIZE  400
+// 26.06.2019
+// Changed the Chunk size from 400 to 100, because after testing with the 2048 pixel width image settings. 400 images
+// cause the ring buffer to overflow.
+#define MEMREAD_CHUNK_SIZE  100
 
 #define UCA_PHANTOM_CAMERA_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE((obj), UCA_TYPE_PHANTOM_CAMERA, UcaPhantomCameraPrivate))
 
@@ -1545,6 +1542,14 @@ unpack_ximg_data (UcaPhantomCameraPrivate *priv)
 /**
  * @brief The Thread, which receives the images using the 10G network
  *
+ * CHANGELOG
+ *
+ * Added 10.04.2019
+ *
+ * Changed 26.06.2019
+ * Removed the hardcoded usage of the defined INTERFACE makro and instead using the interface string in the priv->iface
+ * property to bind the socket now.
+ *
  * @author Jonas Teufel
  *
  * @param priv
@@ -1569,7 +1574,7 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
 
     // This function completely configures the raw socket to be used.
     memset(&ring, 0, sizeof(ring));
-    fd = setup_raw_socket(&ring, INTERFACE);
+    fd = setup_raw_socket(&ring, priv->iface);
 
     memset(&poll_fd, 0, sizeof(poll_fd));
     poll_fd.fd      = fd;
@@ -2835,6 +2840,23 @@ uca_phantom_camera_set_property (GObject *object,
     }
 }
 
+/**
+ * @brief Gets the properties of the phantom camera
+ *
+ * CHANGELOG
+ *
+ * Added ?
+ *
+ * Changed 26.06.2019
+ * Added a case for the "PROP_NETWORK_ADDRESS", as it is supposed to be a read-write property, but did not have a read
+ * functionality defined, which lead to an error, when attempting to read it.
+ * Also added a default case, which returns an empty string to prevent such an error from happening in the future.
+ *
+ * @param object
+ * @param property_id
+ * @param value
+ * @param pspec
+ */
 static void
 uca_phantom_camera_get_property (GObject *object,
                                  guint property_id,
@@ -2915,6 +2937,15 @@ uca_phantom_camera_get_property (GObject *object,
         // Returns the boolean value of whether the frame trigger process is done yet or not
         case PROP_TRIGGER_RELEASED:
             g_value_set_boolean(value, check_trigger_status(priv));
+            break;
+        // 26.06.2019
+        // The network address is a string of the IP address of the phantom camera, which has to be known before
+        // attempting to connect.
+        case PROP_NETWORK_ADDRESS:
+            g_value_set_string(value, priv->ip_address);
+            break;
+        default:
+            g_value_set_string("NO READ FUNCTIONALITY IMPLEMENTED!");
             break;
     }
 }
@@ -3007,6 +3038,8 @@ ufo_net_camera_initable_init (GInitable *initable,
 // **********************************
 // CAMERA OBJECT INITIALIZATION STUFF
 // **********************************
+
+
 
 static void
 uca_phantom_camera_constructed (GObject *object)
@@ -3267,6 +3300,22 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
     g_type_class_add_private (klass, sizeof(UcaPhantomCameraPrivate));
 }
 
+
+
+/**
+ * @brief Initializes important attributes of the camera object
+ *
+ * CHANGELOG
+ *
+ * Added ?
+ *
+ * Changed 26.06.2019
+ * The method now checks for the existance and the values of the environmental variables "PH_NETWORK_ADDRESS" and
+ * "PH_NETWORK_INTERFACE" to possibly set the values for the ip address and the 10G interface specifier (also implicitly
+ * enables 10G transmission).
+ * Also if the IP property has been given via an environmental variable, the init function will also call the connect
+ * function at the end.
+ */
 static void
 uca_phantom_camera_init (UcaPhantomCamera *self)
 {
@@ -3292,6 +3341,20 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->message_queue = g_async_queue_new ();
     priv->result_queue = g_async_queue_new ();
 
+    // 26.06.2019
+    // The g_getenv functions return the string value of the specified environmental variable name if it exists and
+    // NULL if it does not exists.
+    // So the network address and the interface for 10G can be specified using an environmental variable
+    const gchar *phantom_ethernet_interface = g_getenv("PH_NETWORK_INTERFACE");
+    const gchar *phantom_ip_address = g_getenv("PH_NETWORK_ADDRESS");
+    if (phantom_ethernet_interface != NULL) {
+        priv->enable_10ge = TRUE;
+        priv->iface = phantom_ethernet_interface;
+    }
+    if (phantom_ip_address != NULL) {
+        priv->ip_address = phantom_ip_address;
+    }
+
     priv->response_pattern = g_regex_new ("\\s*([A-Za-z0-9]+)\\s*:\\s*{?\\s*\"?([A-Za-z0-9\\s]+)\"?\\s*}?", 0, 0, NULL);
 
     priv->res_pattern = g_regex_new ("\\s*([0-9]+)\\s*x\\s*([0-9]+)", 0, 0, NULL);
@@ -3299,7 +3362,13 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     uca_camera_register_unit (UCA_CAMERA (self), "frame-delay", UCA_UNIT_SECOND);
     uca_camera_register_unit (UCA_CAMERA (self), "sensor-temperature", UCA_UNIT_DEGREE_CELSIUS);
     uca_camera_register_unit (UCA_CAMERA (self), "camera-temperature", UCA_UNIT_DEGREE_CELSIUS);
-    //g_warning("finished init!!");
+
+    // 26.06.2019
+    // If an IP address has been given (via an env variable) it does not make sense to wait any longer before
+    // connecting, so the connect method is called
+    if (priv->ip_address != "") {
+        phantom_connect(priv, NULL);
+    }
 }
 
 G_MODULE_EXPORT GType

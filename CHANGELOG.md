@@ -66,3 +66,27 @@ is being expected by the camera.
 
 - Removed the debugging messages
 - First stable version to be used in production
+
+### 0.1.1 - 26.06.2019
+
+- Changed the Chunk size for the 10G Transmission from 400 to 100, as 
+400 worked fine with 1000ish width frames, but using the 2000ish width 
+frames, they have too many bytes and cause a ring buffer overflow
+- Added the ability to configure the connection to the phantom using 
+OS environmental variables, which are being read out during the init of 
+the camera object. This change has been made to create compatibility 
+with uca tools such as "uca-grab" and "uca-info", which do not provide 
+the ability to define the connection parameters in code, before 
+attempting to interact with the camera object
+ - PH_NETWORK_ADDRESS can be defined to provide the IP address during 
+ the init of the camera object. If this env variable is defined the 
+ connection to the phantom is established during the init of the camera 
+ object as well. There is no further need to set the "connect" flag.
+ - PH_NETWORK_INTERFACE can be defined to pass the string identifier of 
+ the ethernet interface onto which the 10G port of the phantom is 
+ connected. If this variable is defined, the camera object will 
+ automatically be set to 10G mode "enable_10g" flag to TRUE.
+- Fixed a Bug, where the "PROP_NETWORK_ADDRESS" is a read write 
+property of the camera object, but does not have a read option defined.
+- Removed the makros at the start of the code, which defined hardcoded 
+network configuration.
