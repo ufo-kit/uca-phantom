@@ -90,3 +90,11 @@ attempting to interact with the camera object
 property of the camera object, but does not have a read option defined.
 - Removed the makros at the start of the code, which defined hardcoded 
 network configuration.
+
+### 0.1.2 - 30.06.2019
+
+- Fixed a bug, where the program could not be compiled due to syntax 
+error
+- Added support for the "aux-mode" property of the phantom camera. It 
+can be set with an integer from 0-2 to set the function, which the 
+first auxiliary port of the camera will serve

@@ -165,6 +165,11 @@ enum {
     PROP_MEMREAD_CINE,
     PROP_MEMREAD_START,
     PROP_MEMREAD_COUNT,
+    // 30.06.2019
+    // This property will be used to set the "cam.aux1mode" attribute of the camera. This is an integer property, where
+    // the integer value set configures what functionality the first auxiliary port of the camera will have
+    PROP_AUX_ONE_MODE,
+
     N_PROPERTIES
 };
 
@@ -316,6 +321,10 @@ struct _UcaPhantomCameraPrivate {
     // The theory is to delay the sending of the next chunk request until the last image has been unpacked.
     // To hopefully not overflow the ring buffer
     guint                memread_unpack_index;
+    // 30.06.2019
+    // The aux1mode is a property of the camera, which defines the function of the first configurable auxiliary port
+    // of the camera.
+    guint                aux1mode;
 };
 
 typedef struct  {
@@ -355,6 +364,7 @@ static UnitVariable variables[] = {
     { "defc.ptframes",   G_TYPE_UINT,   G_PARAM_READWRITE, PROP_POST_TRIGGER_FRAMES,        TRUE },
     { "c1.frcount",      G_TYPE_UINT,   G_PARAM_READABLE,  PROP_RECORDED_FRAMES,            TRUE },
     { "c1.state",        G_TYPE_STRING, G_PARAM_READABLE,  PROP_CINE_STATE,                 TRUE },
+    { "cam.aux1mode",    G_TYPE_UINT,   G_PARAM_READWRITE, PROP_AUX_ONE_MODE,               TRUE },
     { NULL, }
 };
 
@@ -2945,7 +2955,7 @@ uca_phantom_camera_get_property (GObject *object,
             g_value_set_string(value, priv->ip_address);
             break;
         default:
-            g_value_set_string("NO READ FUNCTIONALITY IMPLEMENTED!");
+            g_value_set_string(value, "NO READ FUNCTIONALITY IMPLEMENTED!");
             break;
     }
 }
@@ -3290,6 +3300,14 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
                                   "Whether the triggered frame acquisition process has finished",
                                   "Whether the triggered frame acquisition process has finished",
                                   FALSE, G_PARAM_READABLE);
+
+    // 30.06.2019
+    // Integer mode proprty setting the function of the first auxiliary port of the camera
+    phantom_properties[PROP_AUX_ONE_MODE] =
+            g_param_spec_uint ("aux-mode",
+                               "The integer specifying which function the first auxiliary port will have",
+                               "The integer specifying which function the first auxiliary port will have",
+                               0, G_MAXUINT, 0, G_PARAM_READWRITE);
 
     for (guint i = 0; i < base_overrideables[i]; i++)
         g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
