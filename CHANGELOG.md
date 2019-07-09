@@ -98,3 +98,5 @@ error
 - Added support for the "aux-mode" property of the phantom camera. It 
 can be set with an integer from 0-2 to set the function, which the 
 first auxiliary port of the camera will serve
+
+### 0.1.3 - 30.
