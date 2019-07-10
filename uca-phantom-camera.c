@@ -2660,6 +2660,31 @@ uca_phantom_camera_grab (UcaCamera *camera,
 // ******************************
 
 /**
+ * @brief Sends a command to the camera, which tells it into which internal cine partition to record following triggers
+ *
+ * NOTE: This command obviously has to be called before any "trigger" commands are being sent to the camera, but it
+ * also has to be called before a hardware trigger can work on the camera!
+ *
+ * CHANGELOG
+ *
+ * Added 10.06.2019
+ *
+ * @param priv
+ */
+static void
+prepare_trigger(UcaPhantomCameraPrivate *priv) {
+    // To simplify things for the user, whenever a trigger is issued, we are assuming that the frames are to be saved
+    // into the first cine. Like this, the user does not have to know about the cone structure, but can simply use
+    // the camera as a black box for image recording into a generic storage unit.
+    const gchar *record_request = "rec 1\r\n";
+    gchar *reply;
+
+    // "phantom_talk" actually sends the request over the ethernet connection
+    reply = phantom_talk(priv, record_request, NULL, 0, NULL);
+    g_free(reply);
+}
+
+/**
  * @brief Sends the instructions to start the acquistion of multiple frames
  *
  * This method sends the instruction to start acquiring multiple frames to the camera. The amount of frames to be
@@ -2677,6 +2702,10 @@ uca_phantom_camera_grab (UcaCamera *camera,
  * Added the "rec" command, which is being send before the trig command, to tell the camera into which cine to
  * put the recording.
  *
+ * Changed 10.06.2019
+ * Moved the "rec" command into its own function "prepare_trigger", which is now being invoked here inside this
+ * function. It was moved, because the "rec" command may also be needed as a separate functionality in the future
+ *
  * @param camera
  * @param error
  */
@@ -2687,18 +2716,31 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     // To simplify things for the user, whenever a trigger is issued, we are assuming that the frames are to be saved
     // into the first cine. Like this, the user does not have to know about the cone structure, but can simply use
     // the camera as a black box for image recording into a generic storage unit.
-    const gchar *record_request = "rec 1\r\n";
     const gchar *trigger_request = "trig\r\n";
     gchar *reply;
 
+    priv = UCA_PHANTOM_CAMERA_GET_PRIVATE(camera);
+
+    // "prepare_trigger" will send the "rec" command, which is needed before a trigger, because it tells the camera
+    // into which cine partition the frames are to be saved
+    prepare_trigger(priv);
     // "phantom talk" actually sends the request string over the network to the camera
-    reply = phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), record_request, NULL, 0, error);
-    reply = phantom_talk (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera), trigger_request, NULL, 0, error);
+    reply = phantom_talk (priv, trigger_request, NULL, 0, error);
+
     g_free(reply);
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 }
 
-
+/**
+ * @brief Returns TRUE, when the camera is currently NOT recording a trigger and FALSE otherwise.
+ *
+ * CHANGELOG
+ *
+ * Added 29.05.2019
+ *
+ * @param priv
+ * @return
+ */
 static gboolean
 check_trigger_status(UcaPhantomCameraPrivate *priv) {
     const gchar *request = "get c1.state\r\n";

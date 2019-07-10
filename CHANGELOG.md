@@ -99,4 +99,9 @@ error
 can be set with an integer from 0-2 to set the function, which the 
 first auxiliary port of the camera will serve
 
-### 0.1.3 - 30.
+### 0.1.3 - 10.06.2019
+
+- Moved the "rec" command, which is being used for the trigger command 
+into its own function, so that it can be used separately in the future, 
+as it turned out it will be important for hardware triggers as well.
+
