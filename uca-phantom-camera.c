@@ -1424,7 +1424,59 @@ unsigned int process_carry(unsigned int carry_length, unsigned long *carry, unsi
     return mask_length;
 }
 
-void unpack_image(UcaPhantomCameraPrivate *priv) {
+
+// GENERAL INFORMATION ABOUT SSE VECTORS
+// =====================================
+// SSE vectors dont really work intuitively, as one would expect.
+// They are 128 Bit integer vectors, but they dont quite work as if they are one single long integer. Consider the
+// following example of a 128 Bit bit series, were each letter represents one byte (8bit) which is the smallest unit
+// in which the data is organized in the vectors:
+// A B C D F G H I J K L M N O P    (128 bit = 16 x 8 bit)
+//
+// 1)
+// The first thing to note is, that the every 2 byte units within a vector are "separate" from each other in a certain
+// sense. So they have to be imagined like this:
+// A B | C D | E F | G H | I J | K L | M N | O P
+// These separations do not let a shift operation pass through! So consider the following example of two such 2 byte
+// blocks next to each other:
+// 11111111 00000000 | 11110000 00000000
+// For a shift to the right by 16 bit one would imagine something like this:
+// 00000000 00000000 | 11111111 00000000
+// When in reality it is this:
+// 00000000 00000000 | 00000000 00000000
+// The separations do not carry on a shift operation! In fact the shift operation is used on each of the 2 byte blocks
+// separately
+//
+// 2)
+// Data is not loaded into the blocks as one would imagine. The two units of a two byte block are switched in their
+// order when the "load" function is used. Imagine the following sequence of bytes being inside an array and the array
+// pointer being used to load the data directly AS A VECTOR:
+// A B C D F G H I J K L M N O P
+// The result will be this vector!
+// B A | D C | F E | H G | J I | L K | N M | P O.
+// But beware the same does not work, when saving the vector as an array again. For example one could make the array
+// given above be interpreted as a SSE vector and then instantly cast it back as a array but then the result would be
+// B A D C F E H G J I L K N M P O!
+// The units are not switched back! this would have to be done manually with a epi8 shuffle for example.
+
+
+
+/**
+ * @brief Unpacks the P10-encoded data data from a 10G transmitted image frame
+ *
+ * CHANGELOG
+ *
+ * Added 25.05.2019
+ *
+ * Changed 11.06.2019
+ * Now the memread index is being incremented at the end of the function
+ *
+ * Changed 12.07.2019
+ * Added comments
+ *
+ * @param priv
+ */
+void unpack_image_p10(UcaPhantomCameraPrivate *priv) {
 
     int new_length = 0;
     int usable_length = 0;
@@ -1432,21 +1484,43 @@ void unpack_image(UcaPhantomCameraPrivate *priv) {
 
     int i,j;
 
+
     priv->xg_buffer_index = 0;
     priv->xg_unpack_index = 0;
 
     __m128i vector, t0, t1, t2, t3, t4, t5, t6, t7, vector_out, k0, k1, k2, k3, k4, k5, k6;
     __m128i temp;
 
+    // THE GENERAL IDEA
+    // The general way this unpacking works due to the weird way the SSE Vectors work is two steps:
+    // 1) Shuffle: Specific parts of the input vector are shuffled into a new position (especially new 8 bit units of
+    // the vector, in such a way, that the following shift operation does not transcend inter block separations. and
+    // then the new part-vectors are AND-masked so that they only contain the relevant bits.
+    // 2) Shift: All the part-vectors are shifted according to what their position demands and then they are combined
+    // by OR-ing them into a single output vector.
+
+    // THE SHUFFLE MASKS
+    // these masks shuffle parts of the input vector into new positions, while also reversing the unit switch within
+    // the two byte blocks, so this does not have to be dealt with when saving the vector into the output array again.
+    // We can see, that every vector shuffles the required bytes for two pixels. This is because due to the symmetric
+    // nature, the required shifts to be in the right position repeat after 4 pixels. So because 8 pixels are being
+    // processed there is a pair of 2 pixels each that require the same shift.
     __m128i sm0 = _mm_setr_epi8(1, 0, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 6, 5, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80);
     __m128i sm1 = _mm_setr_epi8(0x80, 0x80, 2, 1, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 7, 6, 0x80, 0x80, 0x80, 0x80);
     __m128i sm2 = _mm_setr_epi8(0x80, 0x80, 0x80, 0x80, 3, 2, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 8, 7, 0x80, 0x80);
     __m128i sm3 = _mm_setr_epi8(0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 4, 3, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 9, 8);
 
+    // THE AND MASKS
+    // These masks will be applied after the shuffle masks. This is important because while the shuffle masks do indeed
+    // already get rid of most the irrelevant bits within all the other irrelevant 8 bit units, we can see, that 4
+    // 8 bit units, 32 bits in total are being persisted in total by the shuffle operation, but every part vector only
+    // contains 2 pixels, 20 bits of information, so the additional bits have to be cropped by the AND masking.
     uint8_t mb0[16] = {0b11000000, 0b11111111, 0, 0, 0, 0, 0, 0, 0b11000000, 0b11111111, 0, 0, 0, 0, 0, 0};
     uint8_t mb1[16] = {0, 0, 0b11110000, 0b00111111, 0, 0, 0, 0, 0, 0, 0b11110000, 0b00111111, 0, 0, 0, 0};
     uint8_t mb2[16] = {0, 0, 0, 0, 0b11111100, 0b00001111, 0, 0, 0, 0, 0, 0, 0b11111100, 0b00001111, 0, 0};
     uint8_t mb3[16] = {0, 0, 0, 0, 0, 0, 0b11111111, 0b00000011, 0, 0, 0, 0, 0, 0, 0b11111111, 0b00000011};
+    // This is the special mask that is applied to the whole input vector at the beginning, which will only let the
+    // 80 relevant bit stay
     uint8_t maskb[16] = {0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0, 0, 0, 0, 0, 0};
 
     __m128i mask2 = _mm_loadu_si128((__m128i*)&maskb);
@@ -1470,15 +1544,34 @@ void unpack_image(UcaPhantomCameraPrivate *priv) {
         usable_length = new_length - (new_length % 10);
         limit = priv->xg_unpack_index + usable_length;
 
+        // This loop iterates through the raw data buffer und the output buffer (where the unpacked 16 bit pixel
+        // representations are being saved) at the same time.
+        // .
         for (i = priv->xg_unpack_index, j = priv->xg_buffer_index; i<limit ; i+=10, j+=8) {
 
+            // The "data_pointer" variable is a pointer, which points into array, where the raw data from the 10G image
+            // transfer is being buffered.
+            // To process it more effectively the data is loaded into a SSE 128 bit integer vector.
             vector = _mm_loadu_si128((__m128i*)data_pointer);
 
+            // The P10 transfer format is a 10 bit format, which means that every 10 bit in the data array represent
+            // the information about one pixel. This format has to be unpacked into a 16 bit format, where each pixel
+            // is described by 16 bit.
+            // 128 bit of the 10 bit format have already been loaded into "vector", but we only want to process 80 bit
+            // of these, since these 8 pixels will be unpacked into 8x16=128 Bit output vector.
+            // Thus here the vector is being masked, so that only the 80 relevant bits stay.
             vector = _mm_and_si128(vector, mask2);
+
+            // The unpacking process starts with 80 consecutive bits within a 128 bit vector (where the rest besides
+            // the 80 bits is zeros) where each 10 bit block describes one pixel.
+            // The goal is to get a 128 bits of consecutive bits, where each 16 bit block describes one pixel. Example
+            // 111111 110000  --> 111100 111100.
+
             t0 = _mm_and_si128(_mm_shuffle_epi8(vector, sm0), m0) >> 6;
             t1 = _mm_and_si128(_mm_shuffle_epi8(vector, sm1), m1) >> 4;
             t2 = _mm_and_si128(_mm_shuffle_epi8(vector, sm2), m2) >> 2;
             t3 = _mm_and_si128(_mm_shuffle_epi8(vector, sm3), m3);
+
 
             vector_out = _mm_or_si128(_mm_or_si128(t0, t1), _mm_or_si128(t2, t3));
 
@@ -1492,6 +1585,7 @@ void unpack_image(UcaPhantomCameraPrivate *priv) {
         }
 
     }
+    // For some reason it really does not work without this ???
     g_debug("");
 
     // 11.06.2019
@@ -1499,6 +1593,126 @@ void unpack_image(UcaPhantomCameraPrivate *priv) {
     priv->memread_unpack_index += 1;
 }
 
+/**
+ *
+ * CHANGELOG
+ *
+ * Added 14.07.2019
+ *
+ * @param priv
+ */
+void unpack_image_p12l(UcaPhantomCameraPrivate *priv) {
+    int new_length = 0;
+    int usable_length = 0;
+    int limit = 0;
+
+    int i,j;
+
+
+    priv->xg_buffer_index = 0;
+    priv->xg_unpack_index = 0;
+
+    __m128i vector, t0, t1, t2, t3, t4, t5, t6, t7, vector_out, k0, k1, k2, k3, k4, k5, k6;
+    __m128i temp;
+
+    // THE GENERAL IDEA
+    // The general way this unpacking works due to the weird way the SSE Vectors work is two steps:
+    // 1) Shuffle: Specific parts of the input vector are shuffled into a new position (especially new 8 bit units of
+    // the vector, in such a way, that the following shift operation does not transcend inter block separations. and
+    // then the new part-vectors are AND-masked so that they only contain the relevant bits.
+    // 2) Shift: All the part-vectors are shifted according to what their position demands and then they are combined
+    // by OR-ing them into a single output vector.
+
+    // THE SHUFFLE MASKS
+    __m128i sm0 = _mm_setr_epi8(1, 0, 0x80, 0x80, 4, 3, 0x80, 0x80, 7, 6, 0x80, 0x80, 10, 9, 0x80, 0x80);
+    __m128i sm1 = _mm_setr_epi8(0x80, 0x80, 2, 1, 0x80, 0x80, 5, 4, 0x80, 0x80, 8, 7, 0x80, 0x80, 11, 10);
+
+    // THE AND MASKS
+    uint8_t mb0[16] = {0b11110000, 0b11111111, 0, 0, 0b11110000, 0b11111111, 0, 0, 0b11110000, 0b11111111, 0, 0, 0b11110000, 0b11111111, 0, 0};
+    uint8_t mb1[16] = {0, 0, 0b11111111, 0b00001111, 0, 0,  0b11111111, 0b00001111, 0, 0,  0b11111111, 0b00001111, 0, 0,  0b11111111, 0b00001111,};
+
+    uint8_t maskb[16] = {0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111, 0, 0, 0, 0};
+
+    __m128i mask2 = _mm_loadu_si128((__m128i*)&maskb);
+    __m128i m0 = _mm_loadu_si128((__m128i*)&mb0);
+    __m128i m1 = _mm_loadu_si128((__m128i*)&mb1);
+
+    uint16_t *buffer_pointer = priv->xg_buffer;
+
+    uint8_t *data_pointer = priv->xg_data_buffer.in;
+    uint16_t *output_pointer = priv->xg_buffer;
+
+    gsize pixel_count = priv->roi_width * priv->roi_height;
+
+    int counter = 0;
+
+    g_debug("");
+    while (priv->xg_buffer_index < pixel_count) {
+        new_length = priv->xg_total - priv->xg_unpack_index;
+        usable_length = new_length - (new_length % 12);
+        limit = priv->xg_unpack_index + usable_length;
+
+        // This loop iterates through the raw data buffer und the output buffer (where the unpacked 16 bit pixel
+        // representations are being saved) at the same time.
+        // .
+        for (i = priv->xg_unpack_index, j = priv->xg_buffer_index; i<limit ; i+=12, j+=8) {
+
+            // The "data_pointer" variable is a pointer, which points into array, where the raw data from the 10G image
+            // transfer is being buffered.
+            // To process it more effectively the data is loaded into a SSE 128 bit integer vector.
+            vector = _mm_loadu_si128((__m128i*)data_pointer);
+
+            // The P10 transfer format is a 10 bit format, which means that every 10 bit in the data array represent
+            // the information about one pixel. This format has to be unpacked into a 16 bit format, where each pixel
+            // is described by 16 bit.
+            // 128 bit of the 10 bit format have already been loaded into "vector", but we only want to process 80 bit
+            // of these, since these 8 pixels will be unpacked into 8x16=128 Bit output vector.
+            // Thus here the vector is being masked, so that only the 80 relevant bits stay.
+            vector = _mm_and_si128(vector, mask2);
+
+            // The unpacking process starts with 80 consecutive bits within a 128 bit vector (where the rest besides
+            // the 80 bits is zeros) where each 10 bit block describes one pixel.
+            // The goal is to get a 128 bits of consecutive bits, where each 16 bit block describes one pixel. Example
+            // 111111 110000  --> 111100 111100.
+
+            t0 = _mm_and_si128(_mm_shuffle_epi8(vector, sm0), m0) >> 4;
+            t1 = _mm_and_si128(_mm_shuffle_epi8(vector, sm1), m1);
+
+
+            vector_out = _mm_or_si128(t0, t1);
+
+            _mm_storeu_si128((__m128i*)output_pointer, vector_out);
+
+            data_pointer += 12;
+            output_pointer += 8;
+
+            priv->xg_buffer_index += 8;
+            priv->xg_unpack_index += 12;
+        }
+
+    }
+    // For some reason it really does not work without this ???
+    g_debug("");
+
+    // 11.06.2019
+    // Incrementing the memread unpack index, after the image has been received
+    priv->memread_unpack_index += 1;
+}
+
+
+/**
+ *
+ * CHANGELOG
+ *
+ * Added 25.05.2019
+ *
+ * Changed 14.07.2019
+ * Added a switch statement which checks the used image format and according to the format different unpacking functions
+ * are being called. At the moment the supported formats for 10G transfer are "P10" and "P12L"
+ *
+ * @param priv
+ * @return
+ */
 static gpointer
 unpack_ximg_data (UcaPhantomCameraPrivate *priv)
 {
@@ -1522,7 +1736,19 @@ unpack_ximg_data (UcaPhantomCameraPrivate *priv)
                 //g_warning("Init the unpacking");
                 // IMPLEMENT THE UNPACKING
                 priv->xg_unpack_index = 0;
-                unpack_image(priv);
+
+                // 14.07.2019
+                // Added the switch case here. Because previously the default was the the P10 unpacking. Which was
+                // basically the only option. But now a 12bit transfer format is also possible, which obviously
+                // requires a different algorithm.
+                switch (priv->format) {
+                    case IMAGE_FORMAT_P10:
+                        unpack_image_p10(priv);
+                        break;
+                    case IMAGE_FORMAT_P12L:
+                        unpack_image_p12l(priv);
+                        break;
+                }
 
                 result->type = RESULT_IMAGE;
                 result->success = TRUE;
@@ -2037,14 +2263,17 @@ phantom_get_address(UcaPhantomCameraPrivate *priv, GError **error) {
  */
 static void
 phantom_connect (UcaPhantomCameraPrivate *priv, GError **error) {
+    g_warning("Inside connect");
     GSocketAddress *addr;
     addr = phantom_get_address (priv, &priv->construct_error);
-
+    g_warning("After address");
     if (addr != NULL) {
         gchar *addr_string;
         // Establishing a control connection to the camera
+        g_warning("Before connect");
         priv->connection = g_socket_client_connect (priv->client, G_SOCKET_CONNECTABLE (addr), NULL, &priv->construct_error);
         addr_string = g_inet_address_to_string (g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (addr)));
+        g_warning("After connect");
         g_debug ("Connected to %s\n", addr_string);
         g_free (addr_string);
         g_object_unref (addr);
@@ -2060,11 +2289,19 @@ phantom_connect (UcaPhantomCameraPrivate *priv, GError **error) {
 // STARTING AND STOPPING THE READOUT
 // *********************************
 
+/**
+ * @brief This method starts the readout for the camera.
+ *
+ * @authors Matthias Vogelgesang, Jonas Teufel
+ *
+ * CHANGELOG
+ *
+ * Added ??
+ */
 static void
 uca_phantom_camera_start_readout (UcaCamera *camera,
                                   GError **error)
 {
-    //g_warning("START READOUT");
     UcaPhantomCameraPrivate *priv;
     Result *result;
 
@@ -2307,6 +2544,10 @@ int a = 0;
  * Added the additional parameter "frames_start", as the need to additionally supply the offset for chunk transmission
  * arose.
  *
+ * Changed 14.07.2019
+ * Added the "P12L" format to the switch case, so it can be used.
+ * The P12L format can be used for 1G and 10G transmission. It is a 12 bit raw transfer format
+ *
  * @param priv
  * @param cine
  * @param frame_count
@@ -2338,12 +2579,18 @@ create_grab_request(UcaPhantomCameraPrivate *priv,
     const gchar *start = g_strdup_printf("%i", frame_start);
 
     // Now we check the camera object for its setting regarding the transfer format and the network type used.
+    // 14.07.2019
+    // Added the case for the "P12L" image format. This is the image format, which is very relevant for the 10G
+    // transmission, as a 12 bit transfer format does not loose information with a 12 bit sensor depth
     switch (priv->format) {
         case IMAGE_FORMAT_P10:
             format = "P10";
             break;
         case IMAGE_FORMAT_P16:
             format = "P16";
+            break;
+        case IMAGE_FORMAT_P12L:
+            format = "P12L";
             break;
     }
 
@@ -2719,7 +2966,7 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     const gchar *trigger_request = "trig\r\n";
     gchar *reply;
 
-    priv = UCA_PHANTOM_CAMERA_GET_PRIVATE(camera);
+    UcaPhantomCameraPrivate *priv = UCA_PHANTOM_CAMERA_GET_PRIVATE(camera);
 
     // "prepare_trigger" will send the "rec" command, which is needed before a trigger, because it tells the camera
     // into which cine partition the frames are to be saved
@@ -3395,6 +3642,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->enable_10ge = FALSE;
     priv->xg_packet_skipped = FALSE;
     priv->iface = NULL;
+    priv->ip_address = "";
     priv->have_ximg = TRUE;
     priv->xg_packet_amount = 0;
     priv->connected = FALSE;
@@ -3405,8 +3653,10 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     // The g_getenv functions return the string value of the specified environmental variable name if it exists and
     // NULL if it does not exists.
     // So the network address and the interface for 10G can be specified using an environmental variable
+    g_warning("Before env variables");
     const gchar *phantom_ethernet_interface = g_getenv("PH_NETWORK_INTERFACE");
     const gchar *phantom_ip_address = g_getenv("PH_NETWORK_ADDRESS");
+    g_warning("IP: %s", phantom_ip_address);
     if (phantom_ethernet_interface != NULL) {
         priv->enable_10ge = TRUE;
         priv->iface = phantom_ethernet_interface;
@@ -3414,6 +3664,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     if (phantom_ip_address != NULL) {
         priv->ip_address = phantom_ip_address;
     }
+    g_warning("After env variables");
 
     priv->response_pattern = g_regex_new ("\\s*([A-Za-z0-9]+)\\s*:\\s*{?\\s*\"?([A-Za-z0-9\\s]+)\"?\\s*}?", 0, 0, NULL);
 
@@ -3426,9 +3677,11 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     // 26.06.2019
     // If an IP address has been given (via an env variable) it does not make sense to wait any longer before
     // connecting, so the connect method is called
+    g_warning("Before ip");
     if (priv->ip_address != "") {
         phantom_connect(priv, NULL);
     }
+    g_warning("The end");
 }
 
 G_MODULE_EXPORT GType

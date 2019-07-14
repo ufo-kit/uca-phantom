@@ -105,3 +105,16 @@ first auxiliary port of the camera will serve
 into its own function, so that it can be used separately in the future, 
 as it turned out it will be important for hardware triggers as well.
 
+### 0.1.4 - 14.07.2019
+
+- Added "P12L" transfer format support for the 1G transmission
+- Added "P12L" transfer format support for the 10G transmission
+ - Creates a new algorithm using the SSE instructions tp provide 
+ sufficient processing speed for 10G reception of frames
+- The "fmt" parameter is now being sent with the "ximg" command as 
+well.
+- Updated the test.py script
+ - IP address and Interface for 10G connection are now being passed to 
+ the phantom plugin by setting the environmental variables
+ - Added the "format" option to the script, where either "P12L" or 
+ "P10" can be selected.

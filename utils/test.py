@@ -49,6 +49,14 @@ INTERFACE_DEFAULT = 'eth0'
 X_NETWORK_HELP = "This is a boolean flag, that can be set to signify, that the camera is connected using the 10G " \
                  "ethernet connection"
 
+# FORMAT RELATED
+# --------------
+
+FORMAT_OPTIONS = ['P10', 'P12L']
+
+FORMAT_HELP = "This a string identifier for the transfer format into which the image is to be encoded. The two options " \
+              "are: 'P10', which is a 10bit format and 'P12L', which is a 12Bit format."
+
 # CAMERA RELATED VARIABLES
 # ------------------------
 
@@ -78,13 +86,20 @@ def create_array_from(camera):
 @click.option('--interface', '-e', default=INTERFACE_DEFAULT, help=INTERFACE_HELP)
 @click.option('--ip', '-i', default="", help=IP_HELP)
 @click.option('--log', '-l', default=LOG_DEFAULT, help=LOG_HELP)
-def command(log, ip, interface, xnetwork):
+@click.option('--format', '-f', 'fmt', default="P10", type=click.Choice(FORMAT_OPTIONS))
+def command(fmt, log, ip, interface, xnetwork):
     # First we set up the logging for the command
-    loggisetng.basicConfig(
+    logging.basicConfig(
         format=LOG_FORMAT,
         level=LOG_CONFIG[log]
     )
     logger = logging.getLogger('test.py')
+
+    # Exporting the variables
+    logger.debug("Attempting to connect to phantom at IP %s", ip)
+    os.environ['PH_NETWORK_ADDRESS'] = ip
+    if xnetwork:
+        os.environ['PH_NETWORK_INTERFACE'] = interface
 
     # Creating the plugin manager and the camera object
     plugin_manager = Uca.PluginManager()
@@ -92,21 +107,7 @@ def command(log, ip, interface, xnetwork):
     camera = plugin_manager.get_camerav(CAMERA_IDENTIFIER, [])
     logger.debug("Created the camera object")
 
-    # Setting the given ip address to be used for the phantom camera.
-    # The default value is an empty string. Supplying an empty string will tell the camera to use the automatic
-    # UDP discovery protocol instead.
-    camera.props.network_address = ip
-    logger.debug("Attempting to connect to phantom at IP %s", ip)
-    # If the 10G connection is being used, a boolean flag has to be set on the camera and additionally the interface
-    # name to which the camera is connected has to be supplied
-    if xnetwork:
-        camera.props.network_interface = interface
-        camera.props.enable_10ge = True
-        logger.debug("Using 10G network, connected on INTERFACE '%s'", interface)
-
-    # Connecting the camera
-    camera.props.connect = True
-    logger.info("Camera connected!")
+    camera.props.image_format = "image_format_{}".format(fmt.lower())
 
     # Starting the readout
     camera.start_recording()
