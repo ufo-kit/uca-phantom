@@ -118,3 +118,12 @@ well.
  the phantom plugin by setting the environmental variables
  - Added the "format" option to the script, where either "P12L" or 
  "P10" can be selected.
+ 
+### 0.1.5 - 16.07.2019
+ 
+ - Added the additional camera property "external-trigger", which is a 
+ boolean flag, that indicates, whether the use of external triggering 
+ is to be enabled during the next recordings
+ - The "start_recording" method will now send the necessary "rec" 
+ command as a preparation to the camera, so that external triggering 
+ will work

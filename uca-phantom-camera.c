@@ -169,6 +169,10 @@ enum {
     // This property will be used to set the "cam.aux1mode" attribute of the camera. This is an integer property, where
     // the integer value set configures what functionality the first auxiliary port of the camera will have
     PROP_AUX_ONE_MODE,
+    // 16.07.2019
+    // This property will contain the boolean flag, which will indicate if a external trigger will be used for the
+    // recording. If not strictly software triggers enabled
+    PROP_EXTERNAL_TRIGGER,
 
     N_PROPERTIES
 };
@@ -325,6 +329,11 @@ struct _UcaPhantomCameraPrivate {
     // The aux1mode is a property of the camera, which defines the function of the first configurable auxiliary port
     // of the camera.
     guint                aux1mode;
+    // 16.07.2019
+    // This flag will indicate, whether an external trigger source is to be used. If an external trigger source is to
+    // be used the "rec" command, which has to be sent in preparation of a trigger, will be sent during the
+    // "start_recording" process.. Otherwise the "rec" command will be sent together with the software trigger command
+    gboolean             triggered_externally;
 };
 
 typedef struct  {
@@ -2434,6 +2443,11 @@ uca_phantom_camera_stop_readout (UcaCamera *camera,
  * Removed the call to the "phantom_connect" function. The  camera is now no longer connected by calling the
  * "start_recording" function, but rather by setting the "connect" property to true!
  *
+ * Changed 16.07.2019
+ * If the "external-trigger" flag of the camera object has been set to true, the "prepare_trigger" function will be
+ * invoked, which will send a "rec" command to the camera, which will tell the camera into which cine (internal memory
+ * partition the frames are supposed to be saved into)
+ *
  * @param camera
  * @param error
  */
@@ -2444,6 +2458,15 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
     UcaPhantomCameraPrivate *priv;
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
     uca_phantom_camera_start_readout(camera, error);
+
+    // 16.07.2019
+    // If the trigger mode has been set to "EXTERNAL" we first need to send a "rec" command to the camera, so the
+    // camera even knows into which cine (internal memory partition) it should record the frames into, upon being
+    // triggered.
+    // Without the "rec" command, a hardware trigger will not work.
+    if (priv->triggered_externally) {
+        prepare_trigger(priv);
+    }
 }
 
 static void
@@ -3028,6 +3051,10 @@ check_trigger_status(UcaPhantomCameraPrivate *priv) {
  * that keeps track of the memread grab calls back to 0 and also setting the remaining amount to the count specified
  * for the memread count.
  *
+ * Changed 16.07.2019
+ * Added the case for the property PROP_EXTERNAL_TRIGGER, which is a boolean flag to indicate whether or not the
+ * external triggering during a recording is to be enabled.
+ *
  * @param object
  * @param property_id
  * @param value
@@ -3135,6 +3162,11 @@ uca_phantom_camera_set_property (GObject *object,
                 GError *error = NULL;
                 phantom_connect(priv, &error);
             }
+            break;
+        // 16.07.2019
+        // A boolean flag to indicate whether external triggering is to be enabled during a recording.
+        case PROP_EXTERNAL_TRIGGER:
+            priv->triggered_externally = g_value_get_boolean(value);
             break;
     }
 }
@@ -3597,6 +3629,14 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
                                "The integer specifying which function the first auxiliary port will have",
                                "The integer specifying which function the first auxiliary port will have",
                                0, G_MAXUINT, 0, G_PARAM_READWRITE);
+
+    // 16.07.2019
+    // Boolean flag, of whether or not the external triggering is to be enabled during the "start_recording" process
+    phantom_properties[PROP_ENABLE_MEMREAD] =
+            g_param_spec_boolean ("external-trigger",
+                                  "Flag of whether or not the camera is to be triggered externally during recording",
+                                  "Flag of whether or not the camera is to be triggered externally during recording",
+                                  FALSE, G_PARAM_READWRITE);
 
     for (guint i = 0; i < base_overrideables[i]; i++)
         g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
