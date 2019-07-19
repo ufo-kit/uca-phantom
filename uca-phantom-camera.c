@@ -2976,6 +2976,11 @@ prepare_trigger(UcaPhantomCameraPrivate *priv) {
  * Moved the "rec" command into its own function "prepare_trigger", which is now being invoked here inside this
  * function. It was moved, because the "rec" command may also be needed as a separate functionality in the future
  *
+ * Changed 19.07.2019
+ * The actual "trig" command is now only being sent, when the external-trigger flag is set to False. If it is set to
+ * true the trigger method for the camera will merely send the prepare command so that subsequent hardware triggers
+ * work.
+ *
  * @param camera
  * @param error
  */
@@ -2994,10 +2999,17 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     // "prepare_trigger" will send the "rec" command, which is needed before a trigger, because it tells the camera
     // into which cine partition the frames are to be saved
     prepare_trigger(priv);
-    // "phantom talk" actually sends the request string over the network to the camera
-    reply = phantom_talk (priv, trigger_request, NULL, 0, error);
 
-    g_free(reply);
+    // 19.07.2019
+    // The following code will only be executed, when the camera is not set to be triggered externally.
+    // If the camera is set to external trigger, the "trigger" method will merely send a "prepare trigger" command
+    // to the camera, which will enable subsequent external triggers.
+    if (!priv->triggered_externally) {
+        // "phantom talk" actually sends the request string over the network to the camera
+        reply = phantom_talk (priv, trigger_request, NULL, 0, error);
+        g_free(reply);
+    }
+
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 }
 

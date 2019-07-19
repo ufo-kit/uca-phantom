@@ -121,9 +121,15 @@ well.
  
 ### 0.1.5 - 16.07.2019
  
- - Added the additional camera property "external-trigger", which is a 
- boolean flag, that indicates, whether the use of external triggering 
- is to be enabled during the next recordings
- - The "start_recording" method will now send the necessary "rec" 
- command as a preparation to the camera, so that external triggering 
- will work
+- Added the additional camera property "external-trigger", which is a 
+boolean flag, that indicates, whether the use of external triggering 
+is to be enabled during the next recordings
+- The "start_recording" method will now send the necessary "rec" 
+command as a preparation to the camera, so that external triggering 
+will work
+ 
+### 0.1.6 - 19.07.2019
+ 
+- When the "external-trigger" flag is set the "trigger" method will 
+not send a software trigger command, but only the "prepare_trigger" 
+command, so that subsequent hardware triggers will work.
