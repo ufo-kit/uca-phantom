@@ -3645,7 +3645,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
 
     // 16.07.2019
     // Boolean flag, of whether or not the external triggering is to be enabled during the "start_recording" process
-    phantom_properties[PROP_ENABLE_MEMREAD] =
+    phantom_properties[PROP_EXTERNAL_TRIGGER] =
             g_param_spec_boolean ("external-trigger",
                                   "Flag of whether or not the camera is to be triggered externally during recording",
                                   "Flag of whether or not the camera is to be triggered externally during recording",
