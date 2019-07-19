@@ -2294,6 +2294,32 @@ phantom_connect (UcaPhantomCameraPrivate *priv, GError **error) {
 }
 
 
+/**
+ * @brief Sends a command to the camera, which tells it into which internal cine partition to record following triggers
+ *
+ * NOTE: This command obviously has to be called before any "trigger" commands are being sent to the camera, but it
+ * also has to be called before a hardware trigger can work on the camera!
+ *
+ * CHANGELOG
+ *
+ * Added 10.06.2019
+ *
+ * @param priv
+ */
+static void
+prepare_trigger(UcaPhantomCameraPrivate *priv) {
+    // To simplify things for the user, whenever a trigger is issued, we are assuming that the frames are to be saved
+    // into the first cine. Like this, the user does not have to know about the cone structure, but can simply use
+    // the camera as a black box for image recording into a generic storage unit.
+    const gchar *record_request = "rec 1\r\n";
+    gchar *reply;
+
+    // "phantom_talk" actually sends the request over the ethernet connection
+    reply = phantom_talk(priv, record_request, NULL, 0, NULL);
+    g_free(reply);
+}
+
+
 // *********************************
 // STARTING AND STOPPING THE READOUT
 // *********************************
@@ -2928,31 +2954,6 @@ uca_phantom_camera_grab (UcaCamera *camera,
 // ******************************
 // ACQUISITION OF MULTIPLE FRAMES
 // ******************************
-
-/**
- * @brief Sends a command to the camera, which tells it into which internal cine partition to record following triggers
- *
- * NOTE: This command obviously has to be called before any "trigger" commands are being sent to the camera, but it
- * also has to be called before a hardware trigger can work on the camera!
- *
- * CHANGELOG
- *
- * Added 10.06.2019
- *
- * @param priv
- */
-static void
-prepare_trigger(UcaPhantomCameraPrivate *priv) {
-    // To simplify things for the user, whenever a trigger is issued, we are assuming that the frames are to be saved
-    // into the first cine. Like this, the user does not have to know about the cone structure, but can simply use
-    // the camera as a black box for image recording into a generic storage unit.
-    const gchar *record_request = "rec 1\r\n";
-    gchar *reply;
-
-    // "phantom_talk" actually sends the request over the ethernet connection
-    reply = phantom_talk(priv, record_request, NULL, 0, NULL);
-    g_free(reply);
-}
 
 /**
  * @brief Sends the instructions to start the acquistion of multiple frames
