@@ -173,6 +173,13 @@ enum {
     // This property will contain the boolean flag, which will indicate if a external trigger will be used for the
     // recording. If not strictly software triggers enabled
     PROP_EXTERNAL_TRIGGER,
+    // 22.07.2019
+    // This property is a boolean flag, which will be used to enable and disable memgate mode. This is one of the
+    // special programmable functions of the first auxiliary port. When it is enabled no frames are being
+    // saved to memory if the port 1 of the camera is put to HIGH
+    PROP_ENABLE_MEMGATE,
+    PROP_HARDWARE_MEMGATE_ENABLED,
+    PROP_AUX_ONE_PARAMETERS,
 
     N_PROPERTIES
 };
@@ -374,6 +381,8 @@ static UnitVariable variables[] = {
     { "c1.frcount",      G_TYPE_UINT,   G_PARAM_READABLE,  PROP_RECORDED_FRAMES,            TRUE },
     { "c1.state",        G_TYPE_STRING, G_PARAM_READABLE,  PROP_CINE_STATE,                 TRUE },
     { "cam.aux1mode",    G_TYPE_UINT,   G_PARAM_READWRITE, PROP_AUX_ONE_MODE,               TRUE },
+    { "hw.memgateen",    G_TYPE_UINT,   G_PARAM_READWRITE, PROP_HARDWARE_MEMGATE_ENABLED,   TRUE },
+    { "cam.aux1pp",      G_TYPE_STRING, G_PARAM_READWRITE, PROP_AUX_ONE_PARAMETERS,         TRUE },
     { NULL, }
 };
 
@@ -2830,6 +2839,41 @@ camera_grab_single (UcaPhantomCameraPrivate *priv,
 }
 
 /**
+ * Returns the initial offset for the position of the first trigger frame within the cine
+ * memory of the camera, by first requesting the how many frames were recorded and then subtracting
+ * the post trigger frames.
+ *
+ * CHANGELOG
+ *
+ * Added 20.07.2019
+ *
+ * Changed 22.07.2019
+ * Fixed the initialization of the GValue
+ *
+ * @param priv
+ * @return
+ */
+static guint
+get_memread_start(UcaPhantomCameraPrivate *priv) {
+    UnitVariable *var;
+    guint recorded_frames_count;
+    guint start_index;
+
+    // 22.07.2019
+    GValue value = G_VALUE_INIT;
+    g_value_init(&value, G_TYPE_UINT);
+
+    var = phantom_lookup_by_id (PROP_RECORDED_FRAMES);
+    phantom_get(priv, var, &value);
+    recorded_frames_count = g_value_get_uint(&value);
+
+    start_index = recorded_frames_count - priv->memread_count;
+    g_warning("START: %i", start_index);
+
+    return start_index;
+}
+
+/**
  * @brief memread mode: Reads out the cameras internal memory as configured with the camera object
  *
  * The configuration for the memread mode can be made by setting a value to the "memread_count" property of the camera
@@ -2845,6 +2889,10 @@ camera_grab_single (UcaPhantomCameraPrivate *priv,
  * Added 10.05.2019
  *
  * Changed 29.05.2019
+ *
+ * Changed 21.07.2019
+ * A negative memread_index now indicates the start of the readout for a new recording. In such a case the initial
+ * offset of the recording-frames within the cine of the camera is being calculated.
  *
  * @param priv
  * @param data
@@ -2871,6 +2919,15 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
     // image to start working
     start_receiving_image(priv);
 
+    // 21.07.2019
+    // When the memread mode is enabled and this is the first "grab" call to a new readout then the memread index will
+    // have a negative number. A negative memread index indicates, that the readout for a new recording has begun.
+    // In this case the starting index offset for the first frame of the recording within the cine of the camera
+    // is being calculated by the "get_memread_start" function.
+    if (priv->memread_index == -1) {
+        priv->memread_index = get_memread_start(priv);
+    }
+
     if (!priv->memread_request_sent || priv->memread_unpack_index % MEMREAD_CHUNK_SIZE == 0) {
         // The frame count to be calculated is either the chunk size or the remaining amount, if the remaining amount
         // is less than the chunk size. We also need to the update the remaining count afterwards
@@ -2887,6 +2944,7 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
         // that is based on the configuration of the camera object (10G/1G, transfer format etc..).
         // The final string will be put into the given request pointer.
         request = create_grab_request(priv, cine, priv->memread_index, frame_count);
+        g_warning("REQUEST %s 10G %i", request, priv->enable_10ge);
 
         // Sending the request to the camera. In case there is not reply we will return FALSE to indicate that the grab
         // process was not successful. The reply content itself is not relevant. It is only important (just an "OK!")
@@ -2902,6 +2960,14 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
 
     // At the end of each memread grab, we increment the index to know at which position we are
     priv->memread_index ++;
+
+    // 21.07.2019
+    // If this is the last grab call (unpack index has reached the specified count), then we obviously have to reset
+    // the memread index to a negative number to indicate for the next first grab call to recalculate the initial
+    // index offset.
+    if (priv->memread_unpack_index == priv->memread_count) {
+        priv->memread_index = -1;
+    }
 
     // This function will wait (blocking call) until the worker thread has published its results into the internal
     // result queue and then decode the image based on the used image format before copying the results into the
@@ -2997,19 +3063,19 @@ uca_phantom_camera_trigger (UcaCamera *camera,
 
     UcaPhantomCameraPrivate *priv = UCA_PHANTOM_CAMERA_GET_PRIVATE(camera);
 
-    // "prepare_trigger" will send the "rec" command, which is needed before a trigger, because it tells the camera
-    // into which cine partition the frames are to be saved
-    prepare_trigger(priv);
-
     // 19.07.2019
     // The following code will only be executed, when the camera is not set to be triggered externally.
     // If the camera is set to external trigger, the "trigger" method will merely send a "prepare trigger" command
     // to the camera, which will enable subsequent external triggers.
     if (!priv->triggered_externally) {
-        // "phantom talk" actually sends the request string over the network to the camera
-        reply = phantom_talk (priv, trigger_request, NULL, 0, error);
-        g_free(reply);
+        // "prepare_trigger" will send the "rec" command, which is needed before a trigger, because it tells the camera
+        // into which cine partition the frames are to be saved
+        prepare_trigger(priv);
     }
+
+    // "phantom talk" actually sends the request string over the network to the camera
+    reply = phantom_talk (priv, trigger_request, NULL, 0, error);
+    g_free(reply);
 
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 }
@@ -3037,6 +3103,67 @@ check_trigger_status(UcaPhantomCameraPrivate *priv) {
         status = FALSE;
     }
     return status;
+}
+
+// ****************
+// THE MEMGATE MODE
+// ****************
+
+/**
+ * @brief Enables the memgate function of the camera
+ *
+ * Enables the memgate function by setting the according values to the involved properties "cam.aux1mode",
+ * "cam.aux1pp" and "hw.memgateen".
+ *
+ * @author Jonas Teufel
+ *
+ * CHANGELOG
+ *
+ * Added 22.07.2019
+ *
+ * @param priv
+ */
+static void
+enable_memgate_function(UcaPhantomCameraPrivate *priv) {
+    UnitVariable *var;
+
+    var = phantom_lookup_by_id(PROP_AUX_ONE_MODE);
+    phantom_set_string(priv, var, "3");
+
+    var = phantom_lookup_by_id(PROP_HARDWARE_MEMGATE_ENABLED);
+    phantom_set_string(priv, var, "1");
+
+    var = phantom_lookup_by_id(PROP_AUX_ONE_PARAMETERS);
+    phantom_set_string(priv, var, "invert delay 0.000000 filter 0.000000");
+}
+
+/**
+ * @brief Disables the memgate function of the camera
+ *
+ * Disables the memgate function by setting the according values to the involved properties "cam.aux1mode",
+ * "cam.aux1pp" and "hw.memgateen".
+ *
+ * @author Jonas Teufel
+ *
+ * CHANGELOG
+ *
+ * Added 22.07.2019
+ *
+ *
+ * @param priv
+ */
+static void
+disable_memgate_function(UcaPhantomCameraPrivate *priv) {
+    UnitVariable *var;
+
+    var = phantom_lookup_by_id(PROP_AUX_ONE_MODE);
+    phantom_set_string(priv, var, "0");
+
+    var = phantom_lookup_by_id(PROP_HARDWARE_MEMGATE_ENABLED);
+    phantom_set_string(priv, var, "0");
+
+    var = phantom_lookup_by_id(PROP_AUX_ONE_PARAMETERS);
+    phantom_set_string(priv, var, "");
 }
 
 
@@ -3067,6 +3194,15 @@ check_trigger_status(UcaPhantomCameraPrivate *priv) {
  * Changed 16.07.2019
  * Added the case for the property PROP_EXTERNAL_TRIGGER, which is a boolean flag to indicate whether or not the
  * external triggering during a recording is to be enabled.
+ *
+ * Changed 21.07.2019
+ * The memread index is now being set to -1 instead of 0 to clearly indicate, that no grab command has been
+ * called yet. The grab function needs to realize this state to calculate the initial offset of the starting
+ * position within the cine
+ *
+ * Changed 22.07.2019
+ * Added the case for the PROP_ENABLE_MEMGATE, which is a boolean flag to enable and disable the memgate mode of the
+ * first programmable IO of the camera.
  *
  * @param object
  * @param property_id
@@ -3153,7 +3289,11 @@ uca_phantom_camera_set_property (GObject *object,
             // initially.
             priv->memread_remaining = priv->memread_count;
             priv->memread_request_sent = FALSE;
-            priv->memread_index = 0;
+            // 21.07.2019
+            // The memread index is now being set to -1 instead of 0 to clearly indicate, that no grab command has been
+            // called yet. The grab function needs to realize this state to calculate the initial offset of the starting
+            // position within the cine
+            priv->memread_index = -1;
             // 11.06.2019
             // We obviously also need to reset the unpack index
             priv->memread_unpack_index = 0;
@@ -3181,6 +3321,18 @@ uca_phantom_camera_set_property (GObject *object,
         case PROP_EXTERNAL_TRIGGER:
             priv->triggered_externally = g_value_get_boolean(value);
             break;
+        // 22.07.2019
+        // A boolean flag, with which the memgate function can be disabled. The memgate function is when a HIGH signal
+        // on the first programmable IO port of the camera interrupts the saving of all frames to the cine memory.
+        // The process of enabling the memgate mode requires the setting of SEVERAL properties of the camera, thus the
+        // operations are capsuled into their own functions "enable_memgate_function" and
+        // "disable_memgate_function" respectively.
+        case PROP_ENABLE_MEMGATE:
+            if (g_value_get_boolean(value)) {
+                enable_memgate_function(priv);
+            } else {
+                disable_memgate_function(priv);
+            }
     }
 }
 
@@ -3651,6 +3803,14 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
                                   "Flag of whether or not the camera is to be triggered externally during recording",
                                   FALSE, G_PARAM_READWRITE);
 
+    // 22.07.2019
+    // Boolean flag to enable and disable memgate programmable IO function
+    phantom_properties[PROP_ENABLE_MEMGATE] =
+            g_param_spec_boolean ("enable-memgate",
+                                  "Enable memgate aux port 1 function, which will block frame saving in HIGH pulse",
+                                  "Enable memgate aux port 1 function, which will block frame saving in HIGH pulse",
+                                  FALSE, G_PARAM_READWRITE);
+
     for (guint i = 0; i < base_overrideables[i]; i++)
         g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
 
@@ -3706,7 +3866,6 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     // The g_getenv functions return the string value of the specified environmental variable name if it exists and
     // NULL if it does not exists.
     // So the network address and the interface for 10G can be specified using an environmental variable
-    g_warning("Before env variables");
     const gchar *phantom_ethernet_interface = g_getenv("PH_NETWORK_INTERFACE");
     const gchar *phantom_ip_address = g_getenv("PH_NETWORK_ADDRESS");
     g_warning("IP: %s", phantom_ip_address);
@@ -3717,7 +3876,6 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     if (phantom_ip_address != NULL) {
         priv->ip_address = phantom_ip_address;
     }
-    g_warning("After env variables");
 
     priv->response_pattern = g_regex_new ("\\s*([A-Za-z0-9]+)\\s*:\\s*{?\\s*\"?([A-Za-z0-9\\s]+)\"?\\s*}?", 0, 0, NULL);
 
@@ -3730,11 +3888,9 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     // 26.06.2019
     // If an IP address has been given (via an env variable) it does not make sense to wait any longer before
     // connecting, so the connect method is called
-    g_warning("Before ip");
     if (priv->ip_address != "") {
         phantom_connect(priv, NULL);
     }
-    g_warning("The end");
 }
 
 G_MODULE_EXPORT GType

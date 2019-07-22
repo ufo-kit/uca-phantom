@@ -133,3 +133,19 @@ will work
 - When the "external-trigger" flag is set the "trigger" method will 
 not send a software trigger command, but only the "prepare_trigger" 
 command, so that subsequent hardware triggers will work.
+
+### 0.2.0 - 22.07.2019
+
+- So here is how the camera actually behaves: After the "rec" command 
+has been sent, it will continuously record frames and after the "trig" 
+command or a hardware trigger has been received, it will record 
+"defc.ptframes" additional frames.
+ - Thus the grab_memread method was changed in a way, that it will only 
+ readout the LAST "defc.ptframes" from the memory and not starting at 
+ the beginning.
+- Added the boolean flag "enable-memgate", which will enable the 
+memgate mode for the camera. Memgate model will block the saving of 
+frames to the memory, if a HIGH signal is put to the first programmable 
+IO PIN of the camera
+- Renamed the property "memread-enabled" to "enable-memread" so it is 
+more consistent with the other existing boolean flags
