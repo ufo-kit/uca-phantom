@@ -38,13 +38,26 @@
 #include <net/if.h> // This is making trouble
 #include <linux/ip.h>
 #include <linux/if_packet.h>
-#include <linux/if_ether.h>b        
+#include <linux/if_ether.h>
 #include <netdb.h>
 #include <uca/uca-camera.h>
 #include "uca-phantom-camera.h"
 
 // SSE(128) instructions AVX(256); library intrisincs 
 // UCA UFO SSE 
+
+
+// NOTE: JUST ACCESS THE trigger-source directly over g_object_get
+
+// Post trigger frames setzen setzt auch gleichzeitig memread count
+
+// PROPERTY DIE MAX COUNT AUSLIEST
+
+// ERRORS FOR MAX ROI SIZE ALSO BOUNDRIES WITH ROI OFSETS
+
+// BEVORE MEMREAD REQUEST SEND CHECK IF AMOUNT OF READ FRAMES UP TO THIS POIMNT IS ENOUGH FOR CHUNK SIZE
+
+
 
 // **************************************
 // HARDCODING CONFIGURATION OF THE CAMERA
@@ -56,7 +69,12 @@
 // 26.06.2019
 // Changed the Chunk size from 400 to 100, because after testing with the 2048 pixel width image settings. 400 images
 // cause the ring buffer to overflow.
-#define MEMREAD_CHUNK_SIZE  200
+#define MEMREAD_CHUNK_SIZE  100
+
+// 04.11.2019
+// This macro will define the index which will be used as the start index for the very first packet request of the
+// memread requests
+#define INTERNAL_START_INDEX 0
 
 #define UCA_PHANTOM_CAMERA_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE((obj), UCA_TYPE_PHANTOM_CAMERA, UcaPhantomCameraPrivate))
 
@@ -181,6 +199,8 @@ enum {
     PROP_HARDWARE_MEMGATE_ENABLED,
     PROP_AUX_ONE_PARAMETERS,
 
+    PROP_START_INTERNAL_INDEX,
+
     N_PROPERTIES
 };
 
@@ -196,6 +216,7 @@ static gint base_overrideables[] = {
     PROP_ROI_WIDTH_MULTIPLIER,  /* info.xinc */
     PROP_ROI_HEIGHT_MULTIPLIER, /* info.yinc */
     PROP_EXPOSURE_TIME,         /* defc.exp */
+    PROP_TRIGGER_SOURCE,
     PROP_FRAMES_PER_SECOND,     /* defc.rate */
     PROP_RECORDED_FRAMES,
     PROP_HAS_STREAMING,
@@ -282,6 +303,8 @@ struct _UcaPhantomCameraPrivate {
     guint8               mac_address[6];
     ImageFormat          format;
     AcquisitionMode      acquisition_mode;
+
+    UcaCameraTriggerSource uca_trigger_source;
     // 11.06.2019
     // The boolean flag indicating if the plugin is actaully connected (via socket on the ethernet interface) to the
     // camera
@@ -383,6 +406,7 @@ static UnitVariable variables[] = {
     { "cam.aux1mode",    G_TYPE_UINT,   G_PARAM_READWRITE, PROP_AUX_ONE_MODE,               TRUE },
     { "hw.memgateen",    G_TYPE_UINT,   G_PARAM_READWRITE, PROP_HARDWARE_MEMGATE_ENABLED,   TRUE },
     { "cam.aux1pp",      G_TYPE_STRING, G_PARAM_READWRITE, PROP_AUX_ONE_PARAMETERS,         TRUE },
+    { "c1.in",           G_TYPE_INT,    G_PARAM_READABLE,  PROP_START_INTERNAL_INDEX,       TRUE },
     { NULL, }
 };
 
@@ -484,6 +508,8 @@ phantom_talk (UcaPhantomCameraPrivate *priv,
     gboolean output_write_success;
     output_write_success = g_output_stream_write_all (ostream, request, strlen (request), &size, NULL, &error);
 
+    g_warning("C REQUEST: %s", request);
+
     // In case the write did not work, we will inform the user first and then return NULL, terminating this function.
     if (!output_write_success) {
         if (error_loc == NULL) {
@@ -540,6 +566,7 @@ phantom_talk (UcaPhantomCameraPrivate *priv,
     }
 
     // Returning the final reply
+    g_warning("C REPLY: %s", reply);
     return reply;
 }
 
@@ -597,6 +624,7 @@ phantom_get_string_by_name (UcaPhantomCameraPrivate *priv, const gchar *name)
     value = g_match_info_fetch (info, 2);
     g_match_info_free (info);
     g_free (reply);
+    g_warning("GET STRING VALUE: %s", value);
     return value;
 }
 
@@ -685,6 +713,8 @@ phantom_get (UcaPhantomCameraPrivate *priv, UnitVariable *var, GValue *value)
     gchar *var_value;
 
     var_value = phantom_get_string (priv, var);
+    g_warning("TR VALUE: %s", var_value);
+    g_warning("TRIGGER SOURCE %i", priv->uca_trigger_source == UCA_CAMERA_TRIGGER_SOURCE_SOFTWARE);
 
     g_value_init (&reply_value, G_TYPE_STRING);
     g_value_set_string (&reply_value, var_value);
@@ -2492,6 +2522,12 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
 {
     UcaPhantomCameraPrivate *priv;
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
+
+
+    g_warning("trigger source 1: %i", priv->uca_trigger_source);
+    g_object_get(camera, "trigger-source", &priv->uca_trigger_source, NULL);
+    g_warning("trigger source 2: %i", priv->uca_trigger_source);
+
     uca_phantom_camera_start_readout(camera, error);
 
     // 16.07.2019
@@ -2741,6 +2777,8 @@ finalize_receiving_image(UcaPhantomCameraPrivate *priv,
     Result *result;
     gboolean is_success;
 
+    //g_warning("enters finalize");
+
     // This is a blocking call, which will wait until a new "result" has been put into the async queue by the worker
     // thread, which he will do, when the image transmission is finished.
     result = g_async_queue_pop (priv->result_queue);
@@ -2853,24 +2891,38 @@ camera_grab_single (UcaPhantomCameraPrivate *priv,
  * @param priv
  * @return
  */
-static guint
+static gint
 get_memread_start(UcaPhantomCameraPrivate *priv) {
-    UnitVariable *var;
+    UnitVariable *var, *var1;
     guint recorded_frames_count;
+    gint start_internal_index;
     guint start_index;
+    gint test;
 
     // 22.07.2019
+    /*
     GValue value = G_VALUE_INIT;
     g_value_init(&value, G_TYPE_UINT);
+
+    GValue value1 = G_VALUE_INIT;
+    g_value_init(&value1, G_TYPE_INT);
 
     var = phantom_lookup_by_id (PROP_RECORDED_FRAMES);
     phantom_get(priv, var, &value);
     recorded_frames_count = g_value_get_uint(&value);
 
-    start_index = recorded_frames_count - priv->memread_count;
-    g_warning("START: %i", start_index);
+    var1 = phantom_lookup_by_id (PROP_START_INTERNAL_INDEX);
+    phantom_get(priv, var1, &value1);
+    start_internal_index = g_value_get_int(&value1);
 
-    return start_index;
+    start_index =  start_internal_index + recorded_frames_count - priv->memread_count;
+    test =  start_internal_index + recorded_frames_count - priv->memread_count;
+
+    g_warning("internal: %i, recorded: %i, memread: %i", start_internal_index, recorded_frames_count, priv->memread_count);
+
+    g_warning("START: %i, TEST: %i", start_index, test);
+    */
+    return 0;
 }
 
 /**
@@ -2951,6 +3003,8 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
         // Sending the request to the camera. In case there is not reply we will return FALSE to indicate that the grab
         // process was not successful. The reply content itself is not relevant. It is only important (just an "OK!")
         reply = phantom_talk (priv, request, NULL, 0, error);
+        g_warning("REPLY %s", reply);
+
         g_free (request);
         if (reply == NULL)
             return FALSE;
@@ -3218,6 +3272,10 @@ uca_phantom_camera_set_property (GObject *object,
                                  const GValue *value,
                                  GParamSpec *pspec)
 {
+    UcaCameraTriggerSource source;
+    g_object_get(G_OBJECT(object), "trigger-source", &source, NULL);
+    g_warning("source %i", source);
+
     UcaPhantomCameraPrivate *priv;
     UnitVariable *var;
 
@@ -3336,6 +3394,11 @@ uca_phantom_camera_set_property (GObject *object,
             } else {
                 disable_memgate_function(priv);
             }
+            break;
+        case PROP_TRIGGER_SOURCE:
+            g_warning("HERE!");
+            priv->uca_trigger_source = g_value_get_enum(value);
+            break;
     }
 }
 
@@ -3442,6 +3505,18 @@ uca_phantom_camera_get_property (GObject *object,
         // attempting to connect.
         case PROP_NETWORK_ADDRESS:
             g_value_set_string(value, priv->ip_address);
+            break;
+        case PROP_ENABLE_MEMREAD:
+            g_value_set_boolean(value, priv->enable_memread);
+            break;
+        case PROP_EXTERNAL_TRIGGER:
+            g_value_set_boolean(value, priv->triggered_externally);
+            break;
+        case PROP_MEMREAD_COUNT:
+            g_value_set_int(value, priv->memread_count);
+            break;
+        case PROP_TRIGGER_SOURCE:
+            g_value_set_enum(value, priv->uca_trigger_source);
             break;
         default:
             g_value_set_string(value, "NO READ FUNCTIONALITY IMPLEMENTED!");
@@ -3719,6 +3794,12 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             "Number of post-trigger frames",
             0, G_MAXUINT, 0, G_PARAM_READWRITE);
 
+    phantom_properties[PROP_START_INTERNAL_INDEX] =
+            g_param_spec_int("start-internal-index",
+                               "Number of post-trigger frames",
+                               "Number of post-trigger frames",
+                               -10000, 10000, 0, G_PARAM_READABLE);
+
     phantom_properties[PROP_IMAGE_FORMAT] =
         g_param_spec_enum ("image-format",
             "Image format",
@@ -3843,7 +3924,6 @@ static void
 uca_phantom_camera_init (UcaPhantomCamera *self)
 {
     UcaPhantomCameraPrivate *priv;
-
     self->priv = priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (self);
 
     priv->construct_error = NULL;
@@ -3880,13 +3960,17 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
         priv->ip_address = phantom_ip_address;
     }
 
-    priv->response_pattern = g_regex_new ("\\s*([A-Za-z0-9]+)\\s*:\\s*{?\\s*\"?([A-Za-z0-9\\s]+)\"?\\s*}?", 0, 0, NULL);
+    priv->response_pattern = g_regex_new ("\\s*([A-Za-z0-9]+)\\s*:\\s*{?\\s*\"?(-?[A-Za-z0-9\\s]+)\"?\\s*}?", 0, 0, NULL);
 
     priv->res_pattern = g_regex_new ("\\s*([0-9]+)\\s*x\\s*([0-9]+)", 0, 0, NULL);
 
     uca_camera_register_unit (UCA_CAMERA (self), "frame-delay", UCA_UNIT_SECOND);
     uca_camera_register_unit (UCA_CAMERA (self), "sensor-temperature", UCA_UNIT_DEGREE_CELSIUS);
     uca_camera_register_unit (UCA_CAMERA (self), "camera-temperature", UCA_UNIT_DEGREE_CELSIUS);
+
+    // new
+    priv->uca_trigger_source = UCA_CAMERA_TRIGGER_SOURCE_SOFTWARE;
+
 
     // 26.06.2019
     // If an IP address has been given (via an env variable) it does not make sense to wait any longer before

@@ -21,6 +21,7 @@
 #include <glib-object.h>
 #include <uca/uca-camera.h>
 
+
 G_BEGIN_DECLS
 
 #define UCA_TYPE_PHANTOM_CAMERA             (uca_phantom_camera_get_type())
