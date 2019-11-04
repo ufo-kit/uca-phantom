@@ -65,6 +65,12 @@
 
 // PUBLIC GITHUB ZIEHEN
 
+// DOCUMENTATION SCHREIBEN
+
+// KEINE ROOT RECHTE FUER PACKET_MAP brauchen? CAP_NET_RAW permission setting for user
+// CAP_NET_RAW, CAP_IPC_LOCK
+
+
 // **************************************
 // HARDCODING CONFIGURATION OF THE CAMERA
 // **************************************
