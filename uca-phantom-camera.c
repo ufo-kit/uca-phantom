@@ -2940,7 +2940,6 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
         }
 
         g_warning("REMAINING %i", priv->memread_remaining);
-        g_warning("POST TRIGGER FRAMES %i", priv->)
 
         // Here we have to send a new request
         // Given the frame count and the cine source, this function will generate a request string for the camera,
@@ -3739,7 +3738,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
         g_param_spec_boolean ("enable-10ge",
             "Enable 10GE data transmission",
             "Enable 10GE data transmission",
-            FALSE, G_PARAM_READWRITE);
+            TRUE, G_PARAM_READWRITE);
 
     phantom_properties[PROP_NETWORK_INTERFACE] =
         g_param_spec_string ("network-interface",
