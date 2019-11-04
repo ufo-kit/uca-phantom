@@ -56,7 +56,7 @@
 // 26.06.2019
 // Changed the Chunk size from 400 to 100, because after testing with the 2048 pixel width image settings. 400 images
 // cause the ring buffer to overflow.
-#define MEMREAD_CHUNK_SIZE  100
+#define MEMREAD_CHUNK_SIZE  200
 
 #define UCA_PHANTOM_CAMERA_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE((obj), UCA_TYPE_PHANTOM_CAMERA, UcaPhantomCameraPrivate))
 
@@ -2939,6 +2939,9 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
             priv->memread_remaining -= MEMREAD_CHUNK_SIZE;
         }
 
+        g_warning("REMAINING %i", priv->memread_remaining);
+        g_warning("POST TRIGGER FRAMES %i", priv->)
+
         // Here we have to send a new request
         // Given the frame count and the cine source, this function will generate a request string for the camera,
         // that is based on the configuration of the camera object (10G/1G, transfer format etc..).
@@ -2957,6 +2960,7 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
         // After the request has been sent we set the flag to TRUE to prevent any more requests from being sent.
         priv->memread_request_sent = TRUE;
     }
+
 
     // At the end of each memread grab, we increment the index to know at which position we are
     priv->memread_index ++;
