@@ -47,9 +47,13 @@
 // UCA UFO SSE 
 
 
+// TODO:
+
 // NOTE: JUST ACCESS THE trigger-source directly over g_object_get
 
 // Post trigger frames setzen setzt auch gleichzeitig memread count
+
+// TRIGGER FLANKE EVTL EINSTELLEN
 
 // PROPERTY DIE MAX COUNT AUSLIEST
 
@@ -57,7 +61,9 @@
 
 // BEVORE MEMREAD REQUEST SEND CHECK IF AMOUNT OF READ FRAMES UP TO THIS POIMNT IS ENOUGH FOR CHUNK SIZE
 
+// SENSOR PIXEL HEIGHT AUCH VON DER CAMERA AUSLESEN
 
+// PUBLIC GITHUB ZIEHEN
 
 // **************************************
 // HARDCODING CONFIGURATION OF THE CAMERA
