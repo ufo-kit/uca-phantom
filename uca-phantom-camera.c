@@ -55,11 +55,11 @@
 
 // TRIGGER FLANKE EVTL EINSTELLEN
 
-// PROPERTY DIE MAX COUNT AUSLIEST
+//// PROPERTY DIE MAX COUNT AUSLIEST
 
 // ERRORS FOR MAX ROI SIZE ALSO BOUNDRIES WITH ROI OFSETS
 
-// BEVORE MEMREAD REQUEST SEND CHECK IF AMOUNT OF READ FRAMES UP TO THIS POIMNT IS ENOUGH FOR CHUNK SIZE
+//// BEVORE MEMREAD REQUEST SEND CHECK IF AMOUNT OF READ FRAMES UP TO THIS POIMNT IS ENOUGH FOR CHUNK SIZE
 
 // SENSOR PIXEL HEIGHT AUCH VON DER CAMERA AUSLESEN
 
@@ -210,8 +210,14 @@ enum {
     PROP_ENABLE_MEMGATE,
     PROP_HARDWARE_MEMGATE_ENABLED,
     PROP_AUX_ONE_PARAMETERS,
-
-    PROP_START_INTERNAL_INDEX,
+    // 05.11.2019
+    // PROP_FRAME_SIZE will be used to store the value of "c1.frsize", which is the size of a single frame within the
+    // first cine partition. PROP_MEMORY_SIZE will hold the value of "c1.frspace", which is the total space within the
+    // cine. PROP_MAX_FRAMES will be a computed property from the two previous ones and it will tell, what the maxmimum
+    // amount of frames is to be put into the cine.
+    PROP_FRAME_SIZE,
+    PROP_MEMORY_SIZE,
+    PROP_MAX_FRAMES,
 
     N_PROPERTIES
 };
@@ -386,6 +392,14 @@ typedef struct  {
     gboolean     handle_automatically;
 } UnitVariable;
 
+
+// 05.11.2019
+// Set the "defc.ptframes" to NOT be handled automatically, as the memread count has to be set as well in a manual
+// implementation of the setter handling.
+
+// The last item in the list is the boolean flag to indicate, whether the property should be handled automatically.
+// for automatically handled properties there does not have to be new case defined/ does not have to be manually
+// implemented. The handling is automtically done by sending the according requests to the camera.
 static UnitVariable variables[] = {
     { "info.sensor",     G_TYPE_UINT,   G_PARAM_READABLE,  PROP_SENSOR_TYPE,                TRUE },
     { "info.snsversion", G_TYPE_UINT,   G_PARAM_READABLE,  PROP_SENSOR_VERSION,             TRUE },
@@ -412,13 +426,15 @@ static UnitVariable variables[] = {
     { "cam.cines",       G_TYPE_UINT,   G_PARAM_READWRITE, PROP_NUM_CINES,                  FALSE },
     { "defc.rate",       G_TYPE_FLOAT,  G_PARAM_READWRITE, PROP_FRAMES_PER_SECOND,          TRUE },
     { "defc.exp",        G_TYPE_UINT,   G_PARAM_READWRITE, PROP_EXPOSURE_TIME,              FALSE },
-    { "defc.ptframes",   G_TYPE_UINT,   G_PARAM_READWRITE, PROP_POST_TRIGGER_FRAMES,        TRUE },
+    { "defc.ptframes",   G_TYPE_UINT,   G_PARAM_READWRITE, PROP_POST_TRIGGER_FRAMES,        FALSE },
     { "c1.frcount",      G_TYPE_UINT,   G_PARAM_READABLE,  PROP_RECORDED_FRAMES,            TRUE },
     { "c1.state",        G_TYPE_STRING, G_PARAM_READABLE,  PROP_CINE_STATE,                 TRUE },
     { "cam.aux1mode",    G_TYPE_UINT,   G_PARAM_READWRITE, PROP_AUX_ONE_MODE,               TRUE },
     { "hw.memgateen",    G_TYPE_UINT,   G_PARAM_READWRITE, PROP_HARDWARE_MEMGATE_ENABLED,   TRUE },
     { "cam.aux1pp",      G_TYPE_STRING, G_PARAM_READWRITE, PROP_AUX_ONE_PARAMETERS,         TRUE },
-    { "c1.in",           G_TYPE_INT,    G_PARAM_READABLE,  PROP_START_INTERNAL_INDEX,       TRUE },
+    // 05.11.2019
+    { "c1.frsize",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_FRAME_SIZE,                 TRUE },
+    { "c1.frspace",      G_TYPE_UINT,   G_PARAM_READABLE,  PROP_FRAME_SPACE,                TRUE },
     { NULL, }
 };
 
@@ -2900,6 +2916,16 @@ camera_grab_single (UcaPhantomCameraPrivate *priv,
  * Changed 22.07.2019
  * Fixed the initialization of the GValue
  *
+ * Deprecated 05.11.2019
+ * This whole function was build due to the assumption, that the index of images starts at zero, then start to record
+ * images and once the trigger signal has been received, the camera will save only as many post trigger frames as
+ * specified and then mark the cine partition as finished.
+ * This is not how it works. After the trigger signal has been received, the internal index, that references frames
+ * is being rebased. The first frame after the trigger has index zero. The maximum index is exactly the number of
+ * post trigger frames. The frames recorded previous to the trigger will have negative indices.
+ *
+ * @deprecated
+ *
  * @param priv
  * @return
  */
@@ -2912,7 +2938,6 @@ get_memread_start(UcaPhantomCameraPrivate *priv) {
     gint test;
 
     // 22.07.2019
-    /*
     GValue value = G_VALUE_INIT;
     g_value_init(&value, G_TYPE_UINT);
 
@@ -2923,18 +2948,48 @@ get_memread_start(UcaPhantomCameraPrivate *priv) {
     phantom_get(priv, var, &value);
     recorded_frames_count = g_value_get_uint(&value);
 
-    var1 = phantom_lookup_by_id (PROP_START_INTERNAL_INDEX);
-    phantom_get(priv, var1, &value1);
-    start_internal_index = g_value_get_int(&value1);
+    start_index = recorded_frames_count - priv->memread_count;
 
-    start_index =  start_internal_index + recorded_frames_count - priv->memread_count;
-    test =  start_internal_index + recorded_frames_count - priv->memread_count;
+    return start_index;
+}
 
-    g_warning("internal: %i, recorded: %i, memread: %i", start_internal_index, recorded_frames_count, priv->memread_count);
+/**
+ * This method will block the program execution for as long as the count of recorded frames within the camera is not
+ * sufficient to request another chunk of images.
+ *
+ * CHANGELOG
+ *
+ * Added 05.11.2019
+ *
+ * Changed 06.11.2019
+ * Added a differentiation of cases for the edge case of the next request to be sent not being the full chunk size,
+ * but a few remaining frames instead. In such a case the program would hang, when waiting for the camera to suffice
+ * for the transmission of a full chunk.
+ *
+ * @param priv
+ * @return
+ */
+static void
+wait_for_frames(UcaPhantomCameraPrivate *priv) {
+    // Setting up the requesting of a value from the phantom camera
+    UnitVariable *var;
+    guint recorded_frames_count;
 
-    g_warning("START: %i, TEST: %i", start_index, test);
-    */
-    return 0;
+    GValue value = G_VALUE_INIT;
+    g_value_init(&value, G_TYPE_UINT);
+
+    // 06.11.2019
+    // Here we have to differentiate if the next request will request the full chunk size or if the remaining frames
+    // for a full transmission is smaller than the chunk size
+    guint request_size = (MEMREAD_CHUNK_SIZE < priv->memread_remaining) ?  MEMREAD_CHUNK_SIZE : priv->memread_remaining;
+    // Waiting for as long as the recorded frames do not suffice for the request of one "chunk"
+    while (recorded_frames_count < request_size) {
+
+        // Getting the frame count
+        var = phantom_lookup_by_id (PROP_RECORDED_FRAMES);
+        phantom_get(priv, var, &value);
+        recorded_frames_count = g_value_get_uint(&value);
+    }
 }
 
 /**
@@ -2957,6 +3012,9 @@ get_memread_start(UcaPhantomCameraPrivate *priv) {
  * Changed 21.07.2019
  * A negative memread_index now indicates the start of the readout for a new recording. In such a case the initial
  * offset of the recording-frames within the cine of the camera is being calculated.
+ *
+ * Changed 05.11.2019
+ * Removed the call to the get_memread_start function, as it is not necessary to compute that.
  *
  * @param priv
  * @param data
@@ -2989,7 +3047,11 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
     // In this case the starting index offset for the first frame of the recording within the cine of the camera
     // is being calculated by the "get_memread_start" function.
     if (priv->memread_index == -1) {
-        priv->memread_index = get_memread_start(priv);
+
+        // 05.11.2019
+        // It turns out the get memread start method is not necessary, as the internal index within the camera will
+        // always reference the first frame after the trigger with index 0
+        priv->memread_index = 0;
     }
 
     if (!priv->memread_request_sent || priv->memread_unpack_index % MEMREAD_CHUNK_SIZE == 0) {
@@ -3003,19 +3065,24 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
             priv->memread_remaining -= MEMREAD_CHUNK_SIZE;
         }
 
-        g_warning("REMAINING %i", priv->memread_remaining);
+        //g_warning("REMAINING %i", priv->memread_remaining);
+
+        // 05.11.2019
+        // This function will block the program execution for as long as the amount of recorded frames within the
+        // camera is not sufficient to request another chunk
+        wait_for_frames(priv);
 
         // Here we have to send a new request
         // Given the frame count and the cine source, this function will generate a request string for the camera,
         // that is based on the configuration of the camera object (10G/1G, transfer format etc..).
         // The final string will be put into the given request pointer.
         request = create_grab_request(priv, cine, priv->memread_index, frame_count);
-        g_warning("REQUEST %s 10G %i", request, priv->enable_10ge);
+        //g_warning("REQUEST %s 10G %i", request, priv->enable_10ge);
 
         // Sending the request to the camera. In case there is not reply we will return FALSE to indicate that the grab
         // process was not successful. The reply content itself is not relevant. It is only important (just an "OK!")
         reply = phantom_talk (priv, request, NULL, 0, error);
-        g_warning("REPLY %s", reply);
+        //g_warning("REPLY %s", reply);
 
         g_free (request);
         if (reply == NULL)
@@ -3235,6 +3302,10 @@ disable_memgate_function(UcaPhantomCameraPrivate *priv) {
     phantom_set_string(priv, var, "");
 }
 
+// **************************
+// COMPUTED CAMERA ATTRIBUTES
+// **************************
+
 
 // *************************************
 // GETTING AND SETTING CAMERA ATTRIBUTES
@@ -3273,6 +3344,13 @@ disable_memgate_function(UcaPhantomCameraPrivate *priv) {
  * Added the case for the PROP_ENABLE_MEMGATE, which is a boolean flag to enable and disable the memgate mode of the
  * first programmable IO of the camera.
  *
+ * Changed 05.11.2019
+ * Added the setter for PROP_POST_TRIGGER_FRAMES. This value defines how many frames the camera will record after a
+ * trigger event has been received.
+ * Additionally to setting the post trigger frames within the camera, the memread count is also set to the very same
+ * value within this setter, as in 99% of all cases you would want it to be the same anyways. In case you dont, you can
+ * still manually change it afterwards.
+ *
  * @param object
  * @param property_id
  * @param value
@@ -3284,10 +3362,6 @@ uca_phantom_camera_set_property (GObject *object,
                                  const GValue *value,
                                  GParamSpec *pspec)
 {
-    UcaCameraTriggerSource source;
-    g_object_get(G_OBJECT(object), "trigger-source", &source, NULL);
-    g_warning("source %i", source);
-
     UcaPhantomCameraPrivate *priv;
     UnitVariable *var;
 
@@ -3407,9 +3481,31 @@ uca_phantom_camera_set_property (GObject *object,
                 disable_memgate_function(priv);
             }
             break;
-        case PROP_TRIGGER_SOURCE:
-            g_warning("HERE!");
-            priv->uca_trigger_source = g_value_get_enum(value);
+        // 05.11.2019
+        // This handles the case of the post-trigger-frames being set. This number defines how many frames the camera
+        // records after receiving a trigger event.
+        // The memread count is additionally being set to the very same value.
+        case PROP_POST_TRIGGER_FRAMES:
+            // First we actually set the camera to this value
+            phantom_set (priv, var, value);
+
+            // but then we also have to set the memread count to the same value!
+            // The following code section has been copied from the previous setter of memread-count.
+            priv->memread_count = g_value_get_uint(value);
+            // 29.05.2019
+            // Whenever a new memread count is specified (indicating the intention to read out more frames) the index,
+            // which keeps track of the grab calls needs to be reset and the remaining count is set to the total amount
+            // initially.
+            priv->memread_remaining = priv->memread_count;
+            priv->memread_request_sent = FALSE;
+            // 21.07.2019
+            // The memread index is now being set to -1 instead of 0 to clearly indicate, that no grab command has been
+            // called yet. The grab function needs to realize this state to calculate the initial offset of the starting
+            // position within the cine
+            priv->memread_index = -1;
+            // 11.06.2019
+            // We obviously also need to reset the unpack index
+            priv->memread_unpack_index = 0;
             break;
     }
 }
@@ -3425,6 +3521,14 @@ uca_phantom_camera_set_property (GObject *object,
  * Added a case for the "PROP_NETWORK_ADDRESS", as it is supposed to be a read-write property, but did not have a read
  * functionality defined, which lead to an error, when attempting to read it.
  * Also added a default case, which returns an empty string to prevent such an error from happening in the future.
+ *
+ * Changed 05.11.2019
+ * Added a case for PROP_MAX_FRAMES, which will return the maximum number of frames, that fit into the primary cine
+ * memory. It is a computed memory and for the calcualtion it recursively calls this function to get the values of
+ * PROP_FRAME_SIZE and PROP_MEMORY_SIZE.
+ *
+ * Added a case for PROP_POST_TRIGGER_FRAMES. This is not being handled automatically anymore. It holds the value of
+ * how many frames the camera will record, after a trigger event occcured.
  *
  * @param object
  * @param property_id
@@ -3530,6 +3634,30 @@ uca_phantom_camera_get_property (GObject *object,
         case PROP_TRIGGER_SOURCE:
             g_value_set_enum(value, priv->uca_trigger_source);
             break;
+        // 05.11.2019
+        // This property will return the maximum number of frames that can be fit into the primary cine memory.
+        case PROP_MAX_FRAMES:
+            GValue value_frame_size, value_memory_size;
+            guint frame_size, memory_size, max_frames;
+
+            // Getting the frame size
+            uca_phantom_camera_get_property(object, PROP_FRAME_SIZE, &value_frame_size, G_TYPE_UINT);
+            frame_size = g_value_get_uint(value_frame_size);
+
+            // Getting the total memory size
+            uca_phantom_camera_get_property(object, PROP_MEMORY_SIZE, &value_memory_size, G_TYPE_UINT);
+            memory_size = g_value_get_uint(value_frame_size);
+
+            // Computing the frame amount as the amount of frame sizes, that can be fit into the total cine memory size
+            max_frames = memory_size / frame_size;
+
+            g_value_set_uint(fvalue, frame_size);
+            break;
+        // 05.11.2019
+        // The post trigger frames are now not being handled automatically anymore, because in the setter we have to
+        // include the custom code, that sets the memread_count variable to the same value...
+        case PROP_POST_TRIGGER_FRAMES:
+            phantom_get (priv, var, value);
         default:
             g_value_set_string(value, "NO READ FUNCTIONALITY IMPLEMENTED!");
             break;
@@ -3642,6 +3770,17 @@ uca_phantom_camera_initable_iface_init (GInitableIface *iface)
     iface->init = ufo_net_camera_initable_init;
 }
 
+/**
+ * Sets up the camera class
+ *
+ * Added ?
+ *
+ * Changed 05.11.2019
+ * Added the registration for the property PROP_MAX_FRAMES, which will hold the value of the maximum amount of frames,
+ * which will fit into the primary cine partition.
+ *
+ * @param klass
+ */
 static void
 uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
 {
@@ -3806,12 +3945,6 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             "Number of post-trigger frames",
             0, G_MAXUINT, 0, G_PARAM_READWRITE);
 
-    phantom_properties[PROP_START_INTERNAL_INDEX] =
-            g_param_spec_int("start-internal-index",
-                               "Number of post-trigger frames",
-                               "Number of post-trigger frames",
-                               -10000, 10000, 0, G_PARAM_READABLE);
-
     phantom_properties[PROP_IMAGE_FORMAT] =
         g_param_spec_enum ("image-format",
             "Image format",
@@ -3907,6 +4040,15 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
                                   "Enable memgate aux port 1 function, which will block frame saving in HIGH pulse",
                                   FALSE, G_PARAM_READWRITE);
 
+    // 05.11.2019
+    // This is the property, which will indicate the maximum amount of frames, that will fit into the primary
+    // cine partition
+    phantom_properties[PROP_MAX_FRAMES] =
+            g_param_spec_guint ("max-frames",
+                                "The maximum number of frames fitting into the primary cine partition",
+                                "The maximum number of frames fitting into the primary cine partition",
+                                0, G_MAXUINT, 0, G_PARAM_READABLE);
+
     for (guint i = 0; i < base_overrideables[i]; i++)
         g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
 
@@ -3931,6 +4073,10 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
  * enables 10G transmission).
  * Also if the IP property has been given via an environmental variable, the init function will also call the connect
  * function at the end.
+ *
+ * Changed 05.11.2019
+ * Extended the regex pattern for matching the responses of the camera to also recognize negative numbers, which it was
+ * previously unable to do.
  */
 static void
 uca_phantom_camera_init (UcaPhantomCamera *self)
@@ -3972,6 +4118,9 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
         priv->ip_address = phantom_ip_address;
     }
 
+    // 05.11.2019
+    // This regex pattern was actually not able to detect a negative number, so it has been extended to recognize
+    // an optional dash in front of any numerals within the reply message.
     priv->response_pattern = g_regex_new ("\\s*([A-Za-z0-9]+)\\s*:\\s*{?\\s*\"?(-?[A-Za-z0-9\\s]+)\"?\\s*}?", 0, 0, NULL);
 
     priv->res_pattern = g_regex_new ("\\s*([0-9]+)\\s*x\\s*([0-9]+)", 0, 0, NULL);
@@ -3979,10 +4128,6 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     uca_camera_register_unit (UCA_CAMERA (self), "frame-delay", UCA_UNIT_SECOND);
     uca_camera_register_unit (UCA_CAMERA (self), "sensor-temperature", UCA_UNIT_DEGREE_CELSIUS);
     uca_camera_register_unit (UCA_CAMERA (self), "camera-temperature", UCA_UNIT_DEGREE_CELSIUS);
-
-    // new
-    priv->uca_trigger_source = UCA_CAMERA_TRIGGER_SOURCE_SOFTWARE;
-
 
     // 26.06.2019
     // If an IP address has been given (via an env variable) it does not make sense to wait any longer before

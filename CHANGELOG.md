@@ -149,3 +149,31 @@ frames to the memory, if a HIGH signal is put to the first programmable
 IO PIN of the camera
 - Renamed the property "memread-enabled" to "enable-memread" so it is 
 more consistent with the other existing boolean flags
+
+### 1.0.0 - 05.11.2019
+
+- Grab process
+    - When using the memread mode, the  start index for requesting the 
+    frames from the camera does not longer need to be calculated.
+    The function "get_memread_start" was deprecated. The index for the 
+    first post trigger frame is always zero
+    - It is now possible to start grabbing frames directly after the 
+    trigger hab been issued on the camera. The grab_memread function 
+    will wait until the camera has enough recorded frames to suffice 
+    the request of a new chunk
+- properties
+    - Added PROP_FRAME_SIZE, which holds the size of one frame
+    - Added PROP_MEMORY_SIZE, which holds the total size of the primary 
+    cine partition
+    - Added PROP_MAX_FRAMES, which is a computed property and holds 
+    the maximum number of frames fitting into the cine partition.
+    - PROP_POST_TRIGGER_FRAMES is now not handled automatically anymore.
+    It has its own setter case. Within this case the memread count is 
+    also being set to the very same value.
+- There has been a change to the interfacing: For using the memread 
+mode, the memread count does not have to be set manually anymore. It 
+will be set to the same value as the post trigger frames.
+Although, there still is the posibility of changing the memread count 
+manually afterwards.
+    
+    
