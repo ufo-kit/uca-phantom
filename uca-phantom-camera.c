@@ -49,23 +49,23 @@
 
 // TODO:
 
-// NOTE: JUST ACCESS THE trigger-source directly over g_object_get
+// NOTE: JUST ACCESS THE trigger-source directly over g_object_get (important)
 
-// Post trigger frames setzen setzt auch gleichzeitig memread count
+//// Post trigger frames setzen setzt auch gleichzeitig memread count
 
-// TRIGGER FLANKE EVTL EINSTELLEN
+// TRIGGER FLANKE EVTL EINSTELLEN (low)
 
 //// PROPERTY DIE MAX COUNT AUSLIEST
 
-// ERRORS FOR MAX ROI SIZE ALSO BOUNDRIES WITH ROI OFSETS
+// ERRORS FOR MAX ROI SIZE ALSO BOUNDRIES WITH ROI OFSETS (medium)
 
 //// BEVORE MEMREAD REQUEST SEND CHECK IF AMOUNT OF READ FRAMES UP TO THIS POIMNT IS ENOUGH FOR CHUNK SIZE
 
-// SENSOR PIXEL HEIGHT AUCH VON DER CAMERA AUSLESEN
+// SENSOR PIXEL HEIGHT AUCH VON DER CAMERA AUSLESEN (low)
 
-// PUBLIC GITHUB ZIEHEN
+// PUBLIC GITHUB ZIEHEN (medium)
 
-// DOCUMENTATION SCHREIBEN
+// DOCUMENTATION SCHREIBEN (medium)
 
 // KEINE ROOT RECHTE FUER PACKET_MAP brauchen? CAP_NET_RAW permission setting for user
 // CAP_NET_RAW, CAP_IPC_LOCK
@@ -3301,11 +3301,6 @@ disable_memgate_function(UcaPhantomCameraPrivate *priv) {
     var = phantom_lookup_by_id(PROP_AUX_ONE_PARAMETERS);
     phantom_set_string(priv, var, "");
 }
-
-// **************************
-// COMPUTED CAMERA ATTRIBUTES
-// **************************
-
 
 // *************************************
 // GETTING AND SETTING CAMERA ATTRIBUTES
