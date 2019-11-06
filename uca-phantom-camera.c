@@ -49,7 +49,7 @@
 
 // TODO:
 
-// NOTE: JUST ACCESS THE trigger-source directly over g_object_get (important)
+//// NOTE: JUST ACCESS THE trigger-source directly over g_object_get (important)
 
 //// Post trigger frames setzen setzt auch gleichzeitig memread count
 
@@ -2551,20 +2551,29 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
     UcaPhantomCameraPrivate *priv;
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
-
-    g_warning("trigger source 1: %i", priv->uca_trigger_source);
-    g_object_get(camera, "trigger-source", &priv->uca_trigger_source, NULL);
-    g_warning("trigger source 2: %i", priv->uca_trigger_source);
+    // 06.11.2019
+    // Getting the trigger source from the parent instance of the camera
+    UcaCameraTriggerSource trigger_source;
+    g_object_get(camera, "trigger-source", &trigger_source, NULL);
 
     uca_phantom_camera_start_readout(camera, error);
 
+    // 06.07.2019
+    // Using the priv->externally_triggered deprecated
     // 16.07.2019
     // If the trigger mode has been set to "EXTERNAL" we first need to send a "rec" command to the camera, so the
     // camera even knows into which cine (internal memory partition) it should record the frames into, upon being
     // triggered.
     // Without the "rec" command, a hardware trigger will not work.
-    if (priv->triggered_externally) {
-        prepare_trigger(priv);
+
+    // 06.11.2019
+    // No matter what trigger mode has been set, the trigger has to be prepared at the beginning of a recording
+    // anyways. The prepare_trigger starts a recording.
+    prepare_trigger(priv);
+    // The trigger mode "AUTO" is a special case. For this case it is intended, that a trigger is implicitly directly
+    // sent as soon as the recording is being started.
+    if (trigger_source == UCA_CAMERA_TRIGGER_SOURCE_AUTO) {
+        uca_phantom_camera_trigger(camera, error);
     }
 }
 
@@ -3184,6 +3193,10 @@ uca_phantom_camera_grab (UcaCamera *camera,
  * true the trigger method for the camera will merely send the prepare command so that subsequent hardware triggers
  * work.
  *
+ * Changed 06.11.2019
+ * This method will simply send the "trig" command itself to the camera. If there is not currently a recording running
+ * in the camera, then that is the problem of the user.
+ *
  * @param camera
  * @param error
  */
@@ -3199,17 +3212,6 @@ uca_phantom_camera_trigger (UcaCamera *camera,
 
     UcaPhantomCameraPrivate *priv = UCA_PHANTOM_CAMERA_GET_PRIVATE(camera);
 
-    // 19.07.2019
-    // The following code will only be executed, when the camera is not set to be triggered externally.
-    // If the camera is set to external trigger, the "trigger" method will merely send a "prepare trigger" command
-    // to the camera, which will enable subsequent external triggers.
-    if (!priv->triggered_externally) {
-        // "prepare_trigger" will send the "rec" command, which is needed before a trigger, because it tells the camera
-        // into which cine partition the frames are to be saved
-        prepare_trigger(priv);
-    }
-
-    // "phantom talk" actually sends the request string over the network to the camera
     reply = phantom_talk (priv, trigger_request, NULL, 0, error);
     g_free(reply);
 
@@ -3522,6 +3524,7 @@ uca_phantom_camera_set_property (GObject *object,
  * memory. It is a computed memory and for the calcualtion it recursively calls this function to get the values of
  * PROP_FRAME_SIZE and PROP_MEMORY_SIZE.
  *
+ * Changed 05.11.2019
  * Added a case for PROP_POST_TRIGGER_FRAMES. This is not being handled automatically anymore. It holds the value of
  * how many frames the camera will record, after a trigger event occcured.
  *

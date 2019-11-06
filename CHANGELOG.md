@@ -175,5 +175,18 @@ mode, the memread count does not have to be set manually anymore. It
 will be set to the same value as the post trigger frames.
 Although, there still is the posibility of changing the memread count 
 manually afterwards.
-    
+- Implemented the trigger mode functionality
+    - EXTERNAL mode: when the start_recording function is called, the 
+    camera will start to acquire frames, but only after an external 
+    trigger event has occurred on the first auxiliary port of the 
+    camera, the post trigger frames are being recorded and the recording 
+    is marked as finished.
+    - SOFTWARE mode: frame acquisition is also started by the 
+    start_recording function, but the post trigger frames are being 
+    captured after the sending of a software trigger command by the 
+    trigger function
+    - AUTO mode: The call to start recording will immediately also start 
+    the acquisition of the post trigger frames. There is no 
+    additional trigger event required.
+
     

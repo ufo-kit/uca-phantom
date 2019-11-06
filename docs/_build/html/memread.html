@@ -1,0 +1,282 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="en" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="en" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>The MEMREAD mode &mdash; uca-phantom 0.0.0.0 documentation</title>
+  
+
+  
+  
+  
+  
+
+  
+  <script type="text/javascript" src="_static/js/modernizr.min.js"></script>
+  
+    
+      <script type="text/javascript" id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
+        <script type="text/javascript" src="_static/jquery.js"></script>
+        <script type="text/javascript" src="_static/underscore.js"></script>
+        <script type="text/javascript" src="_static/doctools.js"></script>
+        <script async="async" type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+    
+    <script type="text/javascript" src="_static/js/theme.js"></script>
+
+    
+
+  
+  <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+  <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Complete example program" href="example.html" />
+    <link rel="prev" title="Software trigger to acquire frames" href="trigger.html" /> 
+</head>
+
+<body class="wy-body-for-nav">
+
+   
+  <div class="wy-grid-for-nav">
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+          
+
+          
+            <a href="index.html" class="icon icon-home"> uca-phantom
+          
+
+          
+          </a>
+
+          
+            
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <p class="caption"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="quickstart.html">Quickstart</a></li>
+<li class="toctree-l1"><a class="reference internal" href="connection.html">Connecting to the Camera</a></li>
+<li class="toctree-l1"><a class="reference internal" href="trigger.html">Software trigger to acquire frames</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">The MEMREAD mode</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#the-default-operating-mode">The default operating mode</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#the-fast-memread-mode">The fast memread mode</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#a-note-on-the-python-bindings">A note on the Python bindings</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="example.html">Complete example program</a></li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">uca-phantom</a>
+        
+      </nav>
+
+
+      <div class="wy-nav-content">
+        
+        <div class="rst-content">
+        
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="index.html">Docs</a> &raquo;</li>
+        
+      <li>The MEMREAD mode</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+            
+            <a href="_sources/memread.rst.txt" rel="nofollow"> View page source</a>
+          
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <div class="section" id="the-memread-mode">
+<h1>The MEMREAD mode<a class="headerlink" href="#the-memread-mode" title="Permalink to this headline">¶</a></h1>
+<div class="admonition note">
+<p class="first admonition-title">Note</p>
+<p class="last">The memread mode will only work, if the camera is configured in 10G at the moment!</p>
+</div>
+<div class="section" id="the-default-operating-mode">
+<h2>The default operating mode<a class="headerlink" href="#the-default-operating-mode" title="Permalink to this headline">¶</a></h2>
+<p>On default the <code class="docutils literal notranslate"><span class="pre">grab</span></code> method for the camera object will return the <em>current</em> frame of the camera,
+as in the image, which it “sees” <em>just at that moment</em> when the grab call is being made.
+This default mode however lacks speed, because if multiple frames have to be acquired from the
+camera the following pattern will have to be repeated:</p>
+<ol class="arabic simple">
+<li>Request for a frame is sent to the camera</li>
+<li>Camera <em>takes the picture first</em> and sends the response</li>
+<li>Client receives the image data</li>
+<li>New request is sent…</li>
+</ol>
+</div>
+<div class="section" id="the-fast-memread-mode">
+<h2>The fast memread mode<a class="headerlink" href="#the-fast-memread-mode" title="Permalink to this headline">¶</a></h2>
+<p>This default behaviour is slow and might not even be needed. The <strong>memread mode</strong> offers a fast
+way of reading images from the internal memory of the camera, that have been takes previously
+(for example using a software trigger).</p>
+<p>To switch from the normal mode into the memread mode set the boolean property <code class="docutils literal notranslate"><span class="pre">enable-memread</span></code> of the camera
+object to TRUE. Then set the <code class="docutils literal notranslate"><span class="pre">memread-count</span></code> property of the camera object to the integer amount of frames to be
+read out from the internal memory of the camera.</p>
+<p>C example:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="c1">// Setting up &amp; connecting the camera...</span>
+<span class="kt">int</span> <span class="n">FRAME_COUNT</span> <span class="o">=</span> <span class="mi">1000</span><span class="p">;</span>
+
+<span class="n">g_object_set</span><span class="p">(</span><span class="n">G_OBJECT</span><span class="p">(</span><span class="n">camera</span><span class="p">),</span> <span class="s">&quot;enable-memread&quot;</span><span class="p">,</span> <span class="n">TRUE</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">);</span>
+<span class="n">g_object_set</span><span class="p">(</span><span class="n">G_OBJECT</span><span class="p">(</span><span class="n">camera</span><span class="p">),</span> <span class="s">&quot;memread-count&quot;</span><span class="p">,</span> <span class="n">FRAME_COUNT</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">);</span>
+
+<span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">FRAME_COUNT</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">uca_camera_grab</span> <span class="p">(</span><span class="n">camera</span><span class="p">,</span> <span class="n">buffer</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">error</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Python example:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Setting up &amp; connecting the camera...</span>
+<span class="n">FRAME_COUNT</span> <span class="o">=</span> <span class="mi">1000</span>
+
+<span class="n">camera</span><span class="o">.</span><span class="n">props</span><span class="o">.</span><span class="n">enable_memread</span> <span class="o">=</span> <span class="mi">1000</span>
+<span class="n">camera</span><span class="o">.</span><span class="n">props</span><span class="o">.</span><span class="n">memread_count</span> <span class="o">=</span> <span class="n">FRAME_COUNT</span>
+
+<span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">FRAME_COUNT</span><span class="p">):</span>
+    <span class="n">camera</span><span class="o">.</span><span class="n">grab</span><span class="p">()</span>
+</pre></div>
+</div>
+<div class="admonition note">
+<p class="first admonition-title">Note</p>
+<p class="last">When using the memread mode make sure, that the grab method is being called exactly as many times as specified
+in the <em>memread-count</em> property. Doing otherwise will result the program crashing!</p>
+</div>
+<div class="section" id="a-note-on-the-python-bindings">
+<h3>A note on the Python bindings<a class="headerlink" href="#a-note-on-the-python-bindings" title="Permalink to this headline">¶</a></h3>
+<p>The memread mode generally works the same way using Python. The order of things to be done in the
+program are:</p>
+<ol class="arabic simple">
+<li>Setup the camera object</li>
+<li>Setup the camera network properties for 10G connection</li>
+</ol>
+<p>3. Connect to the camera, by setting the <code class="docutils literal notranslate"><span class="pre">connect</span></code> property to True
+3. Start the readout threads by calling <code class="docutils literal notranslate"><span class="pre">start_recording</span></code> method of the camera object
+4. Record frames using the <code class="docutils literal notranslate"><span class="pre">trigger</span></code> method
+5. Set all the according properties to enable and configure the memread mode
+6. Call the <code class="docutils literal notranslate"><span class="pre">grab</span></code> method <em>exactly</em> as many times as specified</p>
+</div>
+</div>
+</div>
+
+
+           </div>
+           
+          </div>
+          <footer>
+  
+    <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
+      
+        <a href="example.html" class="btn btn-neutral float-right" title="Complete example program" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right"></span></a>
+      
+      
+        <a href="trigger.html" class="btn btn-neutral float-left" title="Software trigger to acquire frames" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left"></span> Previous</a>
+      
+    </div>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2019, Matthias Vogelgesang, Jonas Teufel
+
+    </p>
+  </div>
+  Built with <a href="http://sphinx-doc.org/">Sphinx</a> using a <a href="https://github.com/rtfd/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>. 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script>
+
+  
+  
+    
+   
+
+</body>
+</html>

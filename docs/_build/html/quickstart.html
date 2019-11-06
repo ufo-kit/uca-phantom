@@ -1,0 +1,433 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="en" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="en" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>Quickstart &mdash; uca-phantom 0.0.0.0 documentation</title>
+  
+
+  
+  
+  
+  
+
+  
+  <script type="text/javascript" src="_static/js/modernizr.min.js"></script>
+  
+    
+      <script type="text/javascript" id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
+        <script type="text/javascript" src="_static/jquery.js"></script>
+        <script type="text/javascript" src="_static/underscore.js"></script>
+        <script type="text/javascript" src="_static/doctools.js"></script>
+        <script async="async" type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+    
+    <script type="text/javascript" src="_static/js/theme.js"></script>
+
+    
+
+  
+  <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+  <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Connecting to the Camera" href="connection.html" />
+    <link rel="prev" title="Welcome to uca-phantom’s documentation!" href="index.html" /> 
+</head>
+
+<body class="wy-body-for-nav">
+
+   
+  <div class="wy-grid-for-nav">
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+          
+
+          
+            <a href="index.html" class="icon icon-home"> uca-phantom
+          
+
+          
+          </a>
+
+          
+            
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <p class="caption"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Quickstart</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#installation">Installation</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#prerequisites">Prerequisites</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#building-on-linux">Building on Linux</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#the-hardware">The Hardware</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#normal-ethernet-connection">Normal ethernet connection</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#g-ethernet-connection">10G ethernet connection</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#optional-testing-the-connection">OPTIONAL: Testing the connection</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#basic-usage">Basic Usage</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#basic-c-program">Basic C program</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#basic-python-program">Basic Python program</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="connection.html">Connecting to the Camera</a></li>
+<li class="toctree-l1"><a class="reference internal" href="trigger.html">Software trigger to acquire frames</a></li>
+<li class="toctree-l1"><a class="reference internal" href="memread.html">The MEMREAD mode</a></li>
+<li class="toctree-l1"><a class="reference internal" href="example.html">Complete example program</a></li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">uca-phantom</a>
+        
+      </nav>
+
+
+      <div class="wy-nav-content">
+        
+        <div class="rst-content">
+        
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="index.html">Docs</a> &raquo;</li>
+        
+      <li>Quickstart</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+            
+            <a href="_sources/quickstart.rst.txt" rel="nofollow"> View page source</a>
+          
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <div class="section" id="quickstart">
+<h1>Quickstart<a class="headerlink" href="#quickstart" title="Permalink to this headline">¶</a></h1>
+<div class="section" id="installation">
+<h2>Installation<a class="headerlink" href="#installation" title="Permalink to this headline">¶</a></h2>
+<p>Keep in mind, that this is just a plugin interfacing the phantom cameras to the main <em>libuca</em> framework. If this frame
+work is not already installed this has to be done before installing the plugin.</p>
+<div class="section" id="prerequisites">
+<h3>Prerequisites<a class="headerlink" href="#prerequisites" title="Permalink to this headline">¶</a></h3>
+<p>Obviously the <a class="reference external" href="https://github.com/ufo-kit/libuca">Libuca camera framework</a> is required to be installed prior to any
+steps involving the installation of the plugin. To install the libuca framework visit its own Documentation here:
+<a class="reference external" href="https://libuca.readthedocs.io/en/latest/quickstart.html">Libuca Quickstart</a>.</p>
+<p>Additionally to the C files of the uca-phantom plugin, the repository contains a Python script for testing if all the
+functionality works. The script is executed as a command line tool and requires the command line library
+<a class="reference external" href="https://click.palletsprojects.com/en/7.x/">click</a> to be installed. To install click use pip:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip3 install click
+</pre></div>
+</div>
+<p>It is also recommended to install the Python Phantom command line tools
+<a class="reference external" href="https://github.com/the16thpythonist/phantom-cli">phantom-cli</a>. This python package installs several terminal
+commands, which allow direct interaction with a phantom camera and also includes a <em>mock</em> command, which starts a
+server on the local machine, which emulates the behaviour of a phantom camera. To read about all the features in
+detail, visit the <a class="reference external" href="https://phantom-cli.readthedocs.io/en/latest/index.html">phantom-cli Documentation</a>! Install
+<em>phantom-cli</em> using pip:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sudo pip3 install phantom-cli
+</pre></div>
+</div>
+<p><strong>Note:</strong> The <em>sudo</em> might be important, because sometimes the terminal commands are not properly installed without
+using super user permissions.</p>
+</div>
+<div class="section" id="building-on-linux">
+<h3>Building on Linux<a class="headerlink" href="#building-on-linux" title="Permalink to this headline">¶</a></h3>
+<p>First, find the folder, into which you have installed <strong>libuca</strong> previously onto your system. As an example we will
+assume the main libuca folder is located at <em>/home/user/libuca</em>. Then navigate to the folder into which you have <em>built</em>
+the project, this would usually be a folder with the name <em>build</em> and then navigate to the <em>plugins</em> folder, like
+this</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span> /home/user/libuca/build/plugins
+</pre></div>
+</div>
+<p>Every plugin for libuca should have its own folder. It is easiest to obtain the uca-phantom source code by using the
+<em>git repository</em>. Simply clone the repo into the plugins folder like this</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git clone https://fuzzy.fzk.de/gogs/jonas.teufel/uca-phantom
+</pre></div>
+</div>
+<p>Now inside the newly created folder <em>uca-phantom</em> create a new folder <em>build</em></p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span> uca-phantom
+mkdir build
+</pre></div>
+</div>
+<p>And now it is basically time to build the source code already. To do that, go into the build folder run <em>cmake</em> first
+and then install the project:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span> build
+cmake ..
+make
+sudo make install
+</pre></div>
+</div>
+<p><strong>Note:</strong> Here again the <em>sudo</em> is important, because a “normal” user usually lacks the permissions to run a
+“make install” command!.</p>
+<p>And that should be it for the basic install.</p>
+</div>
+</div>
+<div class="section" id="the-hardware">
+<h2>The Hardware<a class="headerlink" href="#the-hardware" title="Permalink to this headline">¶</a></h2>
+<p>The <em>uca-phantom</em> plugin is build to interface with a phantom camera using a ethernet connection, but
+to interface with a phantom camera some additional steps for configuring the network environment are needed.</p>
+<p><strong>Note:</strong> Usually a camera will support at least a “normal” ethernet connection to manage the control commands as well
+as the image data transmission, but some cameras support an additional <em>10G ethernet interface</em>. Both of them vary in
+their capacities and their setup and thus will be explained both separately.</p>
+<div class="section" id="normal-ethernet-connection">
+<h3>Normal ethernet connection<a class="headerlink" href="#normal-ethernet-connection" title="Permalink to this headline">¶</a></h3>
+<p>1. Most phantom cameras have a fix IP address of the format <em>100.100.xxx.xxx</em> where the x’s are substituted by a
+different IP for every camera. To communicate with them, the machine attached must have a static IP address in the same
+IP range. It is recommended to use the <em>IP 100.100.100.1</em>. Additionally the netmask of the connection PC has to be set
+to <em>255.255.0.0</em>.</p>
+<p>To make these configurations on ubuntu for example, you need to modify the file <em>/etc/network/interfaces</em> like this</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>iface eth0 inet static
+address <span class="m">100</span>.100.100.1
+netmask <span class="m">255</span>.255.0.0
+</pre></div>
+</div>
+<p>(Check the identifier of your ethernet interface to which you want to connect the phantom physically by using the
+<em>ifconfig</em> command, when it is not called “eth0”)</p>
+<p>2. Connect the phantom camera with your chosen network interface and turn on the camera. After the cameras <em>boot</em> time
+(indicated by heavy cooler noise) the camera is ready to communicate.</p>
+</div>
+<div class="section" id="g-ethernet-connection">
+<h3>10G ethernet connection<a class="headerlink" href="#g-ethernet-connection" title="Permalink to this headline">¶</a></h3>
+<p>1. Most phantom cameras have a fix IP address of the format <em>172.16.xxx.xxx</em> where the x’s are substituted by a
+different IP for every camera. To communicate with them, the machine attached must have a static IP address in the same
+IP range. It is recommended to use the <em>IP 172.16.1.1</em>. Additionally the netmask of the connection PC has to be set
+to <em>255.255.0.0</em>.</p>
+<p>To make these configurations on ubuntu for example, you need to modify the file <em>/etc/network/interfaces</em> like this</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>iface eth0 inet static
+address <span class="m">172</span>.16.1.1
+netmask <span class="m">255</span>.255.0.0
+</pre></div>
+</div>
+<p>(Check the identifier of your ethernet interface to which you want to connect the phantom physically by using the
+<em>ifconfig</em> command, when it is not called “eth0”)</p>
+<p>2. Connect the phantom camera’s 10G ethernet port with your chosen network interface of your machine and turn on the
+camera. After the cameras <em>boot</em> time (indicated by heavy cooler noise) the camera is ready to communicate.</p>
+</div>
+<div class="section" id="optional-testing-the-connection">
+<h3>OPTIONAL: Testing the connection<a class="headerlink" href="#optional-testing-the-connection" title="Permalink to this headline">¶</a></h3>
+<p>If you have installed the <em>phantom-cli</em> python package, you can use the <em>ph-test</em> command to verify a successful
+connection with the camera. Simply run the following in the terminal</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ph-test --log<span class="o">=</span>DEBUG &lt;PHANTOM IP&gt;
+</pre></div>
+</div>
+<p>If the connection is successful the output of the script will say so.</p>
+</div>
+</div>
+<div class="section" id="basic-usage">
+<h2>Basic Usage<a class="headerlink" href="#basic-usage" title="Permalink to this headline">¶</a></h2>
+<p>The libuca framework is a C framework and thus the main use case for the phantom plugin is also from within a C program.
+But libuca also exposes its API to several other programming languages, most prominently Python, from where a
+access to the functionality is also possible.</p>
+<div class="section" id="basic-c-program">
+<h3>Basic C program<a class="headerlink" href="#basic-c-program" title="Permalink to this headline">¶</a></h3>
+<p>The first thing to do when writing a C program to utilize the libuca framework is to include the necessary headers.</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span> <span class="cpf">&lt;glib-object.h&gt;</span><span class="cp"></span>
+<span class="cp">#include</span> <span class="cpf">&lt;uca/uca-plugin-manager.h&gt;</span><span class="cp"></span>
+<span class="cp">#include</span> <span class="cpf">&lt;uca/uca-camera.h&gt;</span><span class="cp"></span>
+</pre></div>
+</div>
+<p>Then inside the main function, you first have to setup the plugin manager object and then use this object to create a
+new camera object of the type <em>“phantom”</em>. For further details on the basic setup consult the
+<a class="reference external" href="https://libuca.readthedocs.io/en/latest/quickstart.html">Libuca Quickstart</a>.
+To connect to the camera, set the <code class="docutils literal notranslate"><span class="pre">connect</span></code> property of the object to True.
+Call the <em>start_recording</em> command to start the threads that will accept the incoming data connections.
+And only after the camera is connected the <em>grab</em> command can be used to get individual imaged from the camera.</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="kt">int</span> <span class="nf">main</span> <span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="kt">char</span> <span class="o">*</span><span class="n">argv</span><span class="p">[])</span> <span class="p">{</span>
+    <span class="c1">// Declaring the variables to be used</span>
+    <span class="n">UcaPluginManager</span> <span class="o">*</span><span class="n">manager</span><span class="p">;</span>
+    <span class="n">UcaCamera</span> <span class="o">*</span><span class="n">camera</span><span class="p">;</span>
+    <span class="n">GError</span> <span class="o">*</span><span class="n">error</span><span class="p">;</span>
+    <span class="n">gchar</span> <span class="o">*</span><span class="n">c</span> <span class="o">=</span> <span class="s">&quot;&quot;</span><span class="p">;</span>
+
+    <span class="c1">// Creating the camera object</span>
+    <span class="n">manager</span> <span class="o">=</span> <span class="n">uca_plugin_manager_new</span><span class="p">();</span>
+    <span class="n">camera</span> <span class="o">=</span> <span class="n">uca_plugin_manager_get_camera</span><span class="p">(</span><span class="n">manager</span><span class="p">,</span> <span class="s">&quot;phantom&quot;</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">error</span><span class="p">,</span> <span class="n">c</span><span class="p">);</span>
+
+    <span class="c1">// Connecting to the camera and starting the readout threads</span>
+    <span class="n">g_object_set</span><span class="p">(</span><span class="n">G_OBJECT</span><span class="p">(</span><span class="n">camera</span><span class="p">),</span> <span class="s">&quot;connect&quot;</span><span class="p">,</span> <span class="n">TRUE</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">);</span>
+    <span class="n">uca_camera_start_recording</span><span class="p">(</span><span class="n">camera</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">error</span><span class="p">);</span>
+
+    <span class="c1">// Reading out the x and y size of the region of interest (roi)</span>
+    <span class="c1">// the NULL marks the end.</span>
+    <span class="n">guint16</span> <span class="n">roi_width</span><span class="p">;</span>
+    <span class="n">guint16</span> <span class="n">roi_height</span><span class="p">;</span>
+    <span class="n">g_object_get</span><span class="p">(</span><span class="n">G_OBJECT</span><span class="p">(</span><span class="n">camera</span><span class="p">),</span> <span class="s">&quot;roi-width&quot;</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">roi_width</span><span class="p">,</span> <span class="s">&quot;roi-height&quot;</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">roi_height</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">);</span>
+
+    <span class="c1">// Grabbing a single frame from the camera</span>
+    <span class="n">gpointer</span> <span class="n">buffer</span> <span class="o">=</span> <span class="n">g_malloc0</span><span class="p">((</span><span class="kt">int</span><span class="p">)</span> <span class="n">roi_width</span> <span class="o">*</span> <span class="n">roi_height</span> <span class="o">*</span> <span class="mi">2</span><span class="p">);</span>
+    <span class="n">uca_camera_grab</span><span class="p">(</span><span class="n">camera</span><span class="p">,</span> <span class="n">buffer</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">error</span><span class="p">);</span>
+
+    <span class="c1">// Cleaning up!</span>
+    <span class="n">uca_camera_stop_recording</span><span class="p">(</span><span class="n">camera</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">error</span><span class="p">);</span>
+    <span class="n">g_object_unref</span><span class="p">(</span><span class="n">camera</span><span class="p">);</span>
+    <span class="n">g_free</span><span class="p">(</span><span class="n">buffer</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="basic-python-program">
+<h3>Basic Python program<a class="headerlink" href="#basic-python-program" title="Permalink to this headline">¶</a></h3>
+<p><strong>Note:</strong> For libuca to work with Python you first need to make sure to have the library <em>PyGObject</em> installed. To
+install it visit the <a class="reference external" href="https://pygobject.readthedocs.io/en/latest/getting_started.html#ubuntu-logo-ubuntu-debian-logo-debian">Documentation</a>.</p>
+<p>First you need to setup the PyGObject environment and import the <em>Uca</em> repository from it</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># This is a workaround for the beginning, to avoid having to create a new environmental variable permanently.</span>
+<span class="c1"># The actual path might vary on your system</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s1">&#39;GI_TYPELIB_PATH&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;/usr/local/lib/girepository-1.0&#39;</span>
+
+<span class="kn">import</span> <span class="nn">gi</span>
+<span class="n">gi</span><span class="o">.</span><span class="n">require_version</span><span class="p">(</span><span class="s1">&#39;Uca&#39;</span><span class="p">,</span> <span class="s1">&#39;2.0&#39;</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">gi.repository</span> <span class="kn">import</span> <span class="n">Uca</span>
+</pre></div>
+</div>
+<p>As with the C code, you first have to create the plugin manager object and from that you can request the camera object.
+Then you can use the function <em>create_array_from</em> to grab a frame from the camera</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Just copy the function</span>
+<span class="k">def</span> <span class="nf">create_array_from</span><span class="p">(</span><span class="n">camera</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Create a suitably sized Numpy array and return it together with the</span>
+<span class="sd">    arrays data pointer&quot;&quot;&quot;</span>
+    <span class="n">bits</span> <span class="o">=</span> <span class="n">camera</span><span class="o">.</span><span class="n">props</span><span class="o">.</span><span class="n">sensor_bitdepth</span>
+    <span class="n">dtype</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">uint16</span> <span class="k">if</span> <span class="n">bits</span> <span class="o">&gt;</span> <span class="mi">8</span> <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">uint8</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">camera</span><span class="o">.</span><span class="n">props</span><span class="o">.</span><span class="n">roi_height</span><span class="p">,</span> <span class="n">camera</span><span class="o">.</span><span class="n">props</span><span class="o">.</span><span class="n">roi_width</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">a</span><span class="p">,</span> <span class="n">a</span><span class="o">.</span><span class="n">__array_interface__</span><span class="p">[</span><span class="s1">&#39;data&#39;</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="c1"># Creating the plugin manager object and the camera object</span>
+    <span class="n">plugin_manager</span> <span class="o">=</span> <span class="n">Uca</span><span class="o">.</span><span class="n">PluginManager</span><span class="p">()</span>
+    <span class="n">camera</span> <span class="o">=</span> <span class="n">plugin_manager</span><span class="o">.</span><span class="n">get_camerav</span><span class="p">(</span><span class="s1">&#39;phantom&#39;</span><span class="p">,</span> <span class="p">[])</span>
+
+    <span class="c1"># Connecting the camera and starting the readout threads</span>
+    <span class="n">camera</span><span class="o">.</span><span class="n">props</span><span class="o">.</span><span class="n">connect</span> <span class="o">=</span> <span class="bp">True</span>
+    <span class="n">camera</span><span class="o">.</span><span class="n">start_recording</span><span class="p">()</span>
+
+    <span class="c1"># Grabbing a frame</span>
+    <span class="n">a</span><span class="p">,</span> <span class="n">buf</span> <span class="o">=</span> <span class="n">create_array_from</span><span class="p">(</span><span class="n">camera</span><span class="p">)</span>
+    <span class="n">camera</span><span class="o">.</span><span class="n">grab</span><span class="p">(</span><span class="n">buf</span><span class="p">)</span>
+    <span class="c1"># &gt;&gt; a will now contain the numpy array with the image</span>
+
+    <span class="c1"># Clean up</span>
+    <span class="n">camera</span><span class="o">.</span><span class="n">stop_recording</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+</div>
+</div>
+
+
+           </div>
+           
+          </div>
+          <footer>
+  
+    <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
+      
+        <a href="connection.html" class="btn btn-neutral float-right" title="Connecting to the Camera" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right"></span></a>
+      
+      
+        <a href="index.html" class="btn btn-neutral float-left" title="Welcome to uca-phantom’s documentation!" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left"></span> Previous</a>
+      
+    </div>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2019, Matthias Vogelgesang, Jonas Teufel
+
+    </p>
+  </div>
+  Built with <a href="http://sphinx-doc.org/">Sphinx</a> using a <a href="https://github.com/rtfd/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>. 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script>
+
+  
+  
+    
+   
+
+</body>
+</html>

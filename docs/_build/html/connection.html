@@ -1,0 +1,364 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="en" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="en" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>Connecting to the Camera &mdash; uca-phantom 0.0.0.0 documentation</title>
+  
+
+  
+  
+  
+  
+
+  
+  <script type="text/javascript" src="_static/js/modernizr.min.js"></script>
+  
+    
+      <script type="text/javascript" id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
+        <script type="text/javascript" src="_static/jquery.js"></script>
+        <script type="text/javascript" src="_static/underscore.js"></script>
+        <script type="text/javascript" src="_static/doctools.js"></script>
+        <script async="async" type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+    
+    <script type="text/javascript" src="_static/js/theme.js"></script>
+
+    
+
+  
+  <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+  <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Software trigger to acquire frames" href="trigger.html" />
+    <link rel="prev" title="Quickstart" href="quickstart.html" /> 
+</head>
+
+<body class="wy-body-for-nav">
+
+   
+  <div class="wy-grid-for-nav">
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+          
+
+          
+            <a href="index.html" class="icon icon-home"> uca-phantom
+          
+
+          
+          </a>
+
+          
+            
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <p class="caption"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="quickstart.html">Quickstart</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Connecting to the Camera</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#using-environmental-variables">Using environmental variables</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#alternatively-the-connect-property">Alternatively: The “connect” property</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#the-discovery-protocol">The discovery protocol</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#using-the-discovery-protocol">Using the discovery protocol</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#explicitly-providing-the-ip-address">Explicitly providing the IP address</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#specifying-the-interface-for-10g-connection">Specifying the interface for 10G connection</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#putting-it-all-together">Putting it all together</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="trigger.html">Software trigger to acquire frames</a></li>
+<li class="toctree-l1"><a class="reference internal" href="memread.html">The MEMREAD mode</a></li>
+<li class="toctree-l1"><a class="reference internal" href="example.html">Complete example program</a></li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">uca-phantom</a>
+        
+      </nav>
+
+
+      <div class="wy-nav-content">
+        
+        <div class="rst-content">
+        
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="index.html">Docs</a> &raquo;</li>
+        
+      <li>Connecting to the Camera</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+            
+            <a href="_sources/connection.rst.txt" rel="nofollow"> View page source</a>
+          
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <div class="section" id="connecting-to-the-camera">
+<h1>Connecting to the Camera<a class="headerlink" href="#connecting-to-the-camera" title="Permalink to this headline">¶</a></h1>
+<p>The phantom camera will be connected to the operating computer by an ethernet cable using one of the cameras ethernet
+ports: Ether the “normal” 1G interface or the 10G interface. The most important thing to make sure of is to correctly
+set the IP address and netmask for the ethernet interface <em>of the operating computer</em>, which is connected to the
+machine.</p>
+<div class="section" id="using-environmental-variables">
+<h2>Using environmental variables<a class="headerlink" href="#using-environmental-variables" title="Permalink to this headline">¶</a></h2>
+<p>The best way to define the network configuration for the camera is by using the operating system’s environmental
+variables. There are two variables, which can be defined:</p>
+<p>1) <code class="docutils literal notranslate"><span class="pre">PH_NETWORK_ADDRESS</span></code>: Set this veriable to the string of IP address of the phantom camera you want to connect to.
+If this environmental variable is set, the phantom plugin will automatically call the connect routine during the
+creation of the camera object. So there will be no need to set a value for the “connect” flag of the object if this
+method is used! This is especially useful since this will create compatibility with UCA tools such as the command line
+utilities <em>uca-grab</em> and <em>uca-info</em>.</p>
+<p>2) <code class="docutils literal notranslate"><span class="pre">PH_NETWORK_INTERFACE</span></code>: Set this variable to the string interface identifier of the ethernet interface of the
+operating machine to which to which the phantom 10G port is connected. This variable will only be needed for using the
+10G mode! If this variable is set to any value, this will implicitly also enable the 10G mode for the phantom plugin by
+setting the “enable-10g” flag of the camera object to TRUE.</p>
+<p>Example usage for <em>uca-info</em> (Assuming correct installation of libuca and plugins)</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>$ <span class="nb">export</span> <span class="nv">PH_NETWORK_ADDRESS</span><span class="o">=</span><span class="m">172</span>.16.31.157
+$ <span class="nb">export</span> <span class="nv">PH_NETWORK_INTERFACE</span><span class="o">=</span>eth0
+$ uca-info <span class="s2">&quot;phantom&quot;</span>
+// OUTPUT...
+</pre></div>
+</div>
+</div>
+<div class="section" id="alternatively-the-connect-property">
+<h2>Alternatively: The “connect” property<a class="headerlink" href="#alternatively-the-connect-property" title="Permalink to this headline">¶</a></h2>
+<p>To connect the camera from within the program, in such a way, that subsequent calls to the <code class="docutils literal notranslate"><span class="pre">grab</span></code> command will
+succeed to deliver image frames, essentially two steps are required.</p>
+<p>1) Establish control connection: To create a socket connection to send control commands over, the <code class="docutils literal notranslate"><span class="pre">connect</span></code> porperty
+of the camera object has to be set to TRUE. This will implicitly trigger the internal connect function to be executed</p>
+<p>2) Starting the readout threads: To properly receive image data from the camera, additional threads, which accept the
+incoming data connections from the camera have to be started. This is done by calling the <code class="docutils literal notranslate"><span class="pre">start_recording</span></code>
+method</p>
+<p>C example:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="c1">// complete program shortened ...</span>
+<span class="n">manager</span> <span class="o">=</span> <span class="n">uca_plugin_manager_new</span><span class="p">();</span>
+<span class="n">camera</span> <span class="o">=</span> <span class="n">uca_plugin_manager_get_camera</span><span class="p">(</span><span class="n">manager</span><span class="p">,</span> <span class="s">&quot;phantom&quot;</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">error</span><span class="p">,</span> <span class="n">c</span><span class="p">);</span>
+
+<span class="c1">// Connecting to the camera and starting the readout threads</span>
+<span class="n">g_object_set</span><span class="p">(</span><span class="n">G_OBJECT</span><span class="p">(</span><span class="n">camera</span><span class="p">),</span> <span class="s">&quot;connect&quot;</span><span class="p">,</span> <span class="n">TRUE</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">);</span>
+<span class="n">uca_camera_start_recording</span><span class="p">(</span><span class="n">camera</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">error</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Python example:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># complete program shortened ...</span>
+<span class="n">plugin_manager</span> <span class="o">=</span> <span class="n">Uca</span><span class="o">.</span><span class="n">PluginManager</span><span class="p">()</span>
+<span class="n">camera</span> <span class="o">=</span> <span class="n">plugin_manager</span><span class="o">.</span><span class="n">get_camerav</span><span class="p">(</span><span class="s1">&#39;phantom&#39;</span><span class="p">,</span> <span class="p">[])</span>
+
+<span class="c1"># Connecting the camera and starting the readout threads</span>
+<span class="n">camera</span><span class="o">.</span><span class="n">props</span><span class="o">.</span><span class="n">connect</span> <span class="o">=</span> <span class="bp">True</span>
+<span class="n">camera</span><span class="o">.</span><span class="n">start_recording</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="the-discovery-protocol">
+<h2>The discovery protocol<a class="headerlink" href="#the-discovery-protocol" title="Permalink to this headline">¶</a></h2>
+<p>To establish a connection to the camera, it offers a UDP discovery protocol, where the phantom plugin will send a UDP
+broadcast to the IP range, on which the phantom cameras operate and then waits for a response from a camera. This
+response will then expose the IP address to the phantom plugin, without the need to manually specify the IP address of
+the specific camera model used.</p>
+<p><em>Although it is adviced to specify the IP address explicitly, as the discovery protocol is not yet reliably implemented
+and may cause issues from time to time.</em></p>
+<div class="section" id="using-the-discovery-protocol">
+<h3>Using the discovery protocol<a class="headerlink" href="#using-the-discovery-protocol" title="Permalink to this headline">¶</a></h3>
+<p>When using the discovery protocol no additional steps are required.</p>
+</div>
+<div class="section" id="explicitly-providing-the-ip-address">
+<h3>Explicitly providing the IP address<a class="headerlink" href="#explicitly-providing-the-ip-address" title="Permalink to this headline">¶</a></h3>
+<p>To explicitly provide the camera with an IP address, just set the <code class="docutils literal notranslate"><span class="pre">network-address</span></code> property of the camera object to
+the string of the IP address</p>
+<p><strong>NOTE</strong>: When using the python bindings for libuca, properties that contain a dash “-” in their name for C will have
+an underscore “_” instead in python!</p>
+<p>C example:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="c1">// complete program shortened ...</span>
+<span class="c1">// Setting the IP address before(!) connecting</span>
+<span class="n">g_object_set</span><span class="p">(</span><span class="n">G_OBJECT</span><span class="p">(</span><span class="n">camera</span><span class="p">),</span> <span class="s">&quot;network-address&quot;</span><span class="p">,</span> <span class="s">&quot;100.100.189.94&quot;</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Python example:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># complete program shortened ...</span>
+<span class="c1"># Setting the IP address before(!) connecting</span>
+<span class="n">camera</span><span class="o">.</span><span class="n">props</span><span class="o">.</span><span class="n">network_address</span> <span class="o">=</span> <span class="s2">&quot;100.100.189.94&quot;</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="section" id="specifying-the-interface-for-10g-connection">
+<h2>Specifying the interface for 10G connection<a class="headerlink" href="#specifying-the-interface-for-10g-connection" title="Permalink to this headline">¶</a></h2>
+<p>Transmitting data using the 10G interface is partially as fast as it is, because the image data is not transmitted
+using TCP packets (a protocol with a lot of overhead), but by raw ethernet frames. This type of transmission has
+minimal overhead, because the data is not being transmitted in the likes of a conversation, it is rather all dumped
+into the ethernet at the same time.</p>
+<p>To receive this type of data, the phantom plugin needs to know at which ethernet interface the camera is connected
+to the operating computer, so it knows “where to listen for the data dump”.</p>
+<p>Thus, when using the 10G connection, the name of the used interface will have to be supplied as well, by setting the
+<code class="docutils literal notranslate"><span class="pre">network-interface</span></code> property of the camera object to the string name of the interface.</p>
+<p>C example:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="c1">// complete program shortened ...</span>
+<span class="c1">// This flag will tell the camera to use the 10G interface</span>
+<span class="n">g_object_set</span><span class="p">(</span><span class="n">G_OBJECT</span><span class="p">(</span><span class="n">camera</span><span class="p">),</span> <span class="s">&quot;enable-10ge&quot;</span><span class="p">,</span> <span class="n">TRUE</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">);</span>
+<span class="c1">// Supplying the interface name</span>
+<span class="n">g_object_set</span><span class="p">(</span><span class="n">G_OBJECT</span><span class="p">(</span><span class="n">camera</span><span class="p">),</span> <span class="s">&quot;network-interface&quot;</span><span class="p">,</span> <span class="s">&quot;eth0&quot;</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Python example:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># complete program shortened ...</span>
+<span class="c1"># This flag will tell the camera to use the 10G interface</span>
+<span class="n">camera</span><span class="o">.</span><span class="n">props</span><span class="o">.</span><span class="n">enable_10ge</span> <span class="o">=</span> <span class="bp">True</span>
+<span class="c1"># Supplying the interface name</span>
+<span class="n">camera</span><span class="o">.</span><span class="n">props</span><span class="o">.</span><span class="n">network_interface</span> <span class="o">=</span> <span class="s2">&quot;eth0&quot;</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="putting-it-all-together">
+<h2>Putting it all together<a class="headerlink" href="#putting-it-all-together" title="Permalink to this headline">¶</a></h2>
+<p>To show a complete example to connect the camera using the 10G interface and explicitly providing the IP address of
+the camera:</p>
+<p>C example:</p>
+<div class="highlight-c notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span> <span class="cpf">&lt;glib-object.h&gt;</span><span class="cp"></span>
+<span class="cp">#include</span> <span class="cpf">&lt;uca/uca-plugin-manager.h&gt;</span><span class="cp"></span>
+<span class="cp">#include</span> <span class="cpf">&lt;uca/uca-camera.h&gt;</span><span class="cp"></span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="kt">char</span> <span class="o">*</span><span class="n">argv</span><span class="p">[])</span> <span class="p">{</span>
+    <span class="n">GError</span> <span class="o">*</span><span class="n">error</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+
+    <span class="n">manager</span> <span class="o">=</span> <span class="n">uca_plugin_manager_new</span><span class="p">();</span>
+    <span class="n">camera</span> <span class="o">=</span> <span class="n">uca_plugin_manager_get_camera</span><span class="p">(</span><span class="n">manager</span><span class="p">,</span> <span class="s">&quot;phantom&quot;</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">error</span><span class="p">,</span> <span class="s">&quot;&quot;</span><span class="p">);</span>
+
+    <span class="c1">// Setting IP address manually &amp;</span>
+    <span class="c1">// enable 10G network</span>
+    <span class="n">g_object_set</span><span class="p">(</span><span class="n">G_OBJECT</span><span class="p">(</span><span class="n">camera</span><span class="p">),</span> <span class="s">&quot;network-address&quot;</span><span class="p">,</span> <span class="s">&quot;172.16.31.157&quot;</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">);</span>
+    <span class="n">g_object_set</span><span class="p">(</span><span class="n">G_OBJECT</span><span class="p">(</span><span class="n">camera</span><span class="p">),</span> <span class="s">&quot;network-interface&quot;</span><span class="p">,</span> <span class="s">&quot;eth0&quot;</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">);</span>
+    <span class="n">g_object_set</span><span class="p">(</span><span class="n">G_OBJECT</span><span class="p">(</span><span class="n">camera</span><span class="p">),</span> <span class="s">&quot;enable-10ge&quot;</span><span class="p">,</span> <span class="n">TRUE</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">);</span>
+
+    <span class="c1">// Connection the camera</span>
+    <span class="n">g_object_set</span><span class="p">(</span><span class="n">G_OBJECT</span><span class="p">(</span><span class="n">camera</span><span class="p">),</span> <span class="s">&quot;connect&quot;</span><span class="p">,</span> <span class="n">TRUE</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">);</span>
+
+    <span class="c1">// Starting the readout threads</span>
+    <span class="n">uca_camera_start_recording</span><span class="p">(</span><span class="n">camera</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">error</span><span class="p">);</span>
+
+    <span class="c1">// Grabbing images...</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</div>
+</div>
+
+
+           </div>
+           
+          </div>
+          <footer>
+  
+    <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
+      
+        <a href="trigger.html" class="btn btn-neutral float-right" title="Software trigger to acquire frames" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right"></span></a>
+      
+      
+        <a href="quickstart.html" class="btn btn-neutral float-left" title="Quickstart" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left"></span> Previous</a>
+      
+    </div>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2019, Matthias Vogelgesang, Jonas Teufel
+
+    </p>
+  </div>
+  Built with <a href="http://sphinx-doc.org/">Sphinx</a> using a <a href="https://github.com/rtfd/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>. 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script>
+
+  
+  
+    
+   
+
+</body>
+</html>
