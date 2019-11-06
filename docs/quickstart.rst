@@ -67,6 +67,21 @@ and then install the project: ::
 **Note:** Here again the *sudo* is important, because a "normal" user usually lacks the permissions to run a
 "make install" command!.
 
+A Note on permissions
+=====================
+
+The uca-phantom plugin makes use of the ``packet_mmap`` linux library. Using the functions from this library requires
+special permissions. These permissions can be satisfied to run all executable functions associated with the libuca
+framework as the root user. Although using the root user is not recommended.
+
+Alternatively, you can use unix's *capability systems* to give the executable files only those permission, that it
+really needs. First identify the executable file, which uses the uca-phantom plugin in the background, we'll call this
+file "sample.sh".
+Then use the linux command ``setcap`` to assign the required capabilities: ::
+
+    setcap CAP_NET_RAW,CAP_IPC_LOCK+=ep sample.sh
+
+
 And that should be it for the basic install.
 
 ============

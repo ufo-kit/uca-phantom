@@ -188,5 +188,7 @@ manually afterwards.
     - AUTO mode: The call to start recording will immediately also start 
     the acquisition of the post trigger frames. There is no 
     additional trigger event required.
-
+- Moved the documentation from a separate git repository to 
+this repository and updated the documentation with the latest backward 
+incompatible API changes.
     

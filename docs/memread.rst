@@ -29,8 +29,9 @@ way of reading images from the internal memory of the camera, that have been tak
 (for example using a software trigger).
 
 To switch from the normal mode into the memread mode set the boolean property ``enable-memread`` of the camera
-object to TRUE. Then set the ``memread-count`` property of the camera object to the integer amount of frames to be
-read out from the internal memory of the camera.
+object to TRUE. The amount of frames, which are being read out by the memread mode is the same as the previously
+defined ``post-trigger-frames``.
+Optionally the amount of frames to be read can also be manually adjusted ``memread-count``
 
 C example:
 
@@ -39,8 +40,10 @@ C example:
     // Setting up & connecting the camera...
     int FRAME_COUNT = 1000;
 
+    g_object_set(G_OBJECT(camera), "post-trigger-frames", FRAME_COUNT, NULL)
+    // ...
     g_object_set(G_OBJECT(camera), "enable-memread", TRUE, NULL);
-    g_object_set(G_OBJECT(camera), "memread-count", FRAME_COUNT, NULL);
+    // g_object_set(G_OBJECT(camera), "memread-count", FRAME_COUNT, NULL);
 
     for (int i = 0; i < FRAME_COUNT; i++) {
         uca_camera_grab (camera, buffer, &error);
@@ -53,8 +56,10 @@ Python example:
     # Setting up & connecting the camera...
     FRAME_COUNT = 1000
 
+    camera.props.post_trigger_frames = FRAME_COUNT
+    # ...
     camera.props.enable_memread = 1000
-    camera.props.memread_count = FRAME_COUNT
+    # camera.props.memread_count = FRAME_COUNT
 
     for i in range(FRAME_COUNT):
         camera.grab()

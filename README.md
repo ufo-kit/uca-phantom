@@ -9,9 +9,9 @@ Phantom high-speed cameras.
 Since this is still a private repository, the public documentation for 
 this project is hosted on a separate Github Repository. To view the 
 Documentation source code jump to 
-[uca-phantom-doc](https://github.com/the16thpythonist/uca-phantom-doc). 
+[uca-phantom-doc](https://github.com/the16thpythonist/uca-phantom/docs). 
 Or visit the indepth documentation directly at
-[uca-phantom Documentation](https://uca-phantom-doc.readthedocs.io/en/latest/)!
+[uca-phantom Documentation](https://uca-phantom.readthedocs.io/en/latest/)!
 
 
 ### User information
