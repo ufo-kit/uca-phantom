@@ -434,7 +434,7 @@ static UnitVariable variables[] = {
     { "cam.aux1pp",      G_TYPE_STRING, G_PARAM_READWRITE, PROP_AUX_ONE_PARAMETERS,         TRUE },
     // 05.11.2019
     { "c1.frsize",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_FRAME_SIZE,                 TRUE },
-    { "c1.frspace",      G_TYPE_UINT,   G_PARAM_READABLE,  PROP_FRAME_SPACE,                TRUE },
+    { "c1.frspace",      G_TYPE_UINT,   G_PARAM_READABLE,  PROP_MEMORY_SIZE,                TRUE },
     { NULL, }
 };
 
@@ -2386,6 +2386,86 @@ prepare_trigger(UcaPhantomCameraPrivate *priv) {
     g_free(reply);
 }
 
+// ******************************
+// ACQUISITION OF MULTIPLE FRAMES
+// ******************************
+
+/**
+ * @brief Sends the instructions to start the acquistion of multiple frames
+ *
+ * This method sends the instruction to start acquiring multiple frames to the camera. The amount of frames to be
+ * acquired is stored in the camera attribute "defc.ptframes" and can be modified. All the frames are saved into the
+ * first cine of the camera.
+ * Caution: Sending a trigger command will overwrite all the frames, which have been recorded by a previous trigger
+ * command!
+ *
+ * CHANGELOG
+ *
+ * Changed 10.05.2019
+ * Added the explicit assumption to always save all the frames into the first cine.
+ *
+ * Changed 29.05.2019
+ * Added the "rec" command, which is being send before the trig command, to tell the camera into which cine to
+ * put the recording.
+ *
+ * Changed 10.06.2019
+ * Moved the "rec" command into its own function "prepare_trigger", which is now being invoked here inside this
+ * function. It was moved, because the "rec" command may also be needed as a separate functionality in the future
+ *
+ * Changed 19.07.2019
+ * The actual "trig" command is now only being sent, when the external-trigger flag is set to False. If it is set to
+ * true the trigger method for the camera will merely send the prepare command so that subsequent hardware triggers
+ * work.
+ *
+ * Changed 06.11.2019
+ * This method will simply send the "trig" command itself to the camera. If there is not currently a recording running
+ * in the camera, then that is the problem of the user.
+ *
+ * @param camera
+ * @param error
+ */
+static void
+uca_phantom_camera_trigger (UcaCamera *camera,
+                            GError **error)
+{
+    // To simplify things for the user, whenever a trigger is issued, we are assuming that the frames are to be saved
+    // into the first cine. Like this, the user does not have to know about the cone structure, but can simply use
+    // the camera as a black box for image recording into a generic storage unit.
+    const gchar *trigger_request = "trig\r\n";
+    gchar *reply;
+
+    UcaPhantomCameraPrivate *priv = UCA_PHANTOM_CAMERA_GET_PRIVATE(camera);
+
+    reply = phantom_talk (priv, trigger_request, NULL, 0, error);
+    g_free(reply);
+
+    g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
+}
+
+/**
+ * @brief Returns TRUE, when the camera is currently NOT recording a trigger and FALSE otherwise.
+ *
+ * CHANGELOG
+ *
+ * Added 29.05.2019
+ *
+ * @param priv
+ * @return
+ */
+static gboolean
+check_trigger_status(UcaPhantomCameraPrivate *priv) {
+    const gchar *request = "get c1.state\r\n";
+    gchar *reply;
+    gboolean status;
+    // Actually sending the request to the camera and receiving its reply.
+    reply = phantom_talk (priv, request, NULL, 0, NULL);
+    if (strstr(reply, "STR") != NULL) {
+        status = TRUE;
+    } else {
+        status = FALSE;
+    }
+    return status;
+}
 
 // *********************************
 // STARTING AND STOPPING THE READOUT
@@ -3161,88 +3241,6 @@ uca_phantom_camera_grab (UcaCamera *camera,
     }
 }
 
-
-// ******************************
-// ACQUISITION OF MULTIPLE FRAMES
-// ******************************
-
-/**
- * @brief Sends the instructions to start the acquistion of multiple frames
- *
- * This method sends the instruction to start acquiring multiple frames to the camera. The amount of frames to be
- * acquired is stored in the camera attribute "defc.ptframes" and can be modified. All the frames are saved into the
- * first cine of the camera.
- * Caution: Sending a trigger command will overwrite all the frames, which have been recorded by a previous trigger
- * command!
- *
- * CHANGELOG
- *
- * Changed 10.05.2019
- * Added the explicit assumption to always save all the frames into the first cine.
- *
- * Changed 29.05.2019
- * Added the "rec" command, which is being send before the trig command, to tell the camera into which cine to
- * put the recording.
- *
- * Changed 10.06.2019
- * Moved the "rec" command into its own function "prepare_trigger", which is now being invoked here inside this
- * function. It was moved, because the "rec" command may also be needed as a separate functionality in the future
- *
- * Changed 19.07.2019
- * The actual "trig" command is now only being sent, when the external-trigger flag is set to False. If it is set to
- * true the trigger method for the camera will merely send the prepare command so that subsequent hardware triggers
- * work.
- *
- * Changed 06.11.2019
- * This method will simply send the "trig" command itself to the camera. If there is not currently a recording running
- * in the camera, then that is the problem of the user.
- *
- * @param camera
- * @param error
- */
-static void
-uca_phantom_camera_trigger (UcaCamera *camera,
-                            GError **error)
-{
-    // To simplify things for the user, whenever a trigger is issued, we are assuming that the frames are to be saved
-    // into the first cine. Like this, the user does not have to know about the cone structure, but can simply use
-    // the camera as a black box for image recording into a generic storage unit.
-    const gchar *trigger_request = "trig\r\n";
-    gchar *reply;
-
-    UcaPhantomCameraPrivate *priv = UCA_PHANTOM_CAMERA_GET_PRIVATE(camera);
-
-    reply = phantom_talk (priv, trigger_request, NULL, 0, error);
-    g_free(reply);
-
-    g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
-}
-
-/**
- * @brief Returns TRUE, when the camera is currently NOT recording a trigger and FALSE otherwise.
- *
- * CHANGELOG
- *
- * Added 29.05.2019
- *
- * @param priv
- * @return
- */
-static gboolean
-check_trigger_status(UcaPhantomCameraPrivate *priv) {
-    const gchar *request = "get c1.state\r\n";
-    gchar *reply;
-    gboolean status;
-    // Actually sending the request to the camera and receiving its reply.
-    reply = phantom_talk (priv, request, NULL, 0, NULL);
-    if (strstr(reply, "STR") != NULL) {
-        status = TRUE;   
-    } else {
-        status = FALSE;
-    }
-    return status;
-}
-
 // ****************
 // THE MEMGATE MODE
 // ****************
@@ -3635,22 +3633,27 @@ uca_phantom_camera_get_property (GObject *object,
         // 05.11.2019
         // This property will return the maximum number of frames that can be fit into the primary cine memory.
         case PROP_MAX_FRAMES:
-            GValue value_frame_size, value_memory_size;
-            guint frame_size, memory_size, max_frames;
+            {
+            GValue value_frame_size;
+            GValue value_memory_size;
+            guint frame_size;
+            guint memory_size;
+            guint max_frames;
 
             // Getting the frame size
             uca_phantom_camera_get_property(object, PROP_FRAME_SIZE, &value_frame_size, G_TYPE_UINT);
-            frame_size = g_value_get_uint(value_frame_size);
+            frame_size = g_value_get_uint(&value_frame_size);
 
             // Getting the total memory size
             uca_phantom_camera_get_property(object, PROP_MEMORY_SIZE, &value_memory_size, G_TYPE_UINT);
-            memory_size = g_value_get_uint(value_frame_size);
+            memory_size = g_value_get_uint(&value_frame_size);
 
             // Computing the frame amount as the amount of frame sizes, that can be fit into the total cine memory size
             max_frames = memory_size / frame_size;
 
-            g_value_set_uint(fvalue, frame_size);
+            g_value_set_uint(value, frame_size);
             break;
+        }
         // 05.11.2019
         // The post trigger frames are now not being handled automatically anymore, because in the setter we have to
         // include the custom code, that sets the memread_count variable to the same value...
