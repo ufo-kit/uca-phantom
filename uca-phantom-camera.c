@@ -3360,7 +3360,7 @@ disable_memgate_function(UcaPhantomCameraPrivate *priv) {
 static void
 uca_phantom_camera_set_property (GObject *object,
                                  guint property_id,
-                                 const GValue *value,
+                                 GValue *value,
                                  GParamSpec *pspec)
 {
     UcaPhantomCameraPrivate *priv;
@@ -3486,13 +3486,15 @@ uca_phantom_camera_set_property (GObject *object,
         // This handles the case of the post-trigger-frames being set. This number defines how many frames the camera
         // records after receiving a trigger event.
         // The memread count is additionally being set to the very same value.
-        case PROP_POST_TRIGGER_FRAMES:
+        case PROP_POST_TRIGGER_FRAMES: {
+            guint val = g_value_get_uint(value);
+            g_value_set_uint(value, val);
             // First we actually set the camera to this value
-            phantom_set (priv, var, value);
+            phantom_set(priv, var, value);
 
             // but then we also have to set the memread count to the same value!
             // The following code section has been copied from the previous setter of memread-count.
-            priv->memread_count = g_value_get_uint(value);
+            priv->memread_count = val;
             // 29.05.2019
             // Whenever a new memread count is specified (indicating the intention to read out more frames) the index,
             // which keeps track of the grab calls needs to be reset and the remaining count is set to the total amount
@@ -3507,6 +3509,7 @@ uca_phantom_camera_set_property (GObject *object,
             // 11.06.2019
             // We obviously also need to reset the unpack index
             priv->memread_unpack_index = 0;
+        }
             break;
     }
 }
@@ -3646,7 +3649,7 @@ uca_phantom_camera_get_property (GObject *object,
             g_value_set_boolean(value, priv->triggered_externally);
             break;
         case PROP_MEMREAD_COUNT:
-            g_value_set_int(value, priv->memread_count);
+            g_value_set_uint(value, priv->memread_count);
             break;
         case PROP_TRIGGER_SOURCE:
             g_value_set_enum(value, priv->uca_trigger_source);
