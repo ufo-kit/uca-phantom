@@ -63,12 +63,12 @@
 
 // SENSOR PIXEL HEIGHT AUCH VON DER CAMERA AUSLESEN (low)
 
-// PUBLIC GITHUB ZIEHEN (medium)
+//// PUBLIC GITHUB ZIEHEN (medium)
 
-// DOCUMENTATION SCHREIBEN (medium)
+//// DOCUMENTATION SCHREIBEN (medium)
 
-// KEINE ROOT RECHTE FUER PACKET_MAP brauchen? CAP_NET_RAW permission setting for user
-// CAP_NET_RAW, CAP_IPC_LOCK
+//// KEINE ROOT RECHTE FUER PACKET_MAP brauchen? CAP_NET_RAW permission setting for user
+//// CAP_NET_RAW, CAP_IPC_LOCK
 
 
 // **************************************
@@ -218,6 +218,9 @@ enum {
     PROP_FRAME_SIZE,
     PROP_MEMORY_SIZE,
     PROP_MAX_FRAMES,
+    // 11.11.2019
+    // This is the property, which holds the numeric index for which acquisition mode is currently active
+    PROP_ACQUISITION_MODE_INDEX,
 
     N_PROPERTIES
 };
@@ -435,6 +438,8 @@ static UnitVariable variables[] = {
     // 05.11.2019
     { "c1.frsize",       G_TYPE_UINT,   G_PARAM_READABLE,  PROP_FRAME_SIZE,                 TRUE },
     { "c1.frspace",      G_TYPE_UINT,   G_PARAM_READABLE,  PROP_MEMORY_SIZE,                TRUE },
+    // 11.11.2019
+    { "cam.mode",        G_TYPE_UINT,   G_PARAM_READABLE, PROP_ACQUISITION_MODE_INDEX,      TRUE },
     { NULL, }
 };
 
@@ -2097,6 +2102,7 @@ _accept_ximg_data (UcaPhantomCameraPrivate *priv)
     priv->mac_address[5] = if_opts.ifr_hwaddr.sa_data[5];
 
     /* re-use socket */
+    /* re-use socket */
     if (setsockopt (fd, SOL_SOCKET, SO_REUSEADDR, &sock_opt, sizeof (sock_opt)) == -1) {
         g_set_error_literal (&result->error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_DEVICE,
                              "Could not set socket mode to reuse");
@@ -3062,7 +3068,7 @@ static void
 wait_for_frames(UcaPhantomCameraPrivate *priv) {
     // Setting up the requesting of a value from the phantom camera
     UnitVariable *var;
-    guint recorded_frames_count;
+    guint recorded_frames_count = 0;
 
     GValue value = G_VALUE_INIT;
     g_value_init(&value, G_TYPE_UINT);
@@ -3586,7 +3592,22 @@ uca_phantom_camera_get_property (GObject *object,
             g_value_set_enum (value, priv->format);
             break;
         case PROP_ACQUISITION_MODE:
-            g_value_set_enum (value, priv->acquisition_mode);
+            {
+                UnitVariable *var;
+
+                GValue value_index = G_VALUE_INIT;
+                g_value_init(&value_index, G_TYPE_UINT);
+
+                var = phantom_lookup_by_id (PROP_ACQUISITION_MODE_INDEX);
+
+                guint index;
+
+                // Getting the frame size
+                phantom_get(priv, var, &value_index);
+
+                index = g_value_get_uint(&value_index);
+                g_value_set_enum (value, index);
+            }
             break;
         case PROP_ENABLE_10GE:
             g_value_set_boolean (value, priv->enable_10ge);
@@ -3634,26 +3655,38 @@ uca_phantom_camera_get_property (GObject *object,
         // This property will return the maximum number of frames that can be fit into the primary cine memory.
         case PROP_MAX_FRAMES:
             {
-            GValue value_frame_size;
-            GValue value_memory_size;
-            guint frame_size;
-            guint memory_size;
-            guint max_frames;
+                UnitVariable *var, *var1;
 
-            // Getting the frame size
-            uca_phantom_camera_get_property(object, PROP_FRAME_SIZE, &value_frame_size, G_TYPE_UINT);
-            frame_size = g_value_get_uint(&value_frame_size);
+                // 22.07.2019
+                GValue value_frame_size = G_VALUE_INIT;
+                g_value_init(&value_frame_size, G_TYPE_UINT);
 
-            // Getting the total memory size
-            uca_phantom_camera_get_property(object, PROP_MEMORY_SIZE, &value_memory_size, G_TYPE_UINT);
-            memory_size = g_value_get_uint(&value_frame_size);
+                GValue value_memory_size = G_VALUE_INIT;
+                g_value_init(&value_memory_size, G_TYPE_UINT);
 
-            // Computing the frame amount as the amount of frame sizes, that can be fit into the total cine memory size
-            max_frames = memory_size / frame_size;
+                var = phantom_lookup_by_id (PROP_FRAME_SIZE);
+                var1 = phantom_lookup_by_id (PROP_MEMORY_SIZE);
 
-            g_value_set_uint(value, frame_size);
+                guint frame_size;
+                guint memory_size;
+                guint max_frames;
+
+                // Getting the frame size
+                phantom_get(priv, var, &value_frame_size);
+                phantom_get(priv, var1, &value_memory_size);
+                frame_size = g_value_get_uint(&value_frame_size);
+
+                // Getting the total memory size
+                memory_size = g_value_get_uint(&value_memory_size);
+
+                g_warning("frame size %i, memory size %i", frame_size, memory_size);
+
+                // Computing the frame amount as the amount of frame sizes, that can be fit into the total cine memory size
+                max_frames = (guint) (memory_size / frame_size);
+
+                g_value_set_uint(value, max_frames);
+            }
             break;
-        }
         // 05.11.2019
         // The post trigger frames are now not being handled automatically anymore, because in the setter we have to
         // include the custom code, that sets the memread_count variable to the same value...
@@ -4003,6 +4036,8 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             "The network IP address of the phantom camera",
             "", G_PARAM_READWRITE);
 
+    // POST FORK ADDITIONS by Jonas Teufel
+
     // A boolean flag to initialize the connection process
     phantom_properties[PROP_CONNECT] =
             g_param_spec_boolean ("connect",
@@ -4050,6 +4085,13 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
                                 "The maximum number of frames fitting into the primary cine partition",
                                 0, G_MAXUINT, 0, G_PARAM_READABLE);
 
+    // 11.11.2019
+    phantom_properties[PROP_ACQUISITION_MODE_INDEX] =
+            g_param_spec_uint ("acquisition-mode-index",
+                               "The maximum number of frames fitting into the primary cine partition",
+                               "The maximum number of frames fitting into the primary cine partition",
+                               0, G_MAXUINT, 0, G_PARAM_READABLE);
+
     for (guint i = 0; i < base_overrideables[i]; i++)
         g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
 
@@ -4092,7 +4134,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->accept = NULL;
     priv->buffer = NULL;
     priv->features = NULL;
-    priv->format = IMAGE_FORMAT_P10;
+    priv->format = IMAGE_FORMAT_P12L;
     priv->acquisition_mode = ACQUISITION_MODE_HS;
     priv->enable_10ge = FALSE;
     priv->xg_packet_skipped = FALSE;
