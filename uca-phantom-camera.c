@@ -4045,7 +4045,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
     // This is the property, which will indicate the maximum amount of frames, that will fit into the primary
     // cine partition
     phantom_properties[PROP_MAX_FRAMES] =
-            g_param_spec_guint ("max-frames",
+            g_param_spec_uint ("max-frames",
                                 "The maximum number of frames fitting into the primary cine partition",
                                 "The maximum number of frames fitting into the primary cine partition",
                                 0, G_MAXUINT, 0, G_PARAM_READABLE);

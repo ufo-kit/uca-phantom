@@ -191,4 +191,10 @@ manually afterwards.
 - Moved the documentation from a separate git repository to 
 this repository and updated the documentation with the latest backward 
 incompatible API changes.
-    
+
+### 1.0.1 - 11.11.2019
+
+- Fixed syntax errors, which were preventing the build process
+- Moved the trigger function definition internally, because it needs
+to be called by the "start_recording" function when set to AUTO
+trigger mode
