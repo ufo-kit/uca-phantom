@@ -541,7 +541,7 @@ phantom_talk (UcaPhantomCameraPrivate *priv,
     gboolean output_write_success;
     output_write_success = g_output_stream_write_all (ostream, request, strlen (request), &size, NULL, &error);
 
-    g_warning("C REQUEST: %s", request);
+    //g_warning("C REQUEST: %s", request);
 
     // In case the write did not work, we will inform the user first and then return NULL, terminating this function.
     if (!output_write_success) {
@@ -599,7 +599,7 @@ phantom_talk (UcaPhantomCameraPrivate *priv,
     }
 
     // Returning the final reply
-    g_warning("C REPLY: %s", reply);
+    //g_warning("C REPLY: %s", reply);
     return reply;
 }
 
@@ -657,7 +657,7 @@ phantom_get_string_by_name (UcaPhantomCameraPrivate *priv, const gchar *name)
     value = g_match_info_fetch (info, 2);
     g_match_info_free (info);
     g_free (reply);
-    g_warning("GET STRING VALUE: %s", value);
+    //g_warning("GET STRING VALUE: %s", value);
     return value;
 }
 
@@ -746,8 +746,8 @@ phantom_get (UcaPhantomCameraPrivate *priv, UnitVariable *var, GValue *value)
     gchar *var_value;
 
     var_value = phantom_get_string (priv, var);
-    g_warning("TR VALUE: %s", var_value);
-    g_warning("TRIGGER SOURCE %i", priv->uca_trigger_source == UCA_CAMERA_TRIGGER_SOURCE_SOFTWARE);
+    //g_warning("TR VALUE: %s", var_value);
+    //g_warning("TRIGGER SOURCE %i", priv->uca_trigger_source == UCA_CAMERA_TRIGGER_SOURCE_SOFTWARE);
 
     g_value_init (&reply_value, G_TYPE_STRING);
     g_value_set_string (&reply_value, var_value);
@@ -961,7 +961,7 @@ accept_img_data (UcaPhantomCameraPrivate *priv)
                 result->type = RESULT_IMAGE;
                 result->success = TRUE;
                 g_async_queue_push (priv->result_queue, result);
-                // g_warning("receive error %s", result->error);
+                //g_warning("receive error %s", result->error);
                 break;
 
             case MESSAGE_READ_TIMESTAMP:
@@ -2637,6 +2637,9 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
     UcaPhantomCameraPrivate *priv;
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
+    prepare_trigger(priv);
+
+    priv->memread_index = -1;
     // 06.11.2019
     // Getting the trigger source from the parent instance of the camera
     UcaCameraTriggerSource trigger_source;
@@ -2655,7 +2658,8 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
     // 06.11.2019
     // No matter what trigger mode has been set, the trigger has to be prepared at the beginning of a recording
     // anyways. The prepare_trigger starts a recording.
-    prepare_trigger(priv);
+    //prepare_trigger(priv);
+
     // The trigger mode "AUTO" is a special case. For this case it is intended, that a trigger is implicitly directly
     // sent as soon as the recording is being started.
     if (trigger_source == UCA_CAMERA_TRIGGER_SOURCE_AUTO) {
@@ -2900,8 +2904,7 @@ finalize_receiving_image(UcaPhantomCameraPrivate *priv,
     Result *result;
     gboolean is_success;
 
-    //g_warning("enters finalize");
-
+    
     // This is a blocking call, which will wait until a new "result" has been put into the async queue by the worker
     // thread, which he will do, when the image transmission is finished.
     result = g_async_queue_pop (priv->result_queue);
@@ -3159,8 +3162,6 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
             frame_count = MEMREAD_CHUNK_SIZE;
             priv->memread_remaining -= MEMREAD_CHUNK_SIZE;
         }
-
-        //g_warning("REMAINING %i", priv->memread_remaining);
 
         // 05.11.2019
         // This function will block the program execution for as long as the amount of recorded frames within the
@@ -3682,7 +3683,7 @@ uca_phantom_camera_get_property (GObject *object,
                 // Getting the total memory size
                 memory_size = g_value_get_uint(&value_memory_size);
 
-                g_warning("frame size %i, memory size %i", frame_size, memory_size);
+                // g_warning("frame size %i, memory size %i", frame_size, memory_size);
 
                 // Computing the frame amount as the amount of frame sizes, that can be fit into the total cine memory size
                 max_frames = (guint) (memory_size / frame_size);
@@ -4155,7 +4156,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     // So the network address and the interface for 10G can be specified using an environmental variable
     const gchar *phantom_ethernet_interface = g_getenv("PH_NETWORK_INTERFACE");
     const gchar *phantom_ip_address = g_getenv("PH_NETWORK_ADDRESS");
-    g_warning("IP: %s", phantom_ip_address);
+    //g_warning("IP: %s", phantom_ip_address);
     if (phantom_ethernet_interface != NULL) {
         priv->enable_10ge = TRUE;
         priv->iface = phantom_ethernet_interface;
