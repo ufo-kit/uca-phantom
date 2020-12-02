@@ -3095,12 +3095,12 @@ wait_for_frames(UcaPhantomCameraPrivate *priv) {
     g_debug("chunk size %i", MEMREAD_CHUNK_SIZE);
     UcaCameraTriggerSource trigger_source = priv->uca_trigger_source;
 
-    if (trigger_source == UCA_CAMERA_TRIGGER_SOURCE_EXTERNAL) {
+    //if (trigger_source == UCA_CAMERA_TRIGGER_SOURCE_EXTERNAL) {
         while (check_trigger_status(priv)){
             usleep(10000);
             g_debug("waiting for hw trigger");
         }
-    }
+    //}
 
     guint request_size = (MEMREAD_CHUNK_SIZE < priv->memread_remaining) ?  MEMREAD_CHUNK_SIZE : priv->memread_remaining;
     // Waiting for as long as the recorded frames do not suffice for the request of one "chunk"
