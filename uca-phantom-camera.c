@@ -3097,7 +3097,7 @@ wait_for_frames(UcaPhantomCameraPrivate *priv) {
     UcaCameraTriggerSource trigger_source = priv->uca_trigger_source;
 
     //if (trigger_source == UCA_CAMERA_TRIGGER_SOURCE_EXTERNAL) {
-        while (check_trigger_status(priv)){
+        while (!check_trigger_status(priv)){
             usleep(10000);
             g_debug("waiting for hw trigger");
         }
