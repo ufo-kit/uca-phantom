@@ -2473,6 +2473,7 @@ check_trigger_status(UcaPhantomCameraPrivate *priv) {
     } else {
         status = FALSE;
     }
+    g_debug("trigger status %i", status);
     return status;
 }
 
