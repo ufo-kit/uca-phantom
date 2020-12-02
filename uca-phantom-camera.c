@@ -3081,12 +3081,16 @@ wait_for_frames(UcaPhantomCameraPrivate *priv) {
     // for a full transmission is smaller than the chunk size
     guint request_size = (MEMREAD_CHUNK_SIZE < priv->memread_remaining) ?  MEMREAD_CHUNK_SIZE : priv->memread_remaining;
     // Waiting for as long as the recorded frames do not suffice for the request of one "chunk"
+    g_debug("requested_size %i", request_size);
+    g_debug("recorded frame count %i", recorded_frames_count);
     while (recorded_frames_count < request_size) {
-
+        g_debug("recorded frame count %i", recorded_frames_count);
         // Getting the frame count
         var = phantom_lookup_by_id (PROP_RECORDED_FRAMES);
+
         phantom_get(priv, var, &value);
         recorded_frames_count = g_value_get_uint(&value);
+        g_debug("recorded frame count %i", recorded_frames_count);
     }
 }
 
