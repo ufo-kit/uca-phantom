@@ -2640,6 +2640,15 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
     prepare_trigger(priv);
 
     priv->memread_index = -1;
+    priv->memread_remaining = priv->memread_count;
+    priv->memread_request_sent = FALSE;
+    // 21.07.2019
+    // The memread index is now being set to -1 instead of 0 to clearly indicate, that no grab command has been
+    // called yet. The grab function needs to realize this state to calculate the initial offset of the starting
+    // position within the cine
+    // 11.06.2019
+    // We obviously also need to reset the unpack index
+    priv->memread_unpack_index = 0;
     // 06.11.2019
     // Getting the trigger source from the parent instance of the camera
     UcaCameraTriggerSource trigger_source;
@@ -3444,16 +3453,7 @@ uca_phantom_camera_set_property (GObject *object,
             // Whenever a new memread count is specified (indicating the intention to read out more frames) the index,
             // which keeps track of the grab calls needs to be reset and the remaining count is set to the total amount
             // initially.
-            priv->memread_remaining = priv->memread_count;
-            priv->memread_request_sent = FALSE;
-            // 21.07.2019
-            // The memread index is now being set to -1 instead of 0 to clearly indicate, that no grab command has been
-            // called yet. The grab function needs to realize this state to calculate the initial offset of the starting
-            // position within the cine
-            priv->memread_index = -1;
-            // 11.06.2019
-            // We obviously also need to reset the unpack index
-            priv->memread_unpack_index = 0;
+
             break;
         // 26.05.2019
         // Adding an additional property to manually set the IP address in cases, where the discovery mode might not
