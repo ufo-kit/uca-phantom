@@ -3171,7 +3171,7 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
     if (!priv->memread_request_sent || priv->memread_unpack_index % MEMREAD_CHUNK_SIZE == 0) {
         // The frame count to be calculated is either the chunk size or the remaining amount, if the remaining amount
         // is less than the chunk size. We also need to the update the remaining count afterwards
-        wait_for_frames(priv);
+
 
         if (priv->memread_remaining < MEMREAD_CHUNK_SIZE) {
             frame_count = priv->memread_remaining;
@@ -3184,7 +3184,7 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
         // 05.11.2019
         // This function will block the program execution for as long as the amount of recorded frames within the
         // camera is not sufficient to request another chunk
-
+        wait_for_frames(priv);
         // Here we have to send a new request
         // Given the frame count and the cine source, this function will generate a request string for the camera,
         // that is based on the configuration of the camera object (10G/1G, transfer format etc..).
