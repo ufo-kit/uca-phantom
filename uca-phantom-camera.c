@@ -541,7 +541,7 @@ phantom_talk (UcaPhantomCameraPrivate *priv,
     gboolean output_write_success;
     output_write_success = g_output_stream_write_all (ostream, request, strlen (request), &size, NULL, &error);
 
-    //g_warning("C REQUEST: %s", request);
+    g_debug("C REQUEST: %s", request);
 
     // In case the write did not work, we will inform the user first and then return NULL, terminating this function.
     if (!output_write_success) {
@@ -599,7 +599,7 @@ phantom_talk (UcaPhantomCameraPrivate *priv,
     }
 
     // Returning the final reply
-    //g_warning("C REPLY: %s", reply);
+    g_debug("C REPLY: %s", reply);
     return reply;
 }
 
