@@ -746,7 +746,7 @@ phantom_get (UcaPhantomCameraPrivate *priv, UnitVariable *var, GValue *value)
     gchar *var_value;
 
     var_value = phantom_get_string (priv, var);
-    g_debug("get variable: %s", var);
+    //g_debug("get variable: %s", var);
     g_debug("get result: %s", var_value);
     //g_warning("TRIGGER SOURCE %i", priv->uca_trigger_source == UCA_CAMERA_TRIGGER_SOURCE_SOFTWARE);
 
