@@ -81,7 +81,7 @@
 // 26.06.2019
 // Changed the Chunk size from 400 to 100, because after testing with the 2048 pixel width image settings. 400 images
 // cause the ring buffer to overflow.
-#define MEMREAD_CHUNK_SIZE  100
+#define MEMREAD_CHUNK_SIZE  5
 
 // 04.11.2019
 // This macro will define the index which will be used as the start index for the very first packet request of the
@@ -3096,7 +3096,7 @@ wait_for_frames(UcaPhantomCameraPrivate *priv) {
     g_debug("requested_size %i", request_size);
     g_debug("recorded frame count %i", recorded_frames_count);
     while (recorded_frames_count < request_size) {
-        g_debug("recorded frame count %i", recorded_frames_count);
+        g_debug("waiting recorded frame count %i", recorded_frames_count);
         // Getting the frame count
         var = phantom_lookup_by_id (PROP_RECORDED_FRAMES);
 
