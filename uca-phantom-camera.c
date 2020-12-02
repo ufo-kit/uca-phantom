@@ -1618,8 +1618,7 @@ void unpack_image_p10(UcaPhantomCameraPrivate *priv) {
     gsize pixel_count = priv->roi_width * priv->roi_height;
 
     int counter = 0;
-
-    g_debug("");
+    
     while (priv->xg_buffer_index < pixel_count) {
         new_length = priv->xg_total - priv->xg_unpack_index;
         usable_length = new_length - (new_length % 10);
