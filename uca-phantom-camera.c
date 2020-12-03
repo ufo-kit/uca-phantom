@@ -3190,7 +3190,7 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
         // The frame count to be calculated is either the chunk size or the remaining amount, if the remaining amount
         // is less than the chunk size. We also need to the update the remaining count afterwards
 
-
+        g_debug("Memread remaining: %i", priv->memread_remaining);
         if (priv->memread_remaining < MEMREAD_CHUNK_SIZE) {
             frame_count = priv->memread_remaining;
             priv->memread_remaining = 0;
