@@ -435,7 +435,7 @@ static UnitVariable variables[] = {
     { "cam.syncimg",     G_TYPE_ENUM,   G_PARAM_READWRITE, PROP_FRAME_SYNCHRONIZATION,      TRUE },
     { "cam.frdelay",     G_TYPE_UINT,   G_PARAM_READWRITE, PROP_FRAME_DELAY,                FALSE },
     { "cam.cines",       G_TYPE_UINT,   G_PARAM_READWRITE, PROP_NUM_CINES,                  FALSE },
-    { "defc.rate",       G_TYPE_FLOAT,  G_PARAM_READWRITE, PROP_FRAMES_PER_SECOND,          FALSE },
+    { "defc.rate",       G_TYPE_FLOAT,  G_PARAM_READWRITE, PROP_FRAMES_PER_SECOND,          TRUE },
     { "defc.exp",        G_TYPE_UINT,   G_PARAM_READWRITE, PROP_EXPOSURE_TIME,              FALSE },
     { "defc.ptframes",   G_TYPE_UINT,   G_PARAM_READWRITE, PROP_POST_TRIGGER_FRAMES,        FALSE },
     { "c1.frcount",      G_TYPE_UINT,   G_PARAM_READABLE,  PROP_RECORDED_FRAMES,            TRUE },
@@ -1294,7 +1294,7 @@ read_ximg_data (
         struct pollfd *poll_fd,
         GError **error)
 {
-
+    g_debug("start read ximg");
     // With this we keep track of how many bytes have already been received.
     priv->xg_total = 0;
     gsize total = 0;
@@ -1353,10 +1353,11 @@ read_ximg_data (
         }
 
         // Actually extracting the data of the packages in that block into the destination buffer.
-
+        g_debug("block process");
         process_block(priv);
+        g_debug("block processed");
         flush_block(priv);
-
+        g_debug("block flushed");
         // If the block is not yet finished to be processed we cannot increment the index, so that with the next call
         // of this function the rest of the unfinished block will be processed first.
         if (priv->xg_block_finished == TRUE) {
@@ -1364,6 +1365,7 @@ read_ximg_data (
             // after all this is how a ring buffer works.
             priv->xg_block_index = (priv->xg_block_index + 1) % block_amount;
         }
+        g_debug("read done");
     }
     return 0;
 }
@@ -1805,6 +1807,7 @@ void unpack_image_p12l(UcaPhantomCameraPrivate *priv) {
 static gpointer
 unpack_ximg_data (UcaPhantomCameraPrivate *priv)
 {
+    g_debug("start unpack");
     Result *result;
     gint fd;
     gboolean stop = FALSE;
@@ -1883,7 +1886,7 @@ unpack_ximg_data (UcaPhantomCameraPrivate *priv)
 static gpointer
 accept_ximg_data (UcaPhantomCameraPrivate *priv)
 {
-    //g_warning("START ACCEPTING");
+    g_debug("START ACCEPTING");
     Result *result;
     gint fd;
     gboolean stop = FALSE;
