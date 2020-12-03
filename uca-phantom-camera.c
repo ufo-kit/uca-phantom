@@ -375,7 +375,7 @@ struct _UcaPhantomCameraPrivate {
     guint                memread_start;     // not implemented yet
     // 29.05.2019
     guint                memread_remaining;
-    guint                memread_index;
+    gint                memread_index;
     // 11.06.2019
     // This is the index, that is being incremented by the unpacking thread, when the program is in memread mode.
     // The theory is to delay the sending of the next chunk request until the last image has been unpacked.
@@ -3191,6 +3191,7 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
         // is less than the chunk size. We also need to the update the remaining count afterwards
 
         g_debug("Memread remaining: %i", priv->memread_remaining);
+        g_debug("Memread index: %i", priv->memread_index);
         if (priv->memread_remaining < MEMREAD_CHUNK_SIZE) {
             frame_count = priv->memread_remaining;
             priv->memread_remaining = 0;
