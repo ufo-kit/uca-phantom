@@ -84,7 +84,7 @@
 // 26.06.2019
 // Changed the Chunk size from 400 to 100, because after testing with the 2048 pixel width image settings. 400 images
 // cause the ring buffer to overflow.
-#define MEMREAD_CHUNK_SIZE  100
+#define MEMREAD_CHUNK_SIZE  1
 
 // 04.11.2019
 // This macro will define the index which will be used as the start index for the very first packet request of the
@@ -1149,6 +1149,7 @@ void process_packet(UcaPhantomCameraPrivate *priv) {
             increment_packet(priv);
         } else {
             priv->xg_packet_skipped = TRUE;
+            g_debug ("setting xg_packet_skipped = TRUE");
             //g_warning("I AM ACTUALLY USEFUL");
         }
     }
@@ -1207,6 +1208,7 @@ void process_block(UcaPhantomCameraPrivate *priv) {
     // depends on the size of the packet, speed of transmission etc. In general, the amount is not previously known,
     // but once the block is done writing, is stored inside the "num_pckts" of its descriptor.
     int packet_amount = priv->xg_current_block->h1.num_pkts;
+    /* g_debug ("Packet amount: %d/%u", packet_amount, priv->xg_current_block->h1.num_pkts); */
     priv->xg_packet_amount = packet_amount;
 
     // This will be the pointer directed at the start of the actual packet data! The data contained in a packet is
@@ -1228,6 +1230,7 @@ void process_block(UcaPhantomCameraPrivate *priv) {
     // Ugly hack, should improve this
     if (priv->xg_packet_skipped == TRUE) {
         //g_warning("ALSO USEFUL");
+        g_debug ("xg_packet_skipped TRUE in process block");
         increment_packet(priv);
         priv->xg_packet_skipped = FALSE;
     }
@@ -1318,6 +1321,7 @@ read_ximg_data (
 
     //unsigned int block_index = 0;
     unsigned int block_amount = 10000;
+    gint previous_block_index = -1;
 
     // For profiling the code
     struct timespec tstart={0,0}, tend={0,0};
@@ -1339,7 +1343,9 @@ read_ximg_data (
         // read it. So the program execution of the loop will be skipped here, if the next block has not yet been
         // released to the user space.
         if ((priv->xg_current_block->h1.block_status & TP_STATUS_USER) == 0) {
+            g_debug ("Waiting for kernel to release");
             poll(poll_fd, 1, -1);
+            g_debug ("Kernel released");
             continue;
         }
 
@@ -1353,11 +1359,12 @@ read_ximg_data (
         }
 
         // Actually extracting the data of the packages in that block into the destination buffer.
-        g_debug("block process");
+        g_debug("block process, %d %d %d %lu %lu", priv->xg_block_finished, priv->xg_block_index,
+                                                   priv->xg_packet_index, priv->xg_total, priv->xg_expected);
         process_block(priv);
-        g_debug("block processed");
+        /* g_debug("block processed"); */
         flush_block(priv);
-        g_debug("block flushed");
+        /* g_debug("block flushed"); */
         // If the block is not yet finished to be processed we cannot increment the index, so that with the next call
         // of this function the rest of the unfinished block will be processed first.
         if (priv->xg_block_finished == TRUE) {
@@ -1365,8 +1372,14 @@ read_ximg_data (
             // after all this is how a ring buffer works.
             priv->xg_block_index = (priv->xg_block_index + 1) % block_amount;
         }
-        g_debug("read done");
+        if (previous_block_index == priv->xg_block_index && priv->xg_total == 0) {
+            g_debug ("Current == last block index and xg_total=0");
+            break;
+        }
+        previous_block_index = priv->xg_block_index;
     }
+    g_debug("read done");
+
     return 0;
 }
 
