@@ -2646,6 +2646,10 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
     UcaPhantomCameraPrivate *priv;
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
+    guint frame_rate;
+    gchar reply[256];
+    phantom_talk(priv, "get defc.rate", reply, sizeof(reply), NULL);
+
     prepare_trigger(priv);
     priv->memread_started = FALSE;
     priv->memread_index = -priv->pre_trigger_frames;
