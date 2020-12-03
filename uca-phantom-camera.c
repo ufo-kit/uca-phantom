@@ -225,6 +225,8 @@ enum {
     // This is the property, which holds the numeric index for which acquisition mode is currently active
     PROP_ACQUISITION_MODE_INDEX,
 
+    PROP_PRE_TRIGGER_FRAMES,
+
     N_PROPERTIES
 };
 
@@ -388,6 +390,8 @@ struct _UcaPhantomCameraPrivate {
     // be used the "rec" command, which has to be sent in preparation of a trigger, will be sent during the
     // "start_recording" process.. Otherwise the "rec" command will be sent together with the software trigger command
     gboolean             triggered_externally;
+    gboolean memread_started;
+    guint pre_trigger_frames;
 };
 
 typedef struct  {
@@ -2642,8 +2646,9 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
     prepare_trigger(priv);
-
-    priv->memread_index = -1;
+    priv->memread_started = FALSE;
+    priv->memread_index = -priv->pre_trigger_frames;
+    priv->memread_count = priv->pre_trigger_frames + priv->memread_count;
     priv->memread_remaining = priv->memread_count;
     priv->memread_request_sent = FALSE;
     // 21.07.2019
@@ -3097,10 +3102,10 @@ wait_for_frames(UcaPhantomCameraPrivate *priv) {
     UcaCameraTriggerSource trigger_source = priv->uca_trigger_source;
 
     //if (trigger_source == UCA_CAMERA_TRIGGER_SOURCE_EXTERNAL) {
-        while (!check_trigger_status(priv)){
-            usleep(10000);
-            g_debug("waiting for hw trigger");
-        }
+        //while (!check_trigger_status(priv)){
+        //    usleep(10000);
+        //    g_debug("waiting for hw trigger");
+        //}
     //}
 
     guint request_size = (MEMREAD_CHUNK_SIZE < priv->memread_remaining) ?  MEMREAD_CHUNK_SIZE : priv->memread_remaining;
@@ -3172,13 +3177,13 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
     // have a negative number. A negative memread index indicates, that the readout for a new recording has begun.
     // In this case the starting index offset for the first frame of the recording within the cine of the camera
     // is being calculated by the "get_memread_start" function.
-    if (priv->memread_index == -1) {
+    //if (priv->memread_index == -1) {
 
         // 05.11.2019
         // It turns out the get memread start method is not necessary, as the internal index within the camera will
         // always reference the first frame after the trigger with index 0
-        priv->memread_index = 0;
-    }
+    //    priv->memread_index = 0;
+    //}
 
     if (!priv->memread_request_sent || priv->memread_unpack_index % MEMREAD_CHUNK_SIZE == 0) {
         // The frame count to be calculated is either the chunk size or the remaining amount, if the remaining amount
@@ -3226,8 +3231,9 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
     // If this is the last grab call (unpack index has reached the specified count), then we obviously have to reset
     // the memread index to a negative number to indicate for the next first grab call to recalculate the initial
     // index offset.
-    if (priv->memread_unpack_index == priv->memread_count) {
-        priv->memread_index = -1;
+    if (priv->memread_unpack_index == (priv->memread_count-priv->pre_trigger_frames)) {
+        priv->memread_index = priv->pre_trigger_frames;
+        priv->memread_started = FALSE;
     }
 
     // This function will wait (blocking call) until the worker thread has published its results into the internal
@@ -3503,6 +3509,12 @@ uca_phantom_camera_set_property (GObject *object,
                 disable_memgate_function(priv);
             }
             break;
+
+        case PROP_PRE_TRIGGER_FRAMES: {
+            guint val = g_value_get_uint(value);
+            priv->pre_trigger_frames = val;
+        }
+            break;
         // 05.11.2019
         // This handles the case of the post-trigger-frames being set. This number defines how many frames the camera
         // records after receiving a trigger event.
@@ -3674,6 +3686,9 @@ uca_phantom_camera_get_property (GObject *object,
             break;
         case PROP_TRIGGER_SOURCE:
             g_value_set_enum(value, priv->uca_trigger_source);
+            break;
+        case PROP_PRE_TRIGGER_FRAMES:
+            g_value_set_uint(value, priv->pre_trigger_frames);
             break;
         // 05.11.2019
         // This property will return the maximum number of frames that can be fit into the primary cine memory.
@@ -4158,6 +4173,8 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->accept = NULL;
     priv->buffer = NULL;
     priv->features = NULL;
+    priv->memread_started = FALSE;
+    priv->pre_trigger_frames = 0;
     priv->format = IMAGE_FORMAT_P12L;
     priv->acquisition_mode = ACQUISITION_MODE_HS;
     priv->enable_10ge = FALSE;
