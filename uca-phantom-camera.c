@@ -391,6 +391,7 @@ struct _UcaPhantomCameraPrivate {
     // "start_recording" process.. Otherwise the "rec" command will be sent together with the software trigger command
     gboolean             triggered_externally;
     gboolean memread_started;
+    guint post_trigger_frames;
     guint pre_trigger_frames;
 };
 
@@ -2647,8 +2648,8 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
 
     prepare_trigger(priv);
     priv->memread_started = FALSE;
-    priv->memread_index = -priv->pre_trigger_frames;
-    priv->memread_count = priv->pre_trigger_frames + priv->memread_count;
+    priv->memread_index = -priv->post_trigger_frames;
+    //priv->memread_count = priv->pre_trigger_frames + priv->memread_count;
     priv->memread_remaining = priv->memread_count;
     priv->memread_request_sent = FALSE;
     // 21.07.2019
@@ -3232,7 +3233,6 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
     // the memread index to a negative number to indicate for the next first grab call to recalculate the initial
     // index offset.
     if (priv->memread_unpack_index == (priv->memread_count-priv->pre_trigger_frames)) {
-        priv->memread_index = priv->pre_trigger_frames;
         priv->memread_started = FALSE;
     }
 
@@ -3513,6 +3513,7 @@ uca_phantom_camera_set_property (GObject *object,
         case PROP_PRE_TRIGGER_FRAMES: {
             guint val = g_value_get_uint(value);
             priv->pre_trigger_frames = val;
+            priv->memread_count = priv->post_trigger_frames + priv->pre_trigger_frames;
         }
             break;
         // 05.11.2019
@@ -3527,7 +3528,8 @@ uca_phantom_camera_set_property (GObject *object,
 
             // but then we also have to set the memread count to the same value!
             // The following code section has been copied from the previous setter of memread-count.
-            priv->memread_count = val;
+            priv->post_trigger_frames = val;
+            priv->memread_count = priv->post_trigger_frames + priv->pre_trigger_frames;
             // 29.05.2019
             // Whenever a new memread count is specified (indicating the intention to read out more frames) the index,
             // which keeps track of the grab calls needs to be reset and the remaining count is set to the total amount
@@ -3538,7 +3540,7 @@ uca_phantom_camera_set_property (GObject *object,
             // The memread index is now being set to -1 instead of 0 to clearly indicate, that no grab command has been
             // called yet. The grab function needs to realize this state to calculate the initial offset of the starting
             // position within the cine
-            priv->memread_index = -1;
+            // priv->memread_index = -1;
             // 11.06.2019
             // We obviously also need to reset the unpack index
             priv->memread_unpack_index = 0;
@@ -4181,6 +4183,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->features = NULL;
     priv->memread_started = FALSE;
     priv->pre_trigger_frames = 0;
+    priv->post_trigger_frames = 0;
     priv->format = IMAGE_FORMAT_P12L;
     priv->acquisition_mode = ACQUISITION_MODE_HS;
     priv->enable_10ge = FALSE;
