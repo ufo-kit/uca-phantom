@@ -2648,7 +2648,7 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
 
     prepare_trigger(priv);
     priv->memread_started = FALSE;
-    priv->memread_index = -priv->post_trigger_frames;
+    priv->memread_index = -priv->pre_trigger_frames;
     //priv->memread_count = priv->pre_trigger_frames + priv->memread_count;
     priv->memread_remaining = priv->memread_count;
     priv->memread_request_sent = FALSE;
