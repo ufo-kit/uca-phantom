@@ -84,7 +84,7 @@
 // 26.06.2019
 // Changed the Chunk size from 400 to 100, because after testing with the 2048 pixel width image settings. 400 images
 // cause the ring buffer to overflow.
-#define MEMREAD_CHUNK_SIZE  5
+#define MEMREAD_CHUNK_SIZE  100
 
 // 04.11.2019
 // This macro will define the index which will be used as the start index for the very first packet request of the
@@ -2634,6 +2634,7 @@ uca_phantom_camera_stop_readout (UcaCamera *camera,
  * Changed 16.07.2019
  * If the "external-trigger" flag of the camera object has been set to true, the "prepare_trigger" function will be
  * invoked, which will send a "rec" command to the camera, which will tell the camera into which cine (internal memory
+ * invoked, which will send a "rec" command to the camera, which will tell the camera into which cine (internal memory
  * partition the frames are supposed to be saved into)
  *
  * @param camera
@@ -3551,6 +3552,13 @@ uca_phantom_camera_set_property (GObject *object,
             priv->memread_unpack_index = 0;
         }
             break;
+        case PROP_FRAMES_PER_SECOND:{
+            guint val = g_value_get_uint(value);
+            g_value_set_uint(value, val);
+            phantom_set(priv, var, value);
+        }
+        break;
+
     }
 }
 
@@ -3738,6 +3746,11 @@ uca_phantom_camera_get_property (GObject *object,
         // include the custom code, that sets the memread_count variable to the same value...
         case PROP_POST_TRIGGER_FRAMES:
             phantom_get (priv, var, value);
+            break;
+        case PROP_FRAMES_PER_SECOND:
+            phantom_get(priv, var, value);
+            break;
+
         default:
             g_value_set_string(value, "NO READ FUNCTIONALITY IMPLEMENTED!");
             break;
