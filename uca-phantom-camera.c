@@ -4017,6 +4017,12 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
             "Number of post-trigger frames",
             "Number of post-trigger frames",
             0, G_MAXUINT, 0, G_PARAM_READWRITE);
+    phantom_properties[PROP_PRE_TRIGGER_FRAMES] =
+            g_param_spec_uint ("pre-trigger-frames",
+                               "Number of pre-trigger frames",
+                               "Number of pre-trigger frames",
+                               0, G_MAXUINT, 0, G_PARAM_READWRITE);
+
 
     phantom_properties[PROP_IMAGE_FORMAT] =
         g_param_spec_enum ("image-format",
