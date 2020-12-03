@@ -4044,6 +4044,12 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
                                0, G_MAXUINT, 0, G_PARAM_READWRITE);
 
 
+    phantom_properties[PROP_FRAMES_PER_SECOND] =
+            g_param_spec_uint ("frames-per-second",
+                               "frame rate",
+                               "frame rate",
+                               100, G_MAXUINT, 0, G_PARAM_READWRITE);
+
     phantom_properties[PROP_IMAGE_FORMAT] =
         g_param_spec_enum ("image-format",
             "Image format",
