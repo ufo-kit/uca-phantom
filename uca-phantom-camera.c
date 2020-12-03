@@ -2649,7 +2649,7 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
 
     guint frame_rate;
     gchar reply[256];
-    phantom_talk(priv, "get defc.rate", reply, sizeof(reply), NULL);
+    phantom_talk(priv, "get defc.rate\r\n", reply, sizeof(reply), NULL);
 
     prepare_trigger(priv);
     priv->memread_started = FALSE;
