@@ -1214,6 +1214,8 @@ void process_block(UcaPhantomCameraPrivate *priv) {
     priv->xg_packet_amount = packet_amount;
     if (priv->xg_packet_amount == 0) {
         g_debug ("Packet amount 0");
+        priv->xg_total = priv->xg_expected;
+        return;
     }
 
     // This will be the pointer directed at the start of the actual packet data! The data contained in a packet is
