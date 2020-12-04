@@ -1212,6 +1212,9 @@ void process_block(UcaPhantomCameraPrivate *priv) {
     // but once the block is done writing, is stored inside the "num_pckts" of its descriptor.
     int packet_amount = priv->xg_current_block->h1.num_pkts;
     priv->xg_packet_amount = packet_amount;
+    if (priv->xg_packet_amount == 0) {
+        g_debug ("Packet amount 0");
+    }
 
     // This will be the pointer directed at the start of the actual packet data! The data contained in a packet is
     // byte wise, which means its a unsigned 8 bit format.
@@ -1259,6 +1262,9 @@ void process_block(UcaPhantomCameraPrivate *priv) {
             // the final image data will be stored)
             priv->xg_packet_data = data;
             priv->xg_packet_length = length;
+            if (length < 0) {
+                g_debug ("Packet length %d", length + 32);
+            }
 
             process_packet(priv);
 
