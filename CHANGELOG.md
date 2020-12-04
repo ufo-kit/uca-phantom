@@ -198,3 +198,15 @@ incompatible API changes.
 - Moved the trigger function definition internally, because it needs
 to be called by the "start_recording" function when set to AUTO
 trigger mode
+  
+  
+### 1.0.2 - 11.11.2019
+
+- Changed the memread chunk size to a smaller number as the high number 
+  was causing problems
+- Added a DEBUG variable which can be set to either 1 or 0 to enable or disable 
+  additional debug messages for the program.
+- There is an issue where the program sometimes hangs indefinetely within the outer loop 
+  which reads the packages for the frames from the ring buffer. To help with this 
+  problem a timeout was added which terminates the loop after a certain amount of 
+  ms have passed where no new data was read from the ring buffer.

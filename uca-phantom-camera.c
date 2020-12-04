@@ -81,7 +81,22 @@
 // 26.06.2019
 // Changed the Chunk size from 400 to 100, because after testing with the 2048 pixel width image settings. 400 images
 // cause the ring buffer to overflow.
-#define MEMREAD_CHUNK_SIZE  100
+// 04.12.2020
+// Changed the chunk size from 100 t0 20, as 100 was sometimes still causing problems
+#define MEMREAD_CHUNK_SIZE  20
+
+// 04.12.2020
+// So there exists a problem with the readout of the ring buffer for 10G transmission. Sometimes the loop which reads
+// the buffer will not be able to read as many bytes as it is supposed to in terms of how many pixels a certain frame
+// is meant to have. In such a case the whole program execution would get stuck in this loop. This constant now
+// defines a timeout in milliseconds after which this readout loop will be terminated in case no further data was
+// read out from the ring buffer
+#define TIMEOUT 30
+
+// 04.12.2020
+// This variable can be changed to define the debug behaviour of the program. If it is set to 1, additional debug
+// information will be printed to the console. If it is set to 0 this will not be the case.
+#define DEBUG 1
 
 // 04.11.2019
 // This macro will define the index which will be used as the start index for the very first packet request of the
@@ -349,6 +364,7 @@ struct _UcaPhantomCameraPrivate {
     guint8               xg_remaining_data[40];
     gsize                xg_packet_length;
     gsize                xg_remaining_length;
+    time_t               xg_timeout;
     
     // 29.05.2019
     // We need to keep track of the amount of packages inside a block of the ring buffer as an attribute of the camera
@@ -1315,10 +1331,33 @@ read_ximg_data (
     struct timespec pstart={0,0}, pend={0,0};
     
     priv->xg_remaining_length = priv->xg_expected;
-
+    time_t start_time, current_time;
+    time(&start_time);
 
     //clock_gettime(CLOCK_MONOTONIC, &tstart);
     while (priv->xg_total < priv->xg_expected) {
+
+        // Updating the timers.
+        // The timout attribute of priv tracks the amount of milliseconds, since the last data has been read from the
+        // buffer. If this time exceeds the timout defined at the start of the program, the loop will be terminated.
+        time(&current_time);
+        priv->xg_timeout = current_time - start_time;
+        if ((long long) priv->xg_timeout > (long long) TIMEOUT) {
+            // Just breaking the loop here *should* be enough. Since the frame data is an initialized buffer there
+            // should already be random data in this buffer...
+            break;
+        }
+
+#if DEBUG == 1
+        // This code is defined within a preprocessor directive due to performance reasons. One could certainly do
+        // it using a normal if condition, but this would have to be checked during each execution of the loop
+        g_debug("\n --- DEBUG: RING BUFFER READOUT LOOP ---");
+        g_debug("Expected amount of bytes: %lu", priv->xg_expected);
+        g_debug("Total received till now: %lu", priv->xg_total);
+        g_debug("Remaining bytes: %lu", priv->xg_expected - priv->xg_total);
+        g_debug("Timout counter: %lld ms", (long long) priv->xg_timeout);
+#endif
+
 
         // Creating the block description for the current block index from the ring buffer.
         //block_description = (struct block_desc *) ring->rd[block_index].iov_base;
@@ -1344,9 +1383,12 @@ read_ximg_data (
         }
 
         // Actually extracting the data of the packages in that block into the destination buffer.
-
         process_block(priv);
         flush_block(priv);
+        // After actual data has been read out we can update the start time of the timout timers. This will basically
+        // Reset the timeout counter to 0. We do this because we of course only want to track the time in which no data
+        // is being added to the timer to the timeout
+        time(&start_time);
 
         // If the block is not yet finished to be processed we cannot increment the index, so that with the next call
         // of this function the rest of the unfinished block will be processed first.
