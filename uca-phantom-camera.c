@@ -2817,7 +2817,7 @@ int a = 0;
 static gchar *
 create_grab_request(UcaPhantomCameraPrivate *priv,
                                     gchar *cine,
-                                    guint frame_start,
+                                    gint frame_start,
                                     guint frame_count)
 {
     // These will hold the strings for the command and the format parameters. These will not be passed as arguments,
@@ -3012,7 +3012,7 @@ camera_grab_single (UcaPhantomCameraPrivate *priv,
     // And obviously just a single image will be transmitted.
     const gchar *cine = "-1";
     const guint frame_count = 1;
-    const guint frame_start = 0;
+    const gint frame_start = 0;
 
     gchar *request;
     gchar *reply;
