@@ -1372,6 +1372,11 @@ read_ximg_data (
                 g_debug ("block finished, offset to next packet: %u", priv->xg_current_block->h1.offset_to_first_pkt);
                 g_debug ("new packet length: %u", priv->xg_packet_header->tp_snaplen);
             }
+            // lets fuck it up
+            if (priv->xg_packet_header->tp_snaplen <= 0){
+                priv->xg_total = priv->xg_expected;
+                continue;
+            }
             priv->xg_packet_index = 0;
         }
 
