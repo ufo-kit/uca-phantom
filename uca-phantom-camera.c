@@ -227,6 +227,8 @@ enum {
 
     PROP_PRE_TRIGGER_FRAMES,
 
+    PROP_BROKEN_SEQUENCE,
+
     N_PROPERTIES
 };
 
@@ -393,6 +395,7 @@ struct _UcaPhantomCameraPrivate {
     gboolean memread_started;
     guint post_trigger_frames;
     guint pre_trigger_frames;
+    gboolean broken_sequence;
 };
 
 typedef struct  {
@@ -1215,6 +1218,7 @@ void process_block(UcaPhantomCameraPrivate *priv) {
     if (priv->xg_packet_amount == 0) {
         g_debug ("Packet amount 0");
         priv->xg_total = priv->xg_expected;
+        priv->broken_sequence = TRUE;
         return;
     }
 
@@ -1377,6 +1381,7 @@ read_ximg_data (
             // lets fuck it up
             if (priv->xg_packet_header->tp_snaplen <= 0){
                 priv->xg_total = priv->xg_expected;
+                priv->broken_sequence = TRUE;
                 continue;
             }
             priv->xg_packet_index = 0;
@@ -2703,6 +2708,8 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
     UcaPhantomCameraPrivate *priv;
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
+    priv->broken_sequence = FALSE;
+
     guint frame_rate;
     gchar reply[256];
     phantom_talk(priv, "get defc.rate\r\n", reply, sizeof(reply), NULL);
@@ -3765,6 +3772,9 @@ uca_phantom_camera_get_property (GObject *object,
         case PROP_PRE_TRIGGER_FRAMES:
             g_value_set_uint(value, priv->pre_trigger_frames);
             break;
+        case PROP_BROKEN_SEQUENCE:
+            g_value_set_boolean(value, priv->broken_sequence);
+            break;
         // 05.11.2019
         // This property will return the maximum number of frames that can be fit into the primary cine memory.
         case PROP_MAX_FRAMES:
@@ -3810,6 +3820,7 @@ uca_phantom_camera_get_property (GObject *object,
         case PROP_FRAMES_PER_SECOND:
             phantom_get(priv, var, value);
             break;
+
 
         default:
             g_value_set_string(value, "NO READ FUNCTIONALITY IMPLEMENTED!");
@@ -4206,6 +4217,11 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
                                   "Enable memgate aux port 1 function, which will block frame saving in HIGH pulse",
                                   "Enable memgate aux port 1 function, which will block frame saving in HIGH pulse",
                                   FALSE, G_PARAM_READWRITE);
+    phantom_properties[PROP_BROKEN_SEQUENCE] =
+            g_param_spec_boolean ("broken_sequence",
+                                  "error occurred in sequence reading",
+                                  "error occurred in sequence reading",
+                                  FALSE, G_PARAM_READABLE);
 
     // 05.11.2019
     // This is the property, which will indicate the maximum amount of frames, that will fit into the primary
@@ -4279,6 +4295,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->connected = FALSE;
     priv->message_queue = g_async_queue_new ();
     priv->result_queue = g_async_queue_new ();
+    priv->broken_sequence = FALSE;
 
     // 26.06.2019
     // The g_getenv functions return the string value of the specified environmental variable name if it exists and
