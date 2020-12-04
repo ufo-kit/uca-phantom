@@ -1130,6 +1130,7 @@ void process_packet(UcaPhantomCameraPrivate *priv) {
 
     // If the remaining length of the data is bigger, than the length of the packet, we can just use all the packet
     // data to append it to the buffer
+    /* g_debug ("process packet: %lu %lu", priv->xg_remaining_length, priv->xg_packet_length); */
     if (priv->xg_remaining_length >= priv->xg_packet_length) {
 
         // Here we copy the packet data into the image buffer and increment the pointer to the top of the image buffer
@@ -1145,13 +1146,14 @@ void process_packet(UcaPhantomCameraPrivate *priv) {
         // 29.05.2019
         // The edge case of incrementing a packet when ist is the pre-last in a block but the last one for an image
         // caused a nasty bug with disappearing packages... So we have to check for that now.
-        if (!(priv->xg_remaining_length <= 0 && priv->xg_packet_index == priv->xg_packet_amount - 2)) {
+        /* if (!(priv->xg_remaining_length <= 0 && priv->xg_packet_index == priv->xg_packet_amount - 1)) { */
+        /*     g_debug ("packet index - 2"); */
             increment_packet(priv);
-        } else {
-            priv->xg_packet_skipped = TRUE;
-            g_debug ("setting xg_packet_skipped = TRUE");
-            //g_warning("I AM ACTUALLY USEFUL");
-        }
+        /* } else { */
+        /*     priv->xg_packet_skipped = TRUE; */
+        /*     g_debug ("setting xg_packet_skipped = TRUE"); */
+        /*     //g_warning("I AM ACTUALLY USEFUL"); */
+        /* } */
     }
     // THIS BASICALLY NEVER GETS EXECUTED...
     // This is the tricky case. This means the image would be completely finished with just a fraction of the data from
@@ -1159,6 +1161,7 @@ void process_packet(UcaPhantomCameraPrivate *priv) {
     // already... So we have to make sure to set the pointers up correctly, so the next image grab call will pick up
     // excatly where we left...
     else if (priv->xg_remaining_length < priv->xg_packet_length) {
+        g_debug ("Remaining length smaller");
 
         // Here we will take as many bytes from the buffer, as there are remaining to get the full image...
         memcpy(priv->xg_data_in, priv->xg_packet_data, priv->xg_remaining_length);
@@ -1208,7 +1211,6 @@ void process_block(UcaPhantomCameraPrivate *priv) {
     // depends on the size of the packet, speed of transmission etc. In general, the amount is not previously known,
     // but once the block is done writing, is stored inside the "num_pckts" of its descriptor.
     int packet_amount = priv->xg_current_block->h1.num_pkts;
-    /* g_debug ("Packet amount: %d/%u", packet_amount, priv->xg_current_block->h1.num_pkts); */
     priv->xg_packet_amount = packet_amount;
 
     // This will be the pointer directed at the start of the actual packet data! The data contained in a packet is
@@ -1228,12 +1230,15 @@ void process_block(UcaPhantomCameraPrivate *priv) {
     int i;
     
     // Ugly hack, should improve this
-    if (priv->xg_packet_skipped == TRUE) {
-        //g_warning("ALSO USEFUL");
-        g_debug ("xg_packet_skipped TRUE in process block");
-        increment_packet(priv);
-        priv->xg_packet_skipped = FALSE;
-    }
+    /* if (priv->xg_packet_skipped == TRUE) { */
+    /*     //g_warning("ALSO USEFUL"); */
+    /*     g_debug ("xg_packet_skipped TRUE in process block"); */
+    /*     increment_packet(priv); */
+    /*     priv->xg_packet_skipped = FALSE; */
+    /* } */
+    /* g_debug ("Packet index: %d, amount: %d/%u, length: %u", */
+    /*          priv->xg_packet_index, packet_amount, */
+    /*          priv->xg_current_block->h1.num_pkts, priv->xg_packet_header->tp_snaplen); */
 
     for (i = priv->xg_packet_index; i < priv->xg_packet_amount; i++) {
 
@@ -1303,6 +1308,8 @@ read_ximg_data (
     gsize total = 0;
     int bytes;
     int remaining;
+    gboolean do_output = TRUE;
+    gsize last_xg_total = priv->xg_total;
     
     // Resetting state variables
     priv->xg_remaining_length = 0;
@@ -1329,6 +1336,8 @@ read_ximg_data (
     
     priv->xg_remaining_length = priv->xg_expected;
 
+    g_debug("initial block process, %d %d %d %lu %lu", priv->xg_block_finished, priv->xg_block_index,
+                                               priv->xg_packet_index, priv->xg_total, priv->xg_expected);
 
     //clock_gettime(CLOCK_MONOTONIC, &tstart);
     while (priv->xg_total < priv->xg_expected) {
@@ -1343,9 +1352,7 @@ read_ximg_data (
         // read it. So the program execution of the loop will be skipped here, if the next block has not yet been
         // released to the user space.
         if ((priv->xg_current_block->h1.block_status & TP_STATUS_USER) == 0) {
-            g_debug ("Waiting for kernel to release");
             poll(poll_fd, 1, -1);
-            g_debug ("Kernel released");
             continue;
         }
 
@@ -1355,12 +1362,14 @@ read_ximg_data (
             // Although if it wasn't finished the header for the packet, where the last loop left of will be reused.
             priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_current_block +
                                                               priv->xg_current_block->h1.offset_to_first_pkt);
+            if (do_output) {
+                g_debug ("block finished, offset to next packet: %u", priv->xg_current_block->h1.offset_to_first_pkt);
+                g_debug ("new packet length: %u", priv->xg_packet_header->tp_snaplen);
+            }
             priv->xg_packet_index = 0;
         }
 
         // Actually extracting the data of the packages in that block into the destination buffer.
-        g_debug("block process, %d %d %d %lu %lu", priv->xg_block_finished, priv->xg_block_index,
-                                                   priv->xg_packet_index, priv->xg_total, priv->xg_expected);
         process_block(priv);
         /* g_debug("block processed"); */
         flush_block(priv);
@@ -1372,13 +1381,21 @@ read_ximg_data (
             // after all this is how a ring buffer works.
             priv->xg_block_index = (priv->xg_block_index + 1) % block_amount;
         }
-        if (previous_block_index == priv->xg_block_index && priv->xg_total == 0) {
-            g_debug ("Current == last block index and xg_total=0");
-            break;
+        if (do_output) {
+            g_debug("block process, %d %d %d %lu %lu", priv->xg_block_finished, priv->xg_block_index,
+                                                       priv->xg_packet_index, priv->xg_total, priv->xg_expected);
+            if (last_xg_total == priv->xg_total && previous_block_index == priv->xg_block_index) {
+                g_debug ("Last xg_total == last_xg_total: %lu, previous and current blocks: %d %d",
+                         last_xg_total, previous_block_index, priv->xg_block_index);
+            }
+            do_output = FALSE;
         }
+        last_xg_total = priv->xg_total;
         previous_block_index = priv->xg_block_index;
     }
-    g_debug("read done");
+    g_debug("final block process, %d %d %d %lu %lu", priv->xg_block_finished, priv->xg_block_index,
+                                               priv->xg_packet_index, priv->xg_total, priv->xg_expected);
+    g_debug("end read ximg");
 
     return 0;
 }
@@ -1582,7 +1599,7 @@ unsigned int process_carry(unsigned int carry_length, unsigned long *carry, unsi
  * @param priv
  */
 void unpack_image_p10(UcaPhantomCameraPrivate *priv) {
-
+    g_debug ("start unpack_image_p10");
     int new_length = 0;
     int usable_length = 0;
     int limit = 0;
@@ -1706,6 +1723,7 @@ void unpack_image_p10(UcaPhantomCameraPrivate *priv) {
  * @param priv
  */
 void unpack_image_p12l(UcaPhantomCameraPrivate *priv) {
+    g_debug ("start unpack_image_p12l");
     int new_length = 0;
     int usable_length = 0;
     int limit = 0;
@@ -1837,6 +1855,7 @@ unpack_ximg_data (UcaPhantomCameraPrivate *priv)
 
         switch (message->type) {
             case MESSAGE_UNPACK_IMAGE:
+                g_debug ("Got unpack message");
                 
                 //g_warning("Init the unpacking");
                 // IMPLEMENT THE UNPACKING
@@ -1865,6 +1884,7 @@ unpack_ximg_data (UcaPhantomCameraPrivate *priv)
 
             case MESSAGE_READ_IMAGE:
                 g_async_queue_push(priv->message_queue, message);
+                break;
 
             case MESSAGE_READ_TIMESTAMP:
                 // Not implemented
@@ -1944,7 +1964,7 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
     priv->xg_block_finished = TRUE;
 
     while (!stop) {
-        InternalMessage *message;
+        InternalMessage *message, *unpack_message;
 
         result = g_new0 (Result, 1);
         message = g_async_queue_pop (priv->message_queue);
@@ -1967,10 +1987,17 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
                 // g_warning("ERROR: %s", result->error);
                 //g_async_queue_push (priv->result_queue, result);
                 //g_warning("PUSHED RESULT ");
+                unpack_message = g_new0 (InternalMessage, 1);
+                unpack_message->type = MESSAGE_UNPACK_IMAGE;
+                g_async_queue_push (priv->message_queue, unpack_message);
+                g_debug ("Pushed unpack message");
+                /* g_free (unpack_message); */
+
                 break;
 
             case MESSAGE_UNPACK_IMAGE:
                 g_async_queue_push(priv->message_queue, message);
+                break;
 
             case MESSAGE_READ_TIMESTAMP:
                 // Not implemented
@@ -2910,12 +2937,12 @@ start_receiving_image(UcaPhantomCameraPrivate *priv)
     // With 10G there is also a thread to read the data, but there is also yet ANOTHER thread, which decodes the
     // transfer format of the data as it is being received. And we need to tell this thread to start working too, but
     // of course only if 10G transfer is enabled.
-    if (priv->enable_10ge) {
-        message = g_new0 (InternalMessage, 1);
-        //message->data = data;
-        message->type = MESSAGE_UNPACK_IMAGE;
-        g_async_queue_push (priv->message_queue, message);
-    }
+    /* if (priv->enable_10ge) { */
+    /*     message = g_new0 (InternalMessage, 1); */
+    /*     //message->data = data; */
+    /*     message->type = MESSAGE_UNPACK_IMAGE; */
+    /*     g_async_queue_push (priv->message_queue, message); */
+    /* } */
 
 }
 
@@ -3119,8 +3146,8 @@ wait_for_frames(UcaPhantomCameraPrivate *priv) {
     // 06.11.2019
     // Here we have to differentiate if the next request will request the full chunk size or if the remaining frames
     // for a full transmission is smaller than the chunk size
-    g_debug("memread remaining %i", priv->memread_remaining);
-    g_debug("chunk size %i", MEMREAD_CHUNK_SIZE);
+    g_debug("wait_for_frames memread remaining %i", priv->memread_remaining);
+    g_debug("wait_for_frames chunk size %i", MEMREAD_CHUNK_SIZE);
     UcaCameraTriggerSource trigger_source = priv->uca_trigger_source;
 
     //if (trigger_source == UCA_CAMERA_TRIGGER_SOURCE_EXTERNAL) {
@@ -3132,16 +3159,16 @@ wait_for_frames(UcaPhantomCameraPrivate *priv) {
 
     guint request_size = (MEMREAD_CHUNK_SIZE < priv->memread_remaining) ?  MEMREAD_CHUNK_SIZE : priv->memread_remaining;
     // Waiting for as long as the recorded frames do not suffice for the request of one "chunk"
-    g_debug("requested_size %i", request_size);
-    g_debug("recorded frame count %i", recorded_frames_count);
+    g_debug("wait_for_frames requested_size %i", request_size);
+    g_debug("wait_for_frames recorded frame count %i", recorded_frames_count);
     while (recorded_frames_count < request_size) {
-        g_debug("waiting recorded frame count %i", recorded_frames_count);
+        g_debug("wait_for_frames waiting recorded frame count %i", recorded_frames_count);
         // Getting the frame count
         var = phantom_lookup_by_id (PROP_RECORDED_FRAMES);
 
         phantom_get(priv, var, &value);
         recorded_frames_count = g_value_get_uint(&value);
-        g_debug("recorded frame count %i", recorded_frames_count);
+        g_debug("wait_for_frames recorded frame count %i", recorded_frames_count);
     }
 }
 
@@ -3192,7 +3219,7 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
 
     // Before we send the actual request to the camera, we need to tell the worker threads that actually receive the
     // image to start working
-    start_receiving_image(priv);
+    /* start_receiving_image(priv); */
 
     // 21.07.2019
     // When the memread mode is enabled and this is the first "grab" call to a new readout then the memread index will
@@ -3211,8 +3238,8 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
         // The frame count to be calculated is either the chunk size or the remaining amount, if the remaining amount
         // is less than the chunk size. We also need to the update the remaining count afterwards
 
-        g_debug("Memread remaining: %i", priv->memread_remaining);
-        g_debug("Memread index: %i", priv->memread_index);
+        g_debug("grab_memread Memread remaining: %i", priv->memread_remaining);
+        g_debug("grab_memread Memread index: %i", priv->memread_index);
         if (priv->memread_remaining < MEMREAD_CHUNK_SIZE) {
             frame_count = priv->memread_remaining;
             priv->memread_remaining = 0;
@@ -3230,18 +3257,22 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
         // that is based on the configuration of the camera object (10G/1G, transfer format etc..).
         // The final string will be put into the given request pointer.
         request = create_grab_request(priv, cine, priv->memread_index, frame_count);
-        //g_warning("REQUEST %s 10G %i", request, priv->enable_10ge);
-
-        // Sending the request to the camera. In case there is not reply we will return FALSE to indicate that the grab
-        // process was not successful. The reply content itself is not relevant. It is only important (just an "OK!")
         reply = phantom_talk (priv, request, NULL, 0, error);
         //g_warning("REPLY %s", reply);
 
         g_free (request);
-        if (reply == NULL)
+        if (reply == NULL) {
+            g_error ("grab_memread: empty reply from camera");
             return FALSE;
+        }
         g_free (reply);
 
+
+        start_receiving_image(priv);
+        //g_warning("REQUEST %s 10G %i", request, priv->enable_10ge);
+
+        // Sending the request to the camera. In case there is not reply we will return FALSE to indicate that the grab
+        // process was not successful. The reply content itself is not relevant. It is only important (just an "OK!")
         // After the request has been sent we set the flag to TRUE to prevent any more requests from being sent.
         priv->memread_request_sent = TRUE;
     }
