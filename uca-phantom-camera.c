@@ -342,7 +342,6 @@ struct _UcaPhantomCameraPrivate {
     gsize                xg_total;
     gsize                xg_expected;
     gboolean             xg_block_finished;
-    gboolean             xg_packet_skipped;
     gint                 xg_block_index;
     gint                 xg_packet_index;
     gint                 xg_data_index;
@@ -1144,19 +1143,7 @@ void process_packet(UcaPhantomCameraPrivate *priv) {
         // Now we need to update the count of the total bytes received and the remaining bytes
         priv->xg_total += priv->xg_packet_length;
         priv->xg_remaining_length -= priv->xg_packet_length;
-
-        // We also need to update the pointer to the packet, so that it points to the next packet
-        // 29.05.2019
-        // The edge case of incrementing a packet when ist is the pre-last in a block but the last one for an image
-        // caused a nasty bug with disappearing packages... So we have to check for that now.
-        /* if (!(priv->xg_remaining_length <= 0 && priv->xg_packet_index == priv->xg_packet_amount - 1)) { */
-        /*     g_debug ("packet index - 2"); */
-            increment_packet(priv);
-        /* } else { */
-        /*     priv->xg_packet_skipped = TRUE; */
-        /*     g_debug ("setting xg_packet_skipped = TRUE"); */
-        /*     //g_warning("I AM ACTUALLY USEFUL"); */
-        /* } */
+        increment_packet(priv);
     }
     // THIS BASICALLY NEVER GETS EXECUTED...
     // This is the tricky case. This means the image would be completely finished with just a fraction of the data from
@@ -1238,23 +1225,12 @@ void process_block(UcaPhantomCameraPrivate *priv) {
 
     int i;
     
-    // Ugly hack, should improve this
-    /* if (priv->xg_packet_skipped == TRUE) { */
-    /*     //g_warning("ALSO USEFUL"); */
-    /*     g_debug ("xg_packet_skipped TRUE in process block"); */
-    /*     increment_packet(priv); */
-    /*     priv->xg_packet_skipped = FALSE; */
-    /* } */
-    /* g_debug ("Packet index: %d, amount: %d/%u, length: %u", */
+    /* g_debug ("Packet index: %d, amount: %d/%u, length: %u, next: %u", */
     /*          priv->xg_packet_index, packet_amount, */
-    /*          priv->xg_current_block->h1.num_pkts, priv->xg_packet_header->tp_snaplen); */
+    /*          priv->xg_current_block->h1.num_pkts, priv->xg_packet_header->tp_snaplen, */
+    /*          priv->xg_packet_header->tp_next_offset); */
 
-    for (i = priv->xg_packet_index; i < priv->xg_packet_amount; i++) {
-
-        if (priv->xg_remaining_length <= 0) {
-            break;
-        }
-
+    for (i = priv->xg_packet_index; i < priv->xg_packet_amount && priv->xg_remaining_length > 0; i++) {
         // Calculation of the actual payload(!) length. The packages sent by the phantom have a overhead of 32 bytes!
         length = priv->xg_packet_header->tp_snaplen - 32;
         // After exactly 94 bytes into the package the info about the used protocol can be extracted. And after 114
@@ -1282,12 +1258,7 @@ void process_block(UcaPhantomCameraPrivate *priv) {
     // Here we are simply checking "Did the loop process all the packets of the blog?". Because if it did than obviously
     // This block is finished and we can flag it as such. But if it is not, than the next image has to pick up with
     // this block.
-    if (priv->xg_packet_amount - 1 > priv->xg_packet_index) {
-        priv->xg_block_finished = FALSE;
-    } else {
-        priv->xg_block_finished = TRUE;
-        //g_warning("block finished");
-    }
+    priv->xg_block_finished = i == priv->xg_packet_amount;
 }
 
 
