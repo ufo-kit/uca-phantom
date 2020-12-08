@@ -4258,7 +4258,6 @@ uca_phantom_camera_init (UcaPhantomCamera *self)
     priv->format = IMAGE_FORMAT_P12L;
     priv->acquisition_mode = ACQUISITION_MODE_HS;
     priv->enable_10ge = FALSE;
-    priv->xg_packet_skipped = FALSE;
     priv->iface = NULL;
     priv->ip_address = "";
     priv->have_ximg = TRUE;
