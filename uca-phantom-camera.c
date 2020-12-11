@@ -4210,8 +4210,9 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
                                "The maximum number of frames fitting into the primary cine partition",
                                0, G_MAXUINT, 0, G_PARAM_READABLE);
 
-    for (guint i = 0; i < base_overrideables[i]; i++)
+    for (guint i = 0; base_overrideables[i] != 0; i++) {
         g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
+    }
 
     for (guint id = N_BASE_PROPERTIES; id < N_PROPERTIES; id++)
         g_object_class_install_property (oclass, id, phantom_properties[id]);
