@@ -84,7 +84,7 @@
 // 26.06.2019
 // Changed the Chunk size from 400 to 100, because after testing with the 2048 pixel width image settings. 400 images
 // cause the ring buffer to overflow.
-#define MEMREAD_CHUNK_SIZE  1
+#define MEMREAD_CHUNK_SIZE  50
 
 // 04.11.2019
 // This macro will define the index which will be used as the start index for the very first packet request of the
@@ -1092,7 +1092,7 @@ static void flush_block(UcaPhantomCameraPrivate *priv) {
     // If the block has been completely processed (all payload data extracted from all the packages in it), then it has
     // to be flushed, meaning that it has to be "given back" to the kernel, so new data can be written to it.
     // unless it's status isn't changed, the kernel cannot write new packages into this block of the ring buffer.
-    if (priv->xg_block_finished == TRUE) {
+    if (priv->xg_block_finished) {
         priv->xg_current_block->h1.block_status = TP_STATUS_KERNEL;
     }
 }
@@ -1251,6 +1251,7 @@ void process_block(UcaPhantomCameraPrivate *priv) {
             process_packet(priv);
 
         } else {
+            g_debug ("Packet miss");
             increment_packet(priv);
         }
     }
@@ -1285,7 +1286,7 @@ read_ximg_data (
         struct pollfd *poll_fd,
         GError **error)
 {
-    g_debug("start read ximg");
+    /* g_debug("start read ximg"); */
     // With this we keep track of how many bytes have already been received.
     priv->xg_total = 0;
     gsize total = 0;
@@ -1339,16 +1340,18 @@ read_ximg_data (
             continue;
         }
 
-        if (priv->xg_block_finished == TRUE) {
+        if (priv->xg_block_finished) {
             // In case block was finished during the previous run of this function, the header struct will be created
             // to point to the first packet of the current (new) block.
             // Although if it wasn't finished the header for the packet, where the last loop left of will be reused.
             priv->xg_packet_header = (struct tpacket3_hdr *) ((uint8_t *) priv->xg_current_block +
                                                               priv->xg_current_block->h1.offset_to_first_pkt);
-            if (do_output) {
-                g_debug ("block finished, offset to next packet: %u", priv->xg_current_block->h1.offset_to_first_pkt);
-                g_debug ("new packet length: %u", priv->xg_packet_header->tp_snaplen);
-            }
+            /* if (do_output) { */
+            /*     g_debug ("block %d finished, offset to next packet: %u", */
+            /*              priv->xg_block_index, */
+            /*              priv->xg_current_block->h1.offset_to_first_pkt); */
+            /*     g_debug ("new packet length: %u", priv->xg_packet_header->tp_snaplen); */
+            /* } */
             // lets fuck it up
             if (priv->xg_packet_header->tp_snaplen <= 0){
                 priv->xg_total = priv->xg_expected;
@@ -1365,26 +1368,26 @@ read_ximg_data (
         /* g_debug("block flushed"); */
         // If the block is not yet finished to be processed we cannot increment the index, so that with the next call
         // of this function the rest of the unfinished block will be processed first.
-        if (priv->xg_block_finished == TRUE) {
+        if (priv->xg_block_finished) {
             // Going to the next block. If the last block has been reached, it starts with the first block again,
             // after all this is how a ring buffer works.
             priv->xg_block_index = (priv->xg_block_index + 1) % block_amount;
         }
-        if (do_output) {
-            g_debug("block process, %d %d %d %lu %lu", priv->xg_block_finished, priv->xg_block_index,
-                                                       priv->xg_packet_index, priv->xg_total, priv->xg_expected);
-            if (last_xg_total == priv->xg_total && previous_block_index == priv->xg_block_index) {
-                g_debug ("Last xg_total == last_xg_total: %lu, previous and current blocks: %d %d",
-                         last_xg_total, previous_block_index, priv->xg_block_index);
-            }
-            do_output = FALSE;
-        }
+        /* if (do_output) { */
+        /*     g_debug("block process, %d %d %d %lu %lu", priv->xg_block_finished, priv->xg_block_index, */
+        /*                                                priv->xg_packet_index, priv->xg_total, priv->xg_expected); */
+        /*     if (last_xg_total == priv->xg_total && previous_block_index == priv->xg_block_index) { */
+        /*         g_debug ("Last xg_total == last_xg_total: %lu, previous and current blocks: %d %d", */
+        /*                  last_xg_total, previous_block_index, priv->xg_block_index); */
+        /*     } */
+        /*     #<{(| do_output = FALSE; |)}># */
+        /* } */
         last_xg_total = priv->xg_total;
         previous_block_index = priv->xg_block_index;
     }
     g_debug("final block process, %d %d %d %lu %lu", priv->xg_block_finished, priv->xg_block_index,
                                                priv->xg_packet_index, priv->xg_total, priv->xg_expected);
-    g_debug("end read ximg");
+    /* g_debug("end read ximg"); */
 
     return 0;
 }
@@ -1844,7 +1847,7 @@ unpack_ximg_data (UcaPhantomCameraPrivate *priv)
 
         switch (message->type) {
             case MESSAGE_UNPACK_IMAGE:
-                g_debug ("Got unpack message");
+                /* g_debug ("Got unpack message"); */
                 
                 //g_warning("Init the unpacking");
                 // IMPLEMENT THE UNPACKING
@@ -1979,7 +1982,7 @@ accept_ximg_data (UcaPhantomCameraPrivate *priv)
                 unpack_message = g_new0 (InternalMessage, 1);
                 unpack_message->type = MESSAGE_UNPACK_IMAGE;
                 g_async_queue_push (priv->message_queue, unpack_message);
-                g_debug ("Pushed unpack message");
+                /* g_debug ("Pushed unpack message"); */
                 /* g_free (unpack_message); */
 
                 break;
@@ -3141,6 +3144,7 @@ wait_for_frames(UcaPhantomCameraPrivate *priv) {
     g_debug("wait_for_frames chunk size %i", MEMREAD_CHUNK_SIZE);
     UcaCameraTriggerSource trigger_source = priv->uca_trigger_source;
 
+    // TODO: do we need this?
     //if (trigger_source == UCA_CAMERA_TRIGGER_SOURCE_EXTERNAL) {
         //while (!check_trigger_status(priv)){
         //    usleep(10000);
@@ -3231,6 +3235,7 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
 
         g_debug("grab_memread Memread remaining: %i", priv->memread_remaining);
         g_debug("grab_memread Memread index: %i", priv->memread_index);
+        g_debug("grab_memread memread_unpack_index: %i", priv->memread_unpack_index);
         if (priv->memread_remaining < MEMREAD_CHUNK_SIZE) {
             frame_count = priv->memread_remaining;
             priv->memread_remaining = 0;
@@ -3259,7 +3264,6 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
         g_free (reply);
 
 
-        start_receiving_image(priv);
         //g_warning("REQUEST %s 10G %i", request, priv->enable_10ge);
 
         // Sending the request to the camera. In case there is not reply we will return FALSE to indicate that the grab
@@ -3269,6 +3273,7 @@ camera_grab_memread (UcaPhantomCameraPrivate *priv,
     }
 
 
+    start_receiving_image(priv);
     // At the end of each memread grab, we increment the index to know at which position we are
     priv->memread_index ++;
 
@@ -3455,6 +3460,13 @@ uca_phantom_camera_set_property (GObject *object,
     }
 
     switch (property_id) {
+        case PROP_FRAMES_PER_SECOND:
+            {
+                gfloat val = g_value_get_double(value);
+                g_value_set_float(value, val);
+                phantom_set(priv, var, value);
+            }
+        break;
         case PROP_EXPOSURE_TIME:
             {
                 gchar *val;
@@ -3590,13 +3602,6 @@ uca_phantom_camera_set_property (GObject *object,
             priv->memread_unpack_index = 0;
         }
             break;
-        case PROP_FRAMES_PER_SECOND:{
-            guint val = g_value_get_uint(value);
-            g_value_set_uint(value, val);
-            phantom_set(priv, var, value);
-        }
-        break;
-
     }
 }
 
@@ -4086,11 +4091,11 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
                                0, G_MAXUINT, 0, G_PARAM_READWRITE);
 
 
-    phantom_properties[PROP_FRAMES_PER_SECOND] =
-            g_param_spec_uint ("frames-per-second",
-                               "frame rate",
-                               "frame rate",
-                               100, G_MAXUINT, 0, G_PARAM_READWRITE);
+    /* phantom_properties[PROP_FRAMES_PER_SECOND] = */
+    /*         g_param_spec_float ("frames-per-second", */
+    /*                            "frame rate", */
+    /*                            "frame rate", */
+    /*                            100.0f, G_MAXFLOAT, 100.0f, G_PARAM_READWRITE); */
 
     phantom_properties[PROP_IMAGE_FORMAT] =
         g_param_spec_enum ("image-format",
