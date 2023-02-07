@@ -8,6 +8,7 @@
 
 #include <gio/gio.h>
 #include <gmodule.h>
+#include <glib-object.h>
 #include <unistd.h>
 #include <nmmintrin.h>
 
@@ -27,14 +28,19 @@
 
 #include "uca-phantom-communicate.h"
 
+// /*
+//  * Class definition
+// */
+
+// #define 
+
 
 /*
- * Phantom-specific data structures
+ * Phantom-specific data types
+ * TODO: For the time being, they will remain as strings...
 */
-#define PHANTOM_TYPE_HEX G_TYPE_INT
+#define PHANTOM_TYPE_HEX G_TYPE_STRING
 #define PHANTOM_TYPE_RES G_TYPE_STRING
-#define PHANTOM_TYPE_RES G_TYPE_STRING
-#define PHANTOM_TYPE_TRIGGER_STRUCTURE G_TYPE_STRING
 
 typedef struct {
     const gchar *name;
@@ -269,7 +275,6 @@ static Unit variables[] = {
     {"auto.speed",             G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_AUTO_SPEED,    TRUE},
     {"auto.progress",          G_TYPE_UINT,     G_PARAM_READABLE,   PROP_AUTO_PROGRESS, TRUE},
     {"auto.bref_progress",     G_TYPE_UINT,     G_PARAM_READABLE,   PROP_AUTO_BREF_PROGRESS,    TRUE},
-    {"auto.trigger",           PHANTOM_TYPE_TRIGGER_STRUCTURE,  G_PARAM_READWRITE,   PROP_AUTO_TRIGGER,  TRUE},
     {"auto.trigger.x",         G_TYPE_INT,  G_PARAM_READWRITE,   PROP_AUTO_TRIGGER_X,    TRUE},
     {"auto.trigger.y",         G_TYPE_INT,  G_PARAM_READWRITE,   PROP_AUTO_TRIGGER_Y,    TRUE},
     {"auto.trigger.w",         G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_AUTO_TRIGGER_W,    TRUE},
@@ -281,7 +286,7 @@ static Unit variables[] = {
     {NULL, }
 };
 
-enum {
+enum TerminatePhantomDiscover {
     ALL,
     REGEX,
     RECEIVE,
@@ -289,11 +294,44 @@ enum {
     BCAST
 };
 
+#define UCA_PHANTOM_CAMERA_ERROR uca_phantom_camera_error_quark()
+typedef enum {
+    UCA_PHANTOM_CAMERA_ERROR_INIT,
+    UCA_PHANTOM_CAMERA_ERROR_DISCOVER,
+    UCA_PHANTOM_CAMERA_ERROR_STOP_RECORDING,
+} UcaPhantomNetworkError;
+
+/*
+ * Phantom Request data structure
+ * TODO: Doc
+ * Note: owner free's data
+*/
+struct _PhantomRequest {
+    Unit variable;
+    gchar* raw;
+    gsize size, write_size;
+    // gssize write_size;
+};
+typedef struct _PhantomRequest PhantomRequest;
+
+/*
+ * Phantom Reply data structure
+ * TODO: Doc
+ * Note: owner free's data
+*/
+struct _PhantomReply {
+    gchar* raw;
+    GValue value;
+    gsize size;
+    gssize read_size;
+};
+typedef struct _PhantomReply PhantomReply;
+
 static GSocketAddress *
 phantom_discover (gboolean x_enabled, GError **error) {
-    // Note: ~~goto is used in this function to do memory clean up~~
-    // Actually a switch statement does the trick, given an extra
-    // flag variable.
+    // Note: ~~goto was originally used in this function to do memory clean up~~
+    // But actually a switch statement does the work, given an extra flag
+    // variable.
 
     GError *sub_error = NULL;
     GMatchInfo *info = NULL;
@@ -306,9 +344,7 @@ phantom_discover (gboolean x_enabled, GError **error) {
     gchar reply[128] = {0,};
 
     gchar *bcast_address = (x_enabled==TRUE) ? "172.16.255.255" : "100.100.255.255";
-    g_print("let's go\n");
     GSocketAddress *bcast_socket_addr = g_inet_socket_address_new_from_string (bcast_address, 7380);
-    g_print("done\n");
 
     if (bcast_socket_addr == NULL) {
         g_warning ("Failed to parse broadcasting address: %s\n", sub_error->message);
@@ -407,44 +443,21 @@ phantom_discover (gboolean x_enabled, GError **error) {
 }
 
 /*
- * Phantom Request data structure
- * TODO: Doc
- * Note: owner free's data
-*/
-typedef struct {
-    Unit variable;
-    gchar* raw;
-    gsize size, write_size;
-} PhantomRequest;
-
-/*
- * Phantom Reply data structure
- * TODO: Doc
- * Note: owner free's data
-*/
-typedef struct {
-    gchar* raw;
-    GValue value;
-    gsize size;
-    gssize read_size;
-} PhantomReply;
-
-/*
  * Private communication method. All requests pass by here.
  * TODO: Doc
 */
 static gboolean
 uca_phantom_communicate (GSocketConnection *connection, PhantomRequest *request, PhantomReply *reply, GError **error) {
     g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
-    g_return_val_if_fail (request == NULL || reply == NULL, FALSE);
+    g_return_val_if_fail (request != NULL || reply != NULL, FALSE);
 
     GError *sub_error = NULL;
-    
+
+    // TODO: check that the streams are succesfully fetched
     GOutputStream * ostream = g_io_stream_get_output_stream (G_IO_STREAM (connection));
     GInputStream * istream = g_io_stream_get_input_stream (G_IO_STREAM (connection));
-    // TODO: check that the streams are succesfully fetched
 
-    gboolean wrote = g_output_stream_write_all (
+    gboolean sucess = g_output_stream_write_all (
         ostream,
         request->raw,
         request->size,
@@ -452,10 +465,14 @@ uca_phantom_communicate (GSocketConnection *connection, PhantomRequest *request,
         NULL,
         &sub_error);
     
-    if (!wrote) {
+    if (!sucess) {
         g_warning ("Could not write request: %s\n", sub_error->message);
         g_propagate_error (error, sub_error);
         g_error_free (sub_error);
+
+        // g_output_stream_close (ostream, NULL, NULL);
+        g_output_stream_flush (ostream, NULL, NULL);
+
         return FALSE;
     }
 
@@ -466,17 +483,21 @@ uca_phantom_communicate (GSocketConnection *connection, PhantomRequest *request,
         NULL,
         &sub_error);
     
+    
     if (reply->read_size < -1) {
         g_warning ("Could not read reply: %s\n", sub_error->message);
+        g_input_stream_close (istream, NULL, NULL);
         g_propagate_error (error, sub_error);
         g_error_free (sub_error);
+
+        g_input_stream_close (istream, NULL, NULL);
         return FALSE;
     }
     else if (reply->read_size == 0) {
         g_warning ("Reached EOF on stream.\n");
     }
-    
-    g_info ("Phantom reply: %s\n", (char*)reply);
+
+    g_output_stream_flush (ostream, NULL, NULL);
 
     return TRUE;
 }
@@ -484,74 +505,144 @@ uca_phantom_communicate (GSocketConnection *connection, PhantomRequest *request,
 /*
  * Get unit variable
  * TODO: Doc
+ * Note: All parameter data belongs to the user!
 */
-gboolean uca_phantom_get_variable (GSocketConnection *connection, guint variable_flag, GError **error) {
+gboolean uca_phantom_get_variable (GSocketConnection *connection, guint variable_flag, GValue *return_value, GError **error) {
     g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
     GError *sub_error = NULL;
-
-    PhantomRequest request;
-    PhantomReply reply;
+    gchar pattern[] = "\\s:\\s";
 
     // Setup the request 
-    request.variable = variables[variable_flag];
-    request.raw = g_strconcat("get ", request.variable.name, "\r\n", NULL);
-    request.size = g_strv_length (&request.raw) * sizeof request.raw;
-    // TODO: check why the write size works with 512bytes
-    request.write_size = 512;
+    PhantomRequest request = {
+        .variable = variables[variable_flag],
+        .raw = NULL,
+        .size = 0,
+        .write_size = 0
+    };
+    // Manually build the message to ensure that the string is correclty NULL-ended
+    // request.raw = g_strconcat("get ", request.variable.name, "\n", NULL);
+    request.size = (strlen (request.variable.name) + strlen ("get \r\n")) * sizeof (request.raw);
+    request.raw = g_malloc0 ((request.size) * sizeof (request.raw));
+    
+    if (request.raw==NULL) {
+        g_warning ("Could not allocate and assemble request message. Aborting\n");
+        return FALSE;
+    }
+
+    g_strlcat(request.raw, "get ", request.size);
+    g_strlcat(request.raw, request.variable.name, request.size);
+    g_strlcat(request.raw, "\r\n", request.size);
 
     // Setup the reply
-    reply.raw = g_malloc0 (request.size);
-    reply.size = 0;
-    reply.read_size = 0;
-    g_value_init (&reply.value, request.variable.type);
+    PhantomReply reply = {
+        .size = 512,
+        .raw = NULL,
+        .value = G_VALUE_INIT,
+        .read_size = 0
+    };
+    reply.raw = g_malloc0 (reply.size * sizeof (reply.raw));
+
+    if (reply.raw == NULL) {
+        g_warning ("Could not allocate and assemble reply buffer. Aborting\n");
+        return FALSE;
+    }
+
+    g_print (" > request: '%s' \n", request.raw);
 
     // Communicate request to phantom
     gboolean communicated = uca_phantom_communicate (connection, &request, &reply, &sub_error);
 
     if (!communicated) {
         g_warning ("Failed to retrieve Unit variable %s: %s\n", request.variable.name, sub_error->message);
-        g_propagate_error (error, sub_error);
-        g_error_free (sub_error);
-        g_free (reply.raw);
+        
+        if (sub_error != NULL) {
+            g_propagate_error (error, sub_error);
+            g_error_free (sub_error);
+        }
+
         g_free (request.raw);
+        g_free (reply.raw);
+        return FALSE;
+    }
+    g_free (request.raw);
+    request.raw  = NULL;
+
+    g_print (" > reply: '%s' \n", reply.raw);
+
+    // Extract the actual data from the raw reply
+    GRegex* regex = g_regex_new (pattern, 0, 0, &sub_error);
+
+    if (regex == NULL ) {
+        g_warning ("Failed to create regex object. Aborting...");
+
+        if (sub_error != NULL) {
+            g_propagate_error (error, sub_error);
+            g_error_free (sub_error);
+        }
+
+        g_free (request.raw);
+        g_free (reply.raw);
         return FALSE;
     }
 
-    // // Extract the actual data from the raw reply. Use Gvalue container to store it
-    // switch (request.variable.type) {
-    // case G_TYPE_STRING:
-    //     g_value_set_string (reply.value, );
+    gchar **matched = g_regex_split (regex, reply.raw, 0);
+    g_return_val_if_fail (matched != NULL, FALSE);
+    gchar* prefix = matched[0];
+    gchar* suffix = matched[1];
+
+    // Check for error mesage from phantom
+    if (g_str_has_prefix (prefix, "ERR")) {
+        g_warning ("Invalid phantom command: %s\n", reply.raw);
+        return FALSE;
+    }
+
+    g_value_unset (return_value);
+    g_value_init (return_value, request.variable.type);
+
+    // Use Gvalue container to store it
+    switch (request.variable.type) {
+    case G_TYPE_STRING:
+        g_value_set_string (return_value, suffix);
+        break;
+    case G_TYPE_UINT:
+        g_value_set_uint (return_value, strtoul(suffix, NULL, 0));
+        break;
+    case G_TYPE_INT:
+        g_value_set_int (return_value, atoi(suffix));
+        break;
+    case G_TYPE_FLOAT:
+        g_value_set_float (return_value, strtof(suffix, NULL));
+        break;
+    // // TODO : handle these cases in a more custom way in the future ?
+    // case PHANTOM_TYPE_HEX:
+    //     g_value_set_string (&reply.value, var);
     //     break;
-    // case G_TYPE_UINT:
-    //     g_value_set_uint (reply.value, );
+    // case PHANTOM_TYPE_RES:
+    //     g_value_set_string (&reply.value, var);
     //     break;
-    // case G_TYPE_INT:
-    //     g_value_set_int (reply.value, );
-    //     break;
-    // case G_TYPE_FLAGS:
-    //     g_value_set_flags (reply.value, );
-    //     break;
-    // // TODO: HEX
-    // // case G_TYPE_:
-    // //     g_value_set_string (reply.value, );
-    // //     break;
-    // default:
-    //     break;
-    // }
+    default:
+        g_warning ("Type not handled yet!\n");
+        break;
+    }
 
     // Cleanup
+    g_strfreev (matched);        
+    matched = NULL;
+    g_regex_unref (regex);
+    regex = NULL;
     g_free (reply.raw);
-    g_free (request.raw);
-
+    reply.raw  = NULL;
+    
     return TRUE;
 }
 
 int main() {
     GError *error = NULL;
+    GValue val = G_VALUE_INIT;
 
     /* create a new connection */
-    GSocketConnection * connection = NULL;
-    GSocketClient * client = g_socket_client_new();
+    GSocketConnection *connection = NULL;
+    GSocketClient *client = g_socket_client_new();
 
     GSocketAddress *addr = phantom_discover(TRUE, &error);
 
@@ -576,17 +667,21 @@ int main() {
     //         g_error_free (error);
     //         return FALSE;
     //     }
-    //     sleep(.5);
     // }   
-    gboolean result = uca_phantom_get_variable (connection, PROP_INFO_NAME, &error);
+    gboolean result = uca_phantom_get_variable (connection, PROP_INFO_MODEL, &val, &error);
+    gboolean result2 = uca_phantom_get_variable (connection, PROP_INFO_MODEL, &val, &error);
 
-    if (result) {
+    if (!result || !result2) {
+        g_print ("Houston theres a problem: %s\n", error->message);
         g_error_free (error);
+        return FALSE;
     }
 
     g_object_unref (addr);
     g_object_unref (connection);
     g_object_unref (client);
+    g_value_unset (&val);
+
 
     return TRUE;
 }

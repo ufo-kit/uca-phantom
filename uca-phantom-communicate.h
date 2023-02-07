@@ -1,3 +1,24 @@
+// #ifndef UCA_PHANTOM_COMMUNICATE_H
+// #define UCA_PHANTOM_COMMUNICATE_H
+
+// #include <glib-object.h>
+
+// #define UCA_TYPE_PHANTOM_COMMUNICATION (uca_phantom_communication_get_type ())
+// G_DECLARE_FINAL_TYPE (UcaPhantomCommunicate, uca_phantom_communicate, UCA, PHANTOM_COMMUNICATE, GObject)
+
+// /*
+//  * Public UcaPhantomCommunicateClass definition
+// */
+// struct _UcaPhantomCommunicateClass {
+//     GObjectClass parent_class;
+// };
+// struct _UcaPhantomCommunicate {
+//     GObject parent_object;
+
+//     gchar *ip, *xip, *netcard, *xnetcard;
+//     // TODO: consider other essential variables 
+// };
+
 enum PhantomPropertyIds {
     PROP_INFO_SENSOR,
     PROP_INFO_SNSVERSION,
@@ -193,9 +214,9 @@ enum PhantomPropertyIds {
     PROP_CT_META_RESIZE,
     PROP_CT_META_GPS,
     //
+    PROP_AUTO_VIDEOPLAY,
     PROP_AUTO_FLASHSAVE,
     PROP_AUTO_FILESAVE,
-    PROP_AUTO_VIDEOPLAY,
     PROP_AUTO_ACQRESTART,
     PROP_AUTO_BREF,
     PROP_AUTO_FIRSTFRAME,
@@ -205,7 +226,6 @@ enum PhantomPropertyIds {
     PROP_AUTO_PROGRESS,
     PROP_AUTO_BREF_PROGRESS,
     //
-    PROP_AUTO_TRIGGER,
     PROP_AUTO_TRIGGER_X,
     PROP_AUTO_TRIGGER_Y,
     PROP_AUTO_TRIGGER_W,
