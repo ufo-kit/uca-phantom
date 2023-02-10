@@ -1,23 +1,17 @@
-// #ifndef UCA_PHANTOM_COMMUNICATE_H
-// #define UCA_PHANTOM_COMMUNICATE_H
+#ifndef UCAPHANTOMCOMMUNICATE_H
+#define UCAPHANTOMCOMMUNICATE_H
 
-// #include <glib-object.h>
+#include <glib-object.h>
 
-// #define UCA_TYPE_PHANTOM_COMMUNICATION (uca_phantom_communication_get_type ())
-// G_DECLARE_FINAL_TYPE (UcaPhantomCommunicate, uca_phantom_communicate, UCA, PHANTOM_COMMUNICATE, GObject)
+#define UCA_TYPE_PHANTOM_COMMUNICATE (uca_phantom_communicate_get_type ())
+G_DECLARE_FINAL_TYPE (UcaPhantomCommunicate, uca_phantom_communicate, UCA, PHANTOM_COMMUNICATE, GObject)
 
-// /*
-//  * Public UcaPhantomCommunicateClass definition
-// */
-// struct _UcaPhantomCommunicateClass {
-//     GObjectClass parent_class;
-// };
-// struct _UcaPhantomCommunicate {
-//     GObject parent_object;
-
-//     gchar *ip, *xip, *netcard, *xnetcard;
-//     // TODO: consider other essential variables 
-// };
+/*
+ * Public methods
+*/
+UcaPhantomCommunicate *uca_phantom_communicate_new (void);
+gboolean uca_phantom_communicate_attempt_connect (UcaPhantomCommunicate *self, GError **error_loc);
+gboolean uca_phantom_get_variable (UcaPhantomCommunicate *self, guint variable_flag, GValue *return_value, GError **error);
 
 enum PhantomPropertyIds {
     PROP_INFO_SENSOR,
@@ -236,3 +230,5 @@ enum PhantomPropertyIds {
     PROP_AUTO_TRIGGER_MODE,
     N_UNIT_PROPERTIES
 };
+
+#endif

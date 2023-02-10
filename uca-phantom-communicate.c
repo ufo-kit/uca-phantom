@@ -27,264 +27,8 @@
 #include <unistd.h>
 
 #include "uca-phantom-communicate.h"
+#include "unit_variables.h"
 
-// /*
-//  * Class definition
-// */
-
-// #define 
-
-
-/*
- * Phantom-specific data types
- * TODO: For the time being, they will remain as strings...
-*/
-#define PHANTOM_TYPE_HEX G_TYPE_STRING
-#define PHANTOM_TYPE_RES G_TYPE_STRING
-
-typedef struct {
-    const gchar *name;
-    GType        type;
-    GParamFlags  flags;
-    gint         property_id;
-    gboolean     handle_automatically;
-} Unit;
-
-typedef struct {
-    gint x, y;
-    guint w, h, threshold, area, speed, mode;
-} Trigger;
-
-static Unit variables[] = {
-    // Sensor information
-    {"info.sensor",     G_TYPE_UINT,    G_PARAM_READABLE,  PROP_INFO_SENSOR,   TRUE},
-    {"info.snsversion", G_TYPE_UINT,    G_PARAM_READABLE,  PROP_INFO_SNSVERSION,   TRUE},
-    {"info.cfa",        G_TYPE_UINT,    G_PARAM_READABLE,  PROP_INFO_CFA,  TRUE},
-    {"info.filter",     G_TYPE_UINT,    G_PARAM_READABLE,  PROP_INFO_FILTER,   TRUE},
-    {"info.hwver",      G_TYPE_UINT,    G_PARAM_READABLE,  PROP_INFO_HWVER,    TRUE},
-    {"info.kernel",     G_TYPE_UINT,    G_PARAM_READABLE,  PROP_INFO_KERNEL,   TRUE},
-    {"info.swver",      G_TYPE_UINT,    G_PARAM_READABLE,  PROP_INFO_SWVER,    TRUE},
-    {"info.xver",       G_TYPE_UINT,    G_PARAM_READABLE,  PROP_INFO_XVER, TRUE},
-    {"info.model",      G_TYPE_STRING,  G_PARAM_READABLE,    PROP_INFO_MODEL,    TRUE},
-    {"info.pver",       G_TYPE_UINT,    G_PARAM_READABLE,  PROP_INFO_PVER, TRUE},
-    {"info.sver",       G_TYPE_UINT,    G_PARAM_READABLE,  PROP_INFO_SVER, TRUE},
-    {"info.serial",     G_TYPE_UINT,    G_PARAM_READABLE,  PROP_INFO_SERIAL,   TRUE},
-    {"info.name",       G_TYPE_STRING,  G_PARAM_READWRITE,   PROP_INFO_NAME, TRUE},
-    // Capabilities
-    {"info.features",        G_TYPE_STRING,     G_PARAM_READABLE,   PROP_INFO_FEATURES, TRUE},
-    {"info.imgformats",      G_TYPE_STRING,     G_PARAM_READABLE,   PROP_INFO_IMGFORMATS,   TRUE},
-    {"info.videosystems",    G_TYPE_STRING,     G_PARAM_READABLE,   PROP_INFO_VIDEOSYSTEMS, TRUE},
-    {"info.maxcines",        G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_MAXCINES, TRUE},
-    {"info.xmax",            G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_XMAX, TRUE},
-    {"info.ymax",            G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_YMAX, TRUE},
-    {"info.xinc",            G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_XINC, TRUE},
-    {"info.yinc",            G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_YINC, TRUE},
-    {"info.winx",            G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_WINX, TRUE},
-    {"info.winy",            G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_WINY, TRUE},
-    {"info.kernsz",          G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_KERNSZ,   TRUE},
-    {"info.memsz",           G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_MEMSZ,    TRUE},
-    {"info.cinemem",         G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_CINEMEM,  TRUE},
-    {"info.mdepths",         PHANTOM_TYPE_HEX,  G_PARAM_READABLE,    PROP_INFO_MDEPTHS,  TRUE},
-    {"info.expdead",         G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_EXPDEAD,  TRUE},
-    {"info.minexp",          G_TYPE_UINT,   G_PARAM_READWRITE,    PROP_INFO_MINEXP,   TRUE},
-    {"info.xblock",          G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_XBLOCK,   TRUE},
-    {"info.yblock",          G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_YBLOCK,   TRUE},
-    {"info.pixps",           G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_PIXPS,    TRUE},
-    {"info.rotps",           G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_ROTPS,    TRUE},
-    {"info.fotps",           G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_FOTPS,    TRUE},
-    {"info.minfrate",        G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_MINFRATE, TRUE},
-    {"info.maxrate",         G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_MAXRATE,  TRUE},
-    {"info.tmodel",          G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_TMODEL,   TRUE},
-    {"info.magtp",           G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_MAGTP,    TRUE},
-    {"info.rtobyteps",       G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_RTOBYTEPS,    TRUE},
-    {"info.rtopacket",       G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_RTOPACKET,    TRUE},
-    {"info.rtopacketovhead", G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_RTOPACKETOVHEAD,  TRUE},
-    {"info.rtofrovhead",     G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_RTOFROVHEAD,  TRUE},
-    {"info.rto_channels",    G_TYPE_UINT,   G_PARAM_READABLE,     PROP_INFO_RTO_CHANNELS, TRUE},
-    // Color correction (non concerned)
-    // Camera status monitoring
-    {"info.modes", G_TYPE_UINT,     G_PARAM_READABLE,   PROP_INFO_MODES,    TRUE},
-    // meta
-    {"meta.name",    G_TYPE_STRING,     G_PARAM_READWRITE,  PROP_META_NAME, TRUE},
-    {"meta.lens",    G_TYPE_STRING,     G_PARAM_READABLE,   PROP_META_LENS, TRUE},
-    {"meta.fstop",   G_TYPE_FLOAT,  G_PARAM_READABLE,    PROP_META_FSTOP,    TRUE},
-    {"meta.flen",    G_TYPE_FLOAT,  G_PARAM_READABLE,    PROP_META_FLEN, TRUE},
-    {"meta.comment", G_TYPE_STRING,     G_PARAM_READWRITE,  PROP_META_COMMENT,  TRUE},
-    {"meta.xset",    G_TYPE_STRING,     G_PARAM_READWRITE,  PROP_META_XSET, TRUE},
-    // cam
-    {"cam.syncimg", G_TYPE_UINT,    G_PARAM_READWRITE,     PROP_CAM_SYNCIMG,   TRUE},
-    {"cam.frdelay", G_TYPE_UINT,    G_PARAM_READWRITE,     PROP_CAM_FRDELAY,   TRUE},
-    {"cam.rtoen",   G_TYPE_UINT,    G_PARAM_READWRITE,     PROP_CAM_RTOEN, TRUE},
-    {"cam.rtotfr",  G_TYPE_UINT,    G_PARAM_READWRITE,     PROP_CAM_RTOTFR,    TRUE},
-    {"cam.membpp",  G_TYPE_UINT,    G_PARAM_READWRITE,     PROP_CAM_MEMBPP,    TRUE},
-    // Global camera options
-    {"cam.trigpol",    G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_CAM_TRIGPOL,   TRUE},
-    {"cam.trigfilt",   G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_CAM_TRIGFILT,  TRUE},
-    {"cam.startonacq", G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_CAM_STARTONACQ,    TRUE},
-    {"cam.tsformat",   G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_CAM_TSFORMAT,  TRUE},
-    {"cam.tcmode",     G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_CAM_TCMODE,    TRUE},
-    {"cam.master",     G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_CAM_MASTER,    TRUE},
-    {"cam.apoffdis",   G_TYPE_INT,  G_PARAM_READWRITE,   PROP_CAM_APOFFDIS,  TRUE},
-    {"cam.longready",  G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CAM_LONGREADY, TRUE},
-    {"cam.cines",      G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CAM_CINES, TRUE},
-    {"cam.dark",       G_TYPE_INT,  G_PARAM_READWRITE,   PROP_CAM_DARK,  TRUE},
-    {"cam.tsetsns",    G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CAM_TSETSNS,   TRUE},
-    {"cam.tsetcam",    G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CAM_TSETCAM,   TRUE},
-    {"cam.tz",         G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_CAM_TZ,    TRUE},
-    {"cam.mode",       G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CAM_MODE,  TRUE},
-    // ethernet
-    {"eth.ip",         G_TYPE_STRING,   G_PARAM_READWRITE,    PROP_ETH_IP,    TRUE},
-    {"eth.netmask",    G_TYPE_STRING,   G_PARAM_READWRITE,    PROP_ETH_NETMASK,   TRUE},
-    {"eth.broadcast",  G_TYPE_STRING,   G_PARAM_READWRITE,    PROP_ETH_BROADCAST, TRUE},
-    {"eth.gateway",    G_TYPE_STRING,   G_PARAM_READWRITE,    PROP_ETH_GATEWAY,   TRUE},
-    {"eth.mtu",        G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_ETH_MTU,   TRUE},
-    {"eth.xip",        G_TYPE_STRING,   G_PARAM_READWRITE,    PROP_ETH_XIP,   TRUE},
-    {"eth.xnetmask",   G_TYPE_STRING,   G_PARAM_READWRITE,    PROP_ETH_XNETMASK,  TRUE},
-    {"eth.xbroadcast", G_TYPE_STRING,   G_PARAM_READWRITE,    PROP_ETH_XBROADCAST,    TRUE},
-    // video
-    {"video.system",     G_TYPE_UINT,   G_PARAM_READWRITE,    PROP_VIDEO_SYSTEM,  TRUE},
-    {"video.output",     G_TYPE_UINT,   G_PARAM_READWRITE,    PROP_VIDEO_OUTPUT,  TRUE},
-    {"video.fields",     G_TYPE_UINT,   G_PARAM_READWRITE,    PROP_VIDEO_FIELDS,  TRUE},
-    {"video.widescreen", G_TYPE_FLOAT,  G_PARAM_READWRITE,   PROP_VIDEO_WIDESCREEN,  TRUE},
-    {"video.genlock",    G_TYPE_UINT,   G_PARAM_READWRITE,    PROP_VIDEO_GENLOCK, TRUE},
-    {"video.vfmode",     G_TYPE_UINT,   G_PARAM_READWRITE,    PROP_VIDEO_VFMODE,  TRUE},
-    {"video.uzoom", G_TYPE_UINT,    G_PARAM_READABLE,  PROP_VIDEO_UZOOM,   TRUE},
-    {"video.vox",   G_TYPE_UINT,    G_PARAM_READABLE,  PROP_VIDEO_VOX, TRUE},
-    {"video.voy",   G_TYPE_UINT,    G_PARAM_READABLE,  PROP_VIDEO_VOY, TRUE},
-    {"video.vow",   G_TYPE_UINT,    G_PARAM_READABLE,  PROP_VIDEO_VOW, TRUE},
-    {"video.voh",   G_TYPE_UINT,    G_PARAM_READABLE,  PROP_VIDEO_VOH, TRUE},
-    {"video.vw",    G_TYPE_UINT,    G_PARAM_READABLE,  PROP_VIDEO_VW,  TRUE},
-    {"video.vh",    G_TYPE_UINT,    G_PARAM_READABLE,  PROP_VIDEO_VH,  TRUE},
-    // Video image adjustments (TODO: check if is relevant)
-    {"video.adj.red",    G_TYPE_FLOAT,  G_PARAM_READABLE,    PROP_VIDEO_ADJ_RED, TRUE},
-    {"video.adj.green",  G_TYPE_FLOAT,  G_PARAM_READABLE,    PROP_VIDEO_ADJ_GREEN,   TRUE},
-    {"video.adj.blue",   G_TYPE_FLOAT,  G_PARAM_READABLE,    PROP_VIDEO_ADJ_BLUE,    TRUE},
-    {"video.adj.toe",    G_TYPE_FLOAT,  G_PARAM_READABLE,    PROP_VIDEO_ADJ_TOE, TRUE},
-    {"video.adj.gamma",  G_TYPE_FLOAT,  G_PARAM_READABLE,    PROP_VIDEO_ADJ_GAMMA,   TRUE},
-    {"video.adj.rgamma", G_TYPE_FLOAT,  G_PARAM_READABLE,    PROP_VIDEO_ADJ_RGAMMA,  TRUE},
-    {"video.adj.bgamma", G_TYPE_FLOAT,  G_PARAM_READABLE,    PROP_VIDEO_ADJ_BGAMMA,  TRUE},
-    {"video.adj.gain",   G_TYPE_FLOAT,  G_PARAM_READABLE,    PROP_VIDEO_ADJ_GAIN,    TRUE},
-    {"video.adj.offset", G_TYPE_FLOAT,  G_PARAM_READABLE,    PROP_VIDEO_ADJ_OFFSET,  TRUE},
-    {"video.adj.flare",  G_TYPE_FLOAT,  G_PARAM_READABLE,    PROP_VIDEO_ADJ_FLARE,   TRUE},
-    {"video.adj.hue",    G_TYPE_FLOAT,  G_PARAM_READABLE,    PROP_VIDEO_ADJ_HUE, TRUE},
-    {"video.adj.sat",    G_TYPE_FLOAT,  G_PARAM_READABLE,    PROP_VIDEO_ADJ_SAT, TRUE},
-    {"video.adj.rped",   G_TYPE_FLOAT,  G_PARAM_READABLE,    PROP_VIDEO_ADJ_RPED,    TRUE},
-    {"video.adj.gped",   G_TYPE_FLOAT,  G_PARAM_READABLE,    PROP_VIDEO_ADJ_GPED,    TRUE},
-    {"video.adj.bped",   G_TYPE_FLOAT,  G_PARAM_READABLE,    PROP_VIDEO_ADJ_BPED,    TRUE},
-    {"video.adj.chroma", G_TYPE_FLOAT,  G_PARAM_READABLE,    PROP_VIDEO_ADJ_CHROMA,  TRUE},
-    {"video.adj.tone",   G_TYPE_STRING,     G_PARAM_READABLE,   PROP_VIDEO_ADJ_TONE,    TRUE},
-    {"video.adj.matrix", G_TYPE_UINT,   G_PARAM_READABLE,     PROP_VIDEO_ADJ_MATRIX,  TRUE},
-    {"video.adj.log",    G_TYPE_UINT,   G_PARAM_READABLE,     PROP_VIDEO_ADJ_LOG, TRUE},
-    // [...] other params, maybe not important
-    // irig // Inter-Range Instrumentation Group
-    {"irig.sec",       G_TYPE_UINT,     G_PARAM_READABLE,   PROP_IRIG_SEC,  TRUE},
-    {"irig.yearbegin", G_TYPE_UINT,     G_PARAM_READABLE,   PROP_IRIG_YEARBEGIN,    TRUE},
-    {"irig.flags",     G_TYPE_FLAGS,    G_PARAM_READABLE,  PROP_IRIG_FLAGS,    TRUE},
-    {"irig.signal",    G_TYPE_STRING,   G_PARAM_READABLE,     PROP_IRIG_SIGNAL,   TRUE},
-    {"irig.gps",       G_TYPE_STRING,   G_PARAM_READABLE,     PROP_IRIG_GPS,  TRUE},
-    {"irig.range",     G_TYPE_STRING,   G_PARAM_READABLE,     PROP_IRIG_RANGE,    TRUE},
-    // cinemag
-    {"mag.state",    G_TYPE_UINT,   G_PARAM_READABLE,     PROP_MAG_STATE, TRUE},
-    {"mag.progress", G_TYPE_UINT,   G_PARAM_READABLE,     PROP_MAG_PROGRESS,  TRUE},
-    {"mag.protect",  G_TYPE_UINT,   G_PARAM_READABLE,     PROP_MAG_PROTECT,   TRUE},
-    {"mag.size",     G_TYPE_UINT,   G_PARAM_READABLE,     PROP_MAG_SIZE,  TRUE},
-    {"mag.used",     G_TYPE_UINT,   G_PARAM_READABLE,     PROP_MAG_USED,  TRUE},
-    {"mag.takes",    G_TYPE_UINT,   G_PARAM_READABLE,     PROP_MAG_TAKES, TRUE},
-    {"mag.version",  G_TYPE_UINT,   G_PARAM_READABLE,     PROP_MAG_VERSION,   TRUE},
-    {"mag.id",       G_TYPE_STRING,     G_PARAM_READABLE,   PROP_MAG_ID,    TRUE},
-    {"mag.runstop",  G_TYPE_INT,    G_PARAM_READWRITE,     PROP_MAG_RUNSTOP,   TRUE},
-    {"mag.type",     G_TYPE_UINT,   G_PARAM_READABLE,     PROP_MAG_TYPE,  TRUE},
-    // default_cine
-    {"defc.res",        PHANTOM_TYPE_RES,   G_PARAM_READWRITE,    PROP_DEFC_RES,  TRUE},
-    {"defc.rate",       G_TYPE_FLOAT,   G_PARAM_READWRITE,    PROP_DEFC_RATE, TRUE},
-    {"defc.exp",        G_TYPE_UINT,    G_PARAM_READWRITE,     PROP_DEFC_EXP,  TRUE},
-    {"defc.edrexp",     G_TYPE_UINT,    G_PARAM_READWRITE,     PROP_DEFC_EDREXP,   TRUE},
-    {"defc.ptframes",   G_TYPE_UINT,    G_PARAM_READWRITE,     PROP_DEFC_PTFRAMES, TRUE},
-    {"defc.shoff",      G_TYPE_UINT,    G_PARAM_READWRITE,     PROP_DEFC_SHOFF,    TRUE},
-    {"defc.ramp",       G_TYPE_UINT,    G_PARAM_READWRITE,     PROP_DEFC_RAMP, TRUE},
-    {"defc.bcount",     G_TYPE_UINT,    G_PARAM_READWRITE,     PROP_DEFC_BCOUNT,   TRUE},
-    {"defc.bperiod",    G_TYPE_UINT,    G_PARAM_READWRITE,     PROP_DEFC_BPERIOD,  TRUE},
-    {"defc.hqenable",   G_TYPE_UINT,    G_PARAM_READWRITE,     PROP_DEFC_HQENABLE, TRUE},
-    {"defc.decimation", G_TYPE_UINT,    G_PARAM_READWRITE,     PROP_DEFC_DECIMATION,   TRUE},
-    {"defc.frcount",    G_TYPE_UINT,    G_PARAM_READABLE,  PROP_DEFC_FRCOUNT,  TRUE},
-    {"defc.frsize",     G_TYPE_UINT,    G_PARAM_READABLE,  PROP_DEFC_FRSIZE,   TRUE},
-    {"defc.aexpmode",   G_TYPE_UINT,    G_PARAM_READWRITE,     PROP_DEFC_AEXPMODE, TRUE},
-    {"defc.aexpcomp",   G_TYPE_FLOAT,   G_PARAM_READWRITE,    PROP_DEFC_AEXPCOMP, TRUE},
-    {"defc.meta.ox",    G_TYPE_INT,     G_PARAM_READWRITE,  PROP_DEFC_META_OX,  TRUE},
-    {"defc.meta.oy",    G_TYPE_INT,     G_PARAM_READWRITE,  PROP_DEFC_META_OY,  TRUE},
-    {"defc.meta.w",     G_TYPE_INT,     G_PARAM_READWRITE,  PROP_DEFC_META_W,   TRUE},
-    {"defc.meta.h",     G_TYPE_INT,     G_PARAM_READWRITE,  PROP_DEFC_META_H,   TRUE},
-    {"defc.meta.ow",    G_TYPE_INT,     G_PARAM_READWRITE,  PROP_DEFC_META_OW,  TRUE},
-    {"defc.meta.oh",    G_TYPE_INT,     G_PARAM_READWRITE,  PROP_DEFC_META_OH,  TRUE},
-    {"defc.meta.crop",  G_TYPE_INT,     G_PARAM_READWRITE,  PROP_DEFC_META_CROP,    TRUE},
-    //{ defc.meta.?,            G_TYPE_UINT, G_PARAM_READABLE, , TRUE},
-    // storage_device
-    {"cf.state",    G_TYPE_INT,     G_PARAM_READABLE,   PROP_CF_STATE,  TRUE},
-    {"cf.action",   G_TYPE_UINT,    G_PARAM_READABLE,  PROP_CF_ACTION, TRUE},
-    {"cf.size",     G_TYPE_UINT,    G_PARAM_READABLE,  PROP_CF_SIZE,   TRUE},
-    {"cf.used",     G_TYPE_UINT,    G_PARAM_READABLE,  PROP_CF_USED,   TRUE},
-    {"cf.progress", G_TYPE_UINT,    G_PARAM_READABLE,  PROP_CF_PROGRESS,   TRUE},
-    {"cf.errrcode", G_TYPE_UINT,    G_PARAM_READABLE,  PROP_CF_ERRRCODE,   TRUE},
-    // cine_tables
-    {"c#.state",   G_TYPE_FLAGS,   G_PARAM_READABLE,     PROP_CT_STATE,  TRUE},
-    {"c#.frcount", G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_FRCOUNT,    TRUE},
-    {"c#.firstfr", G_TYPE_INT,  G_PARAM_READABLE,    PROP_CT_FIRSTFR,    TRUE},
-    {"c#.lastfr",  G_TYPE_INT,  G_PARAM_READABLE,    PROP_CT_LASTFR, TRUE},
-    {"c#.format",  G_TYPE_INT,  G_PARAM_READABLE,    PROP_CT_FORMAT, TRUE},
-    {"c#.in",      G_TYPE_INT,  G_PARAM_READABLE,    PROP_CT_IN, TRUE},
-    {"c#.out",     G_TYPE_INT,  G_PARAM_READABLE,    PROP_CT_OUT,    TRUE},
-    // memory allocation
-    {"c#.start",   PHANTOM_TYPE_HEX,    G_PARAM_READABLE,  PROP_CT_START,  TRUE},
-    {"c#.len",     PHANTOM_TYPE_HEX,    G_PARAM_READABLE,  PROP_CT_LEN,    TRUE},
-    {"c#.frsize",  G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_FRSIZE, TRUE},
-    {"c#.frspace", G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_FRSPACE,    TRUE},
-    // trigger time
-    {"c#.trigtime.secs", G_TYPE_UINT,   G_PARAM_READABLE,     PROP_CT_TRIGTIME_SECS,  TRUE},
-    {"c#.trigtime.frac", G_TYPE_UINT,   G_PARAM_READABLE,     PROP_CT_TRIGTIME_FRAC,  TRUE},
-    //cam/info/adj/meta substructures
-    {"c#.cam",         G_TYPE_UINT,  G_PARAM_READABLE,    PROP_CT_CAM,    TRUE},
-    {"c#.info",        G_TYPE_UINT,  G_PARAM_READABLE,    PROP_CT_INFO,   TRUE},
-    {"c#.adj",         G_TYPE_UINT,  G_PARAM_READABLE,    PROP_CT_ADJ,    TRUE},
-    {"c#.meta.pbrate", G_TYPE_FLOAT,    G_PARAM_READABLE,  PROP_CT_META_PBRATE,    TRUE},
-    {"c#.meta.tcrate", G_TYPE_FLOAT,    G_PARAM_READABLE,  PROP_CT_META_TCRATE,    TRUE},
-    {"c#.meta.uuid",   G_TYPE_STRING,   G_PARAM_READABLE,     PROP_CT_META_UUID,  TRUE},
-    {"c#.meta.system", G_TYPE_STRING,   G_PARAM_READABLE,     PROP_CT_META_SYSTEM,    TRUE},
-    {"c#.meta.trigtc", G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_TRIGTC,    TRUE},
-    {"c#.meta.pax",    G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_PAX,   TRUE},
-    {"c#.meta.pay",    G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_PAY,   TRUE},
-    {"c#.meta.paox",   G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_PAOX,  TRUE},
-    {"c#.meta.paoy",   G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_PAOY,  TRUE},
-    {"c#.meta.ox",     G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_OX,    TRUE},
-    {"c#.meta.oy",     G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_OY,    TRUE},
-    {"c#.meta.ow",     G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_OW,    TRUE},
-    {"c#.meta.oh",     G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_OH,    TRUE},
-    {"c#.meta.w",      G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_W, TRUE},
-    {"c#.meta.h",      G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_H, TRUE},
-    {"c#.meta.crop",   G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_CROP,  TRUE},
-    {"c#.meta.resize", G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_RESIZE,    TRUE},
-    {"c#.meta.gps",    G_TYPE_STRING,   G_PARAM_READABLE,     PROP_CT_META_GPS,   TRUE},
-    // automatic
-    {"auto.videoplay",         G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_AUTO_VIDEOPLAY,    TRUE},
-    {"auto.flashsave",         G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_AUTO_FLASHSAVE,    TRUE},
-    {"auto.filesave",          G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_AUTO_FILESAVE, TRUE},
-    {"auto.acqrestart",        G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_AUTO_ACQRESTART,   TRUE},
-    {"auto.bref",              G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_AUTO_BREF, TRUE},
-    {"auto.firstframe",        G_TYPE_INT,  G_PARAM_READWRITE,   PROP_AUTO_FIRSTFRAME,   TRUE},
-    {"auto.lastframe",         G_TYPE_INT,  G_PARAM_READWRITE,   PROP_AUTO_LASTFRAME,    TRUE},
-    {"auto.loops",             G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_AUTO_LOOPS,    TRUE},
-    {"auto.speed",             G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_AUTO_SPEED,    TRUE},
-    {"auto.progress",          G_TYPE_UINT,     G_PARAM_READABLE,   PROP_AUTO_PROGRESS, TRUE},
-    {"auto.bref_progress",     G_TYPE_UINT,     G_PARAM_READABLE,   PROP_AUTO_BREF_PROGRESS,    TRUE},
-    {"auto.trigger.x",         G_TYPE_INT,  G_PARAM_READWRITE,   PROP_AUTO_TRIGGER_X,    TRUE},
-    {"auto.trigger.y",         G_TYPE_INT,  G_PARAM_READWRITE,   PROP_AUTO_TRIGGER_Y,    TRUE},
-    {"auto.trigger.w",         G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_AUTO_TRIGGER_W,    TRUE},
-    {"auto.trigger.h",         G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_AUTO_TRIGGER_H,    TRUE},
-    {"auto.trigger.threshold", G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_AUTO_TRIGGER_THRESHOLD,    TRUE},
-    {"auto.trigger.area",      G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_AUTO_TRIGGER_AREA, TRUE},
-    {"auto.trigger.speed",     G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_AUTO_TRIGGER_SPEED,    TRUE},
-    {"auto.trigger.mode",      G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_AUTO_TRIGGER_MODE, TRUE},
-    {NULL, }
-};
 
 enum TerminatePhantomDiscover {
     ALL,
@@ -294,41 +38,289 @@ enum TerminatePhantomDiscover {
     BCAST
 };
 
-#define UCA_PHANTOM_CAMERA_ERROR uca_phantom_camera_error_quark()
-typedef enum {
-    UCA_PHANTOM_CAMERA_ERROR_INIT,
-    UCA_PHANTOM_CAMERA_ERROR_DISCOVER,
-    UCA_PHANTOM_CAMERA_ERROR_STOP_RECORDING,
-} UcaPhantomNetworkError;
+enum {
+    PROP_IP = 1,
+    PROP_XIP,
+    PROP_NETCARD,
+    PROP_XNETCARD,
+    PROP_XENABLED,
+    PROP_PORT,
+    PROP_IPSOURCE,
+    N_PROPERTIES
+} UcaPhantomProperties;
+
+enum {
+    USE_ENV,
+    USE_CLASS,
+    USE_DISCOVERY,
+    N_IP_FLAGS
+} IP_FLAGS;
 
 /*
- * Phantom Request data structure
- * TODO: Doc
- * Note: owner free's data
+ * 
+ * Private structures
+ * 
 */
-struct _PhantomRequest {
+typedef struct _PhantomRequest {
     Unit variable;
     gchar* raw;
     gsize size, write_size;
-    // gssize write_size;
-};
-typedef struct _PhantomRequest PhantomRequest;
+} PhantomRequest;
 
-/*
- * Phantom Reply data structure
- * TODO: Doc
- * Note: owner free's data
-*/
-struct _PhantomReply {
+typedef struct _PhantomReply {
     gchar* raw;
     GValue value;
     gsize size;
     gssize read_size;
+} PhantomReply;
+
+typedef struct {
+    gint x, y;
+    guint w, h, threshold, area, speed, mode;
+} Trigger;
+
+// Forward declaration of overrideable functions
+static void uca_phantom_communicate_set_property (GObject  *object, guint property_id, const GValue *value, GParamSpec *pspec);
+static void uca_phantom_communicate_get_property (GObject *object, guint property_id, GValue *value, GParamSpec *pspec);
+static void uca_phantom_communicate_constructed (GObject *object);
+static void uca_phantom_communicate_dispose (GObject *object);
+static void uca_phantom_communicate_finalize (GObject *object);
+
+static GParamSpec *uca_phantom_communicate_properties[N_PROPERTIES] = {NULL, };
+
+struct _UcaPhantomCommunicate {
+    GObject parent_object;
+
+    gboolean xenabled;
+    gchar *ip, *xip, *netcard, *xnetcard;
+    guint port;
+
+    guint ipsource;
+
+    GSocketConnection *connection;
+    GSocketClient *client;
+    GSocketAddress *address;
+    // TODO: consider other essential variables 
 };
-typedef struct _PhantomReply PhantomReply;
+
+G_DEFINE_FINAL_TYPE (UcaPhantomCommunicate, uca_phantom_communicate, G_TYPE_OBJECT)
+
+static void uca_phantom_communicate_class_init (UcaPhantomCommunicateClass *class) {
+    GObjectClass *gobject_class = G_OBJECT_CLASS (class);
+
+    gobject_class->set_property = uca_phantom_communicate_set_property;
+    gobject_class->get_property = uca_phantom_communicate_get_property;
+    gobject_class->constructed = uca_phantom_communicate_constructed;
+    gobject_class->dispose = uca_phantom_communicate_dispose;
+    gobject_class->finalize = uca_phantom_communicate_finalize;
+
+    // install properties
+    uca_phantom_communicate_properties[PROP_IP] =
+        g_param_spec_string (
+            "ip",
+            "IP address",
+            "IP address of the Phantom camera over normal 1Gb ethernet",
+            "100.100.100.1",
+            G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
+    uca_phantom_communicate_properties[PROP_XIP] =
+        g_param_spec_string (
+            "xip",
+            "10Gb IP address",
+            "IP address of the Phantom camera over a 10Gb ethernet",
+            "172.16.0.1",
+            G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
+    uca_phantom_communicate_properties[PROP_NETCARD] =
+        g_param_spec_string (
+            "netcard",
+            "Network card",
+            "Name of the network card used for 1Gb ethernet",
+            "100.100.100.1",
+            G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
+    uca_phantom_communicate_properties[PROP_XNETCARD] =
+        g_param_spec_string (
+            "xnetcard",
+            "10Gb network card",
+            "Name of the network card used for 10Gb ethernet",
+            "172.16.0.1",
+            G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
+
+    uca_phantom_communicate_properties[PROP_XENABLED] =
+        g_param_spec_boolean (
+            "xenabled",
+            "Enable 10Gb data transfer",
+            "Enable 10Gb data transfer",
+            TRUE,
+            G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
+
+    uca_phantom_communicate_properties[PROP_PORT] =
+        g_param_spec_uint (
+            "port",
+            "Set connection port",
+            "Set the port used to establish TCP connection with phantom",
+            1024, 49151, 7115,
+            G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
+    
+    uca_phantom_communicate_properties[PROP_IPSOURCE] =
+        g_param_spec_uint (
+            "ipsource",
+            "Set the IP source using IP flags",
+            "Possible flags: USE_ENV, USE_CLASS, USE_DISCOVER.",
+            0, N_IP_FLAGS, N_IP_FLAGS - 1,
+            G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
+            
+    g_object_class_install_properties (
+        gobject_class, 
+        N_PROPERTIES, 
+        uca_phantom_communicate_properties);
+}
+
+static void uca_phantom_communicate_init (UcaPhantomCommunicate *instance) {
+    instance->ip = NULL;
+    instance->xip = NULL;
+    instance->netcard = NULL;
+    instance->xip = NULL;
+
+    // create a new connection
+    instance->client = g_socket_client_new();
+    instance->address = NULL;
+    instance->connection = NULL;
+}
+
+static void uca_phantom_communicate_constructed (GObject *object) {
+    // UcaPhantomCommunicate *instance = UCA_PHANTOM_COMMUNICATE (object);
+    G_OBJECT_CLASS (uca_phantom_communicate_parent_class)->constructed (object);
+}
+
+static void uca_phantom_communicate_dispose (GObject *object) {
+    UcaPhantomCommunicate *instance = UCA_PHANTOM_COMMUNICATE (object);
+
+    g_free (instance->ip);
+    g_free (instance->xip);
+    g_free (instance->netcard);
+    g_free (instance->xnetcard);
+
+    G_OBJECT_CLASS (uca_phantom_communicate_parent_class)->dispose (object);
+}
+
+static void uca_phantom_communicate_finalize (GObject *object) {
+    UcaPhantomCommunicate *instance = UCA_PHANTOM_COMMUNICATE (object);
+
+    if (instance->address != NULL) {
+        g_object_unref (instance->address);
+    }
+    if (instance->connection != NULL) {
+        g_object_unref (instance->connection);
+    }
+    if (instance->client != NULL) {
+        g_object_unref (instance->client);
+    }
+
+    G_OBJECT_CLASS (uca_phantom_communicate_parent_class)->finalize (object);
+}
+
+/*
+ * Private class definitions
+*/
+static void uca_phantom_communicate_set_ip (UcaPhantomCommunicate *self, const gchar *property) {
+g_free (self->ip);
+self->ip = g_strdup (property);
+}
+static void uca_phantom_communicate_set_xip (UcaPhantomCommunicate *self, const gchar *property) {
+    g_free (self->xip);
+    self->xip = g_strdup (property);
+}
+static void uca_phantom_communicate_set_netcard (UcaPhantomCommunicate *self, const gchar *property) {
+    g_free (self->netcard);
+    self->netcard = g_strdup (property);
+}
+static void uca_phantom_communicate_set_xnetcard (UcaPhantomCommunicate *self, const gchar *property) {
+    g_free (self->xnetcard);
+    self->xnetcard = g_strdup (property);
+}
+static void uca_phantom_communicate_set_xenabled (UcaPhantomCommunicate *self, gboolean property) {self->xenabled = property;}
+static void uca_phantom_communicate_set_port (UcaPhantomCommunicate *self, guint property) {self->port = property;}
+static void uca_phantom_communicate_set_ip_source (UcaPhantomCommunicate *self, guint property) {self->ipsource = property;}
+
+static gchar *uca_phantom_communicate_get_ip (UcaPhantomCommunicate *self) {return self->ip;}
+static gchar *uca_phantom_communicate_get_xip (UcaPhantomCommunicate *self) {return self->xip;}
+static gchar *uca_phantom_communicate_get_netcard (UcaPhantomCommunicate *self) {return self->netcard;}
+static gchar *uca_phantom_communicate_get_xnetcard (UcaPhantomCommunicate *self) {return self->xnetcard;}
+static gboolean uca_phantom_communicate_get_xenabled (UcaPhantomCommunicate *self) {return self->xenabled;}
+static guint uca_phantom_communicate_get_port (UcaPhantomCommunicate *self) {return self->port;}
+static guint uca_phantom_communicate_get_ip_source (UcaPhantomCommunicate *self) {return self->ipsource;}
+
+static void uca_phantom_communicate_set_property (
+    GObject      *object,
+    guint         property_id,
+    const GValue *value,
+    GParamSpec   *pspec) {
+    UcaPhantomCommunicate *self = UCA_PHANTOM_COMMUNICATE (object);
+
+    switch (property_id) {
+    case PROP_IP:
+        uca_phantom_communicate_set_ip (self, g_value_get_string (value));
+        break;
+    case PROP_XIP:
+        uca_phantom_communicate_set_xip (self, g_value_get_string (value));
+        break;
+    case PROP_NETCARD:
+        uca_phantom_communicate_set_netcard (self, g_value_get_string (value));
+        break;
+    case PROP_XNETCARD:
+        uca_phantom_communicate_set_xnetcard (self, g_value_get_string (value));
+        break;
+    case PROP_XENABLED:
+        uca_phantom_communicate_set_xenabled (self, g_value_get_boolean (value));
+        break;
+    case PROP_PORT:
+        uca_phantom_communicate_set_port (self, g_value_get_uint (value));
+        break;
+    case PROP_IPSOURCE:
+        uca_phantom_communicate_set_ip_source (self, g_value_get_uint (value));
+        break;
+    default:
+        G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
+        break;
+    }
+}
+
+static void uca_phantom_communicate_get_property (
+    GObject    *object,
+    guint       property_id,
+    GValue     *value,
+    GParamSpec *pspec) {
+    UcaPhantomCommunicate *self = UCA_PHANTOM_COMMUNICATE (object);
+
+    switch (property_id) {
+    case PROP_IP:
+        g_value_set_string (value, uca_phantom_communicate_get_ip (self));
+        break;
+    case PROP_XIP:
+        g_value_set_string (value, uca_phantom_communicate_get_xip (self));
+        break;
+    case PROP_NETCARD:
+        g_value_set_string (value, uca_phantom_communicate_get_netcard (self));
+        break;
+    case PROP_XNETCARD:
+        g_value_set_string (value, uca_phantom_communicate_get_xnetcard (self));
+        break;
+    case PROP_XENABLED:
+        g_value_set_boolean (value, uca_phantom_communicate_get_xenabled (self));
+        break;
+    case PROP_PORT:
+        g_value_set_uint (value, uca_phantom_communicate_get_port (self));
+        break;
+    case PROP_IPSOURCE:
+        g_value_set_uint (value, uca_phantom_communicate_get_ip_source (self));
+        break;
+    default:
+        G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
+        break;
+    }
+}
 
 static GSocketAddress *
-phantom_discover (gboolean x_enabled, GError **error) {
+uca_phantom_communicate_discover (UcaPhantomCommunicate *self, GError **error) {
     // Note: ~~goto was originally used in this function to do memory clean up~~
     // But actually a switch statement does the work, given an extra flag
     // variable.
@@ -343,7 +335,7 @@ phantom_discover (gboolean x_enabled, GError **error) {
 
     gchar reply[128] = {0,};
 
-    gchar *bcast_address = (x_enabled==TRUE) ? "172.16.255.255" : "100.100.255.255";
+    gchar *bcast_address = (self->xenabled) ? "172.16.255.255" : "100.100.255.255";
     GSocketAddress *bcast_socket_addr = g_inet_socket_address_new_from_string (bcast_address, 7380);
 
     if (bcast_socket_addr == NULL) {
@@ -447,15 +439,15 @@ phantom_discover (gboolean x_enabled, GError **error) {
  * TODO: Doc
 */
 static gboolean
-uca_phantom_communicate (GSocketConnection *connection, PhantomRequest *request, PhantomReply *reply, GError **error) {
+uca_phantom_communicate (UcaPhantomCommunicate *self, PhantomRequest *request, PhantomReply *reply, GError **error) {
     g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
     g_return_val_if_fail (request != NULL || reply != NULL, FALSE);
 
     GError *sub_error = NULL;
 
     // TODO: check that the streams are succesfully fetched
-    GOutputStream * ostream = g_io_stream_get_output_stream (G_IO_STREAM (connection));
-    GInputStream * istream = g_io_stream_get_input_stream (G_IO_STREAM (connection));
+    GOutputStream * ostream = g_io_stream_get_output_stream (G_IO_STREAM (self->connection));
+    GInputStream * istream = g_io_stream_get_input_stream (G_IO_STREAM (self->connection));
 
     gboolean sucess = g_output_stream_write_all (
         ostream,
@@ -503,11 +495,59 @@ uca_phantom_communicate (GSocketConnection *connection, PhantomRequest *request,
 }
 
 /*
+ * Public methods
+ *
+*/
+UcaPhantomCommunicate *uca_phantom_communicate_new (void) {
+    return g_object_new (UCA_TYPE_PHANTOM_COMMUNICATE, NULL);
+}
+
+gboolean uca_phantom_communicate_attempt_connect (UcaPhantomCommunicate *self, GError **error_loc) {
+    GError *error = NULL;
+
+    switch (self->ipsource) {
+    case USE_ENV:
+        // TODO
+        break;
+    case USE_CLASS:
+        self->address = g_inet_socket_address_new_from_string ((self->xenabled) ? self->xip : self->ip, self->port);
+        break;
+    case USE_DISCOVERY:
+        self->address = uca_phantom_communicate_discover(self, &error);
+        break;
+    
+    default:
+        break;
+    }
+
+    g_message ("Attempting to connect to the phantom...\n");
+
+
+    /* connect to the host */
+    self->connection = g_socket_client_connect (
+        self->client,
+        G_SOCKET_CONNECTABLE (self->address),
+        NULL,
+        &error);
+    
+
+    /* don't forget to check for errors */
+    if (error != NULL) {
+        return FALSE;
+    }
+
+    g_message ("Connected to Phantom \n");
+    // TODO print info on phantom
+
+    return TRUE;
+}
+
+/*
  * Get unit variable
  * TODO: Doc
  * Note: All parameter data belongs to the user!
 */
-gboolean uca_phantom_get_variable (GSocketConnection *connection, guint variable_flag, GValue *return_value, GError **error) {
+gboolean uca_phantom_get_variable (UcaPhantomCommunicate *self, guint variable_flag, GValue *return_value, GError **error) {
     g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
     GError *sub_error = NULL;
     gchar pattern[] = "\\s:\\s";
@@ -550,7 +590,7 @@ gboolean uca_phantom_get_variable (GSocketConnection *connection, guint variable
     g_print (" > request: '%s' \n", request.raw);
 
     // Communicate request to phantom
-    gboolean communicated = uca_phantom_communicate (connection, &request, &reply, &sub_error);
+    gboolean communicated = uca_phantom_communicate (self, &request, &reply, &sub_error);
 
     if (!communicated) {
         g_warning ("Failed to retrieve Unit variable %s: %s\n", request.variable.name, sub_error->message);
@@ -633,55 +673,5 @@ gboolean uca_phantom_get_variable (GSocketConnection *connection, guint variable
     g_free (reply.raw);
     reply.raw  = NULL;
     
-    return TRUE;
-}
-
-int main() {
-    GError *error = NULL;
-    GValue val = G_VALUE_INIT;
-
-    /* create a new connection */
-    GSocketConnection *connection = NULL;
-    GSocketClient *client = g_socket_client_new();
-
-    GSocketAddress *addr = phantom_discover(TRUE, &error);
-
-    /* connect to the host */
-    connection = g_socket_client_connect (
-        client,
-        G_SOCKET_CONNECTABLE(addr),
-        NULL,
-        &error);
-
-    /* don't forget to check for errors */
-    if (error != NULL) {
-        g_print ("Houston theres a problem: %s\n", error->message);
-        return FALSE;
-    }
-    
-    g_print ("Connection successful!\n");
-    // for (int i=0; i < N_UNIT_PROPERTIES; i++) {
-    //     gboolean result = uca_phantom_get_variable (connection, i, &error);
-    //     if (!result) {
-    //         g_print ("Houston theres a problem: %s\n", error->message);
-    //         g_error_free (error);
-    //         return FALSE;
-    //     }
-    // }   
-    gboolean result = uca_phantom_get_variable (connection, PROP_INFO_MODEL, &val, &error);
-    gboolean result2 = uca_phantom_get_variable (connection, PROP_INFO_MODEL, &val, &error);
-
-    if (!result || !result2) {
-        g_print ("Houston theres a problem: %s\n", error->message);
-        g_error_free (error);
-        return FALSE;
-    }
-
-    g_object_unref (addr);
-    g_object_unref (connection);
-    g_object_unref (client);
-    g_value_unset (&val);
-
-
     return TRUE;
 }

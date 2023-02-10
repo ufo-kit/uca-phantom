@@ -46,8 +46,6 @@
 // SSE(128) instructions AVX(256); library intrisincs 
 // UCA UFO SSE 
 
-
-
 #include <unistd.h>
 
 // TODO:
