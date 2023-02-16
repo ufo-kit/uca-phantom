@@ -8,7 +8,7 @@
 */
 #define PHANTOM_TYPE_HEX G_TYPE_STRING
 #define PHANTOM_TYPE_RES G_TYPE_STRING
-
+#define PHANTOM_TYPE_FLAGS G_TYPE_STRING
 typedef struct {
     const gchar *name;
     GType        type;
@@ -92,7 +92,7 @@ Unit variables[] = {
     {"cam.dark",       G_TYPE_INT,  G_PARAM_READWRITE,   PROP_CAM_DARK,  TRUE},
     {"cam.tsetsns",    G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CAM_TSETSNS,   TRUE},
     {"cam.tsetcam",    G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CAM_TSETCAM,   TRUE},
-    {"cam.tz",         G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_CAM_TZ,    TRUE},
+    // {"cam.tz",         G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_CAM_TZ,    TRUE},
     {"cam.mode",       G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CAM_MODE,  TRUE},
     // ethernet
     {"eth.ip",         G_TYPE_STRING,   G_PARAM_READWRITE,    PROP_ETH_IP,    TRUE},
@@ -141,10 +141,10 @@ Unit variables[] = {
     // irig // Inter-Range Instrumentation Group
     {"irig.sec",       G_TYPE_UINT,     G_PARAM_READABLE,   PROP_IRIG_SEC,  TRUE},
     {"irig.yearbegin", G_TYPE_UINT,     G_PARAM_READABLE,   PROP_IRIG_YEARBEGIN,    TRUE},
-    {"irig.flags",     G_TYPE_FLAGS,    G_PARAM_READABLE,  PROP_IRIG_FLAGS,    TRUE},
+    {"irig.flags",     PHANTOM_TYPE_FLAGS,    G_PARAM_READABLE,  PROP_IRIG_FLAGS,    TRUE},
     {"irig.signal",    G_TYPE_STRING,   G_PARAM_READABLE,     PROP_IRIG_SIGNAL,   TRUE},
     {"irig.gps",       G_TYPE_STRING,   G_PARAM_READABLE,     PROP_IRIG_GPS,  TRUE},
-    {"irig.range",     G_TYPE_STRING,   G_PARAM_READABLE,     PROP_IRIG_RANGE,    TRUE},
+    // {"irig.range",     G_TYPE_STRING,   G_PARAM_READABLE,     PROP_IRIG_RANGE,    TRUE},
     // cinemag
     {"mag.state",    G_TYPE_UINT,   G_PARAM_READABLE,     PROP_MAG_STATE, TRUE},
     {"mag.progress", G_TYPE_UINT,   G_PARAM_READABLE,     PROP_MAG_PROGRESS,  TRUE},
@@ -186,45 +186,7 @@ Unit variables[] = {
     {"cf.size",     G_TYPE_UINT,    G_PARAM_READABLE,  PROP_CF_SIZE,   TRUE},
     {"cf.used",     G_TYPE_UINT,    G_PARAM_READABLE,  PROP_CF_USED,   TRUE},
     {"cf.progress", G_TYPE_UINT,    G_PARAM_READABLE,  PROP_CF_PROGRESS,   TRUE},
-    {"cf.errrcode", G_TYPE_UINT,    G_PARAM_READABLE,  PROP_CF_ERRRCODE,   TRUE},
-    // cine_tables
-    {"c#.state",   G_TYPE_FLAGS,   G_PARAM_READABLE,     PROP_CT_STATE,  TRUE},
-    {"c#.frcount", G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_FRCOUNT,    TRUE},
-    {"c#.firstfr", G_TYPE_INT,  G_PARAM_READABLE,    PROP_CT_FIRSTFR,    TRUE},
-    {"c#.lastfr",  G_TYPE_INT,  G_PARAM_READABLE,    PROP_CT_LASTFR, TRUE},
-    {"c#.format",  G_TYPE_INT,  G_PARAM_READABLE,    PROP_CT_FORMAT, TRUE},
-    {"c#.in",      G_TYPE_INT,  G_PARAM_READABLE,    PROP_CT_IN, TRUE},
-    {"c#.out",     G_TYPE_INT,  G_PARAM_READABLE,    PROP_CT_OUT,    TRUE},
-    // memory allocation
-    {"c#.start",   PHANTOM_TYPE_HEX,    G_PARAM_READABLE,  PROP_CT_START,  TRUE},
-    {"c#.len",     PHANTOM_TYPE_HEX,    G_PARAM_READABLE,  PROP_CT_LEN,    TRUE},
-    {"c#.frsize",  G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_FRSIZE, TRUE},
-    {"c#.frspace", G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_FRSPACE,    TRUE},
-    // trigger time
-    {"c#.trigtime.secs", G_TYPE_UINT,   G_PARAM_READABLE,     PROP_CT_TRIGTIME_SECS,  TRUE},
-    {"c#.trigtime.frac", G_TYPE_UINT,   G_PARAM_READABLE,     PROP_CT_TRIGTIME_FRAC,  TRUE},
-    //cam/info/adj/meta substructures
-    {"c#.cam",         G_TYPE_UINT,  G_PARAM_READABLE,    PROP_CT_CAM,    TRUE},
-    {"c#.info",        G_TYPE_UINT,  G_PARAM_READABLE,    PROP_CT_INFO,   TRUE},
-    {"c#.adj",         G_TYPE_UINT,  G_PARAM_READABLE,    PROP_CT_ADJ,    TRUE},
-    {"c#.meta.pbrate", G_TYPE_FLOAT,    G_PARAM_READABLE,  PROP_CT_META_PBRATE,    TRUE},
-    {"c#.meta.tcrate", G_TYPE_FLOAT,    G_PARAM_READABLE,  PROP_CT_META_TCRATE,    TRUE},
-    {"c#.meta.uuid",   G_TYPE_STRING,   G_PARAM_READABLE,     PROP_CT_META_UUID,  TRUE},
-    {"c#.meta.system", G_TYPE_STRING,   G_PARAM_READABLE,     PROP_CT_META_SYSTEM,    TRUE},
-    {"c#.meta.trigtc", G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_TRIGTC,    TRUE},
-    {"c#.meta.pax",    G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_PAX,   TRUE},
-    {"c#.meta.pay",    G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_PAY,   TRUE},
-    {"c#.meta.paox",   G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_PAOX,  TRUE},
-    {"c#.meta.paoy",   G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_PAOY,  TRUE},
-    {"c#.meta.ox",     G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_OX,    TRUE},
-    {"c#.meta.oy",     G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_OY,    TRUE},
-    {"c#.meta.ow",     G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_OW,    TRUE},
-    {"c#.meta.oh",     G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_OH,    TRUE},
-    {"c#.meta.w",      G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_W, TRUE},
-    {"c#.meta.h",      G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_H, TRUE},
-    {"c#.meta.crop",   G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_CROP,  TRUE},
-    {"c#.meta.resize", G_TYPE_UINT,     G_PARAM_READABLE,   PROP_CT_META_RESIZE,    TRUE},
-    {"c#.meta.gps",    G_TYPE_STRING,   G_PARAM_READABLE,     PROP_CT_META_GPS,   TRUE},
+    {"cf.errcode", G_TYPE_UINT,    G_PARAM_READABLE,  PROP_CF_ERRRCODE,   TRUE},
     // automatic
     {"auto.videoplay",         G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_AUTO_VIDEOPLAY,    TRUE},
     {"auto.flashsave",         G_TYPE_UINT,     G_PARAM_READWRITE,  PROP_AUTO_FLASHSAVE,    TRUE},

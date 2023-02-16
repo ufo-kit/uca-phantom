@@ -1,10 +1,35 @@
-#ifndef UCAPHANTOMCOMMUNICATE_H
-#define UCAPHANTOMCOMMUNICATE_H
+#ifndef UCA_PHANTOM_COMMUNICATE_H
+#define UCA_PHANTOM_COMMUNICATE_H
 
 #include <glib-object.h>
 
+G_BEGIN_DECLS
+
 #define UCA_TYPE_PHANTOM_COMMUNICATE (uca_phantom_communicate_get_type ())
 G_DECLARE_FINAL_TYPE (UcaPhantomCommunicate, uca_phantom_communicate, UCA, PHANTOM_COMMUNICATE, GObject)
+
+#define UCA_PHANTOM_COMMUNICATE_ERROR (uca_phantom_communicate_error_quark ())
+typedef enum {
+    // Phantom general error codes
+    UCA_PHANTOM_COMMUNICATE_ERROR_INIT,
+    UCA_PHANTOM_COMMUNICATE_ERROR_REGEX,
+    // Phantom connection error codes
+    UCA_PHANTOM_COMMUNICATE_ERROR_BCAST_ADDR,
+    UCA_PHANTOM_COMMUNICATE_ERROR_SOCKET,
+    UCA_PHANTOM_COMMUNICATE_ERROR_SEND,
+    UCA_PHANTOM_COMMUNICATE_ERROR_RECEIVE,
+    UCA_PHANTOM_COMMUNICATE_ERROR_ADRESS,
+    UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT,
+    // Phantom communication error codes
+    UCA_PHANTOM_COMMUNICATE_ERROR_GET_VARIABLE,
+    UCA_PHANTOM_COMMUNICATE_ERROR_SET_VARIABLE,
+    UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING,
+    UCA_PHANTOM_COMMUNICATE_ERROR_STOP_RECORDING,
+    UCA_PHANTOM_COMMUNICATE_ERROR_TRIGGER,
+    UCA_PHANTOM_COMMUNICATE_ERROR_NEXT_EVENT,
+    UCA_PHANTOM_COMMUNICATE_ERROR_NO_DATA,
+    UCA_PHANTOM_COMMUNICATE_ERROR_MAYBE_CORRUPTED
+} UcaPhantomCommunicateError;
 
 /*
  * Public methods
@@ -12,6 +37,7 @@ G_DECLARE_FINAL_TYPE (UcaPhantomCommunicate, uca_phantom_communicate, UCA, PHANT
 UcaPhantomCommunicate *uca_phantom_communicate_new (void);
 gboolean uca_phantom_communicate_attempt_connect (UcaPhantomCommunicate *self, GError **error_loc);
 gboolean uca_phantom_get_variable (UcaPhantomCommunicate *self, guint variable_flag, GValue *return_value, GError **error);
+gboolean uca_phantom_set_variable (UcaPhantomCommunicate *self, guint variable_flag, const char *set_value, GError **error_loc);
 
 enum PhantomPropertyIds {
     PROP_INFO_SENSOR,
@@ -81,7 +107,7 @@ enum PhantomPropertyIds {
     PROP_CAM_DARK,
     PROP_CAM_TSETSNS,
     PROP_CAM_TSETCAM,
-    PROP_CAM_TZ,
+    // PROP_CAM_TZ,
     PROP_CAM_MODE,
     PROP_ETH_IP,
     PROP_ETH_NETMASK,
@@ -130,7 +156,7 @@ enum PhantomPropertyIds {
     PROP_IRIG_FLAGS,
     PROP_IRIG_SIGNAL,
     PROP_IRIG_GPS,
-    PROP_IRIG_RANGE,
+    // PROP_IRIG_RANGE,
     //
     PROP_MAG_STATE,
     PROP_MAG_PROGRESS,
@@ -173,40 +199,40 @@ enum PhantomPropertyIds {
     PROP_CF_PROGRESS,
     PROP_CF_ERRRCODE,
     //    
-    PROP_CT_STATE,
-    PROP_CT_FRCOUNT,
-    PROP_CT_FIRSTFR,
-    PROP_CT_LASTFR,
-    PROP_CT_FORMAT,
-    PROP_CT_IN,
-    PROP_CT_OUT,
-    PROP_CT_START,
-    PROP_CT_LEN,
-    PROP_CT_FRSIZE,
-    PROP_CT_FRSPACE,
-    PROP_CT_TRIGTIME_SECS,
-    PROP_CT_TRIGTIME_FRAC,
-    PROP_CT_CAM,
-    PROP_CT_INFO,
-    PROP_CT_ADJ,
-    PROP_CT_META_PBRATE,
-    PROP_CT_META_TCRATE,
-    PROP_CT_META_UUID,
-    PROP_CT_META_SYSTEM,
-    PROP_CT_META_TRIGTC,
-    PROP_CT_META_PAX,
-    PROP_CT_META_PAY,
-    PROP_CT_META_PAOX,
-    PROP_CT_META_PAOY,
-    PROP_CT_META_OX,
-    PROP_CT_META_OY,
-    PROP_CT_META_OW,
-    PROP_CT_META_OH,
-    PROP_CT_META_W,
-    PROP_CT_META_H,
-    PROP_CT_META_CROP,
-    PROP_CT_META_RESIZE,
-    PROP_CT_META_GPS,
+    // PROP_CT_STATE,
+    // PROP_CT_FRCOUNT,
+    // PROP_CT_FIRSTFR,
+    // PROP_CT_LASTFR,
+    // PROP_CT_FORMAT,
+    // PROP_CT_IN,
+    // PROP_CT_OUT,
+    // PROP_CT_START,
+    // PROP_CT_LEN,
+    // PROP_CT_FRSIZE,
+    // PROP_CT_FRSPACE,
+    // PROP_CT_TRIGTIME_SECS,
+    // PROP_CT_TRIGTIME_FRAC,
+    // PROP_CT_CAM,
+    // PROP_CT_INFO,
+    // PROP_CT_ADJ,
+    // PROP_CT_META_PBRATE,
+    // PROP_CT_META_TCRATE,
+    // PROP_CT_META_UUID,
+    // PROP_CT_META_SYSTEM,
+    // PROP_CT_META_TRIGTC,
+    // PROP_CT_META_PAX,
+    // PROP_CT_META_PAY,
+    // PROP_CT_META_PAOX,
+    // PROP_CT_META_PAOY,
+    // PROP_CT_META_OX,
+    // PROP_CT_META_OY,
+    // PROP_CT_META_OW,
+    // PROP_CT_META_OH,
+    // PROP_CT_META_W,
+    // PROP_CT_META_H,
+    // PROP_CT_META_CROP,
+    // PROP_CT_META_RESIZE,
+    // PROP_CT_META_GPS,
     //
     PROP_AUTO_VIDEOPLAY,
     PROP_AUTO_FLASHSAVE,
@@ -231,4 +257,5 @@ enum PhantomPropertyIds {
     N_UNIT_PROPERTIES
 };
 
+G_END_DECLS
 #endif

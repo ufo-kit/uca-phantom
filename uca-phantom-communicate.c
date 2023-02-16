@@ -64,7 +64,8 @@ enum {
 typedef struct _PhantomRequest {
     Unit variable;
     gchar* raw;
-    gsize size, write_size;
+    gsize size;
+    gssize write_size;
 } PhantomRequest;
 
 typedef struct _PhantomReply {
@@ -104,6 +105,8 @@ struct _UcaPhantomCommunicate {
 };
 
 G_DEFINE_FINAL_TYPE (UcaPhantomCommunicate, uca_phantom_communicate, G_TYPE_OBJECT)
+
+G_DEFINE_QUARK (uca-phantom-communicate-error-quark, uca_phantom_communicate_error)
 
 static void uca_phantom_communicate_class_init (UcaPhantomCommunicateClass *class) {
     GObjectClass *gobject_class = G_OBJECT_CLASS (class);
@@ -320,40 +323,52 @@ static void uca_phantom_communicate_get_property (
 }
 
 static GSocketAddress *
-uca_phantom_communicate_discover (UcaPhantomCommunicate *self, GError **error) {
-    // Note: ~~goto was originally used in this function to do memory clean up~~
+uca_phantom_communicate_discover (UcaPhantomCommunicate *self, GError **error_loc) {
+    // Note: find a way to do this without a goto statement.
     // But actually a switch statement does the work, given an extra flag
     // variable.
 
+    g_return_val_if_fail (error_loc == NULL || *error_loc == NULL, NULL); // verify that error_loc is not set
+
     GError *sub_error = NULL;
+    GError *phantom_error = NULL;
+    GSocket *socket = NULL;
     GMatchInfo *info = NULL;
     GSocketAddress *remote_socket_addr = NULL;
     GSocketAddress *result = NULL;
     const gchar request[] = "phantom?";
     const gchar pattern[] = "PH16 (\\d+) (\\d+) (\\d+)";
-    gint FLAG = 0;
+    gint FLAG = ALL;
+    guint port = 7380;
 
     gchar reply[128] = {0,};
 
+    g_message ("Attempting to discover the phantom...\n");
+
     gchar *bcast_address = (self->xenabled) ? "172.16.255.255" : "100.100.255.255";
-    GSocketAddress *bcast_socket_addr = g_inet_socket_address_new_from_string (bcast_address, 7380);
+    GSocketAddress *bcast_socket_addr = g_inet_socket_address_new_from_string (bcast_address, port);
 
     if (bcast_socket_addr == NULL) {
-        g_warning ("Failed to parse broadcasting address: %s\n", sub_error->message);
-        g_propagate_error (error, sub_error);
-        g_error_free (sub_error);
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_BCAST_ADDR, "Failed to parse broadcasting address '%s' on port '%d'\n", bcast_address, port);
+        g_propagate_error (error_loc, phantom_error);
 
         FLAG = BCAST;
+        goto cleanup;
     }
 
-    GSocket *socket = g_socket_new (G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_DATAGRAM, G_SOCKET_PROTOCOL_UDP, &sub_error);
+    socket = g_socket_new (G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_DATAGRAM, G_SOCKET_PROTOCOL_UDP, &sub_error);
 
     if (socket == NULL) {
-        g_warning ("Failed to create broadcasting socket: %s\n", sub_error->message);
-        g_propagate_error (error, sub_error);
-        g_error_free (sub_error);
-
+        if (sub_error == NULL) {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SOCKET, "Failed to create socket\n");
+        }
+        else {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SOCKET, "Failed to create socket: %s\n", sub_error->message);
+            g_error_free (sub_error);
+        }
+        g_propagate_error (error_loc, phantom_error);
         FLAG = SOCKET;
+        goto cleanup;
     }
 
     g_socket_set_broadcast (socket, TRUE);
@@ -361,55 +376,83 @@ uca_phantom_communicate_discover (UcaPhantomCommunicate *self, GError **error) {
     gssize wrote = g_socket_send_to (socket, bcast_socket_addr, request, sizeof (request), NULL, &sub_error);
     
     if (wrote < -1) {
-        g_warning ("Failed to broadcast request: %s\n", sub_error->message);
-        g_propagate_error (error, sub_error);
-        g_error_free (sub_error);
+        if (sub_error == NULL) {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SEND, "Failed to send broadcast\n");
+        }
+        else {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SEND, "Failed to send broadcast: %s\n", sub_error->message);
+            g_error_free (sub_error);
+        }
+        g_propagate_error (error_loc, phantom_error);
 
         FLAG = SOCKET;
+        goto cleanup;
     }
 
     gssize received = g_socket_receive_from (socket, &remote_socket_addr, reply, sizeof (reply), NULL, &sub_error);
     
     if (received < -1) {
-        g_warning ("Failed to receive from broadcast: %s\n", sub_error->message);
-        g_propagate_error (error, sub_error);
-        g_error_free (sub_error);
+        if (sub_error == NULL) {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_RECEIVE, "Failed to receive broadcast\n");
+        }
+        else {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_RECEIVE, "Failed to receive broadcast: %s\n", sub_error->message);
+            g_error_free (sub_error);
+        }
+        g_propagate_error (error_loc, phantom_error);
 
         FLAG = RECEIVE;
+        goto cleanup;
     }
 
-    g_print ("Phantom UDP discovery reply: `%s'\n", reply);
     GRegex *regex = g_regex_new (pattern, 0, 0, &sub_error);
 
     if (regex == NULL) {
-        g_warning ("Failed to create Regex object: %s\n", sub_error->message);
-        g_propagate_error (error, sub_error);
-        g_error_free (sub_error);
+        if (sub_error == NULL) {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REGEX, "Failed to create regex\n");
+        }
+        else {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REGEX, "Failed to create regex: %s\n", sub_error->message);
+            g_error_free (sub_error);
+        }
+        g_propagate_error (error_loc, phantom_error);
 
         FLAG = REGEX;
+        goto cleanup;
     }
 
     gboolean matched = g_regex_match (regex, reply, 0, &info);
 
     if (!matched) {
-        g_print ("Reply '%s' does not match expected pattern.\n", reply);
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REGEX, "Reply '%s' does not match expected pattern.\n", reply);
+        g_propagate_error (error_loc, phantom_error);
 
         FLAG = ALL;
+        goto cleanup;
     }
 
     gchar *port_string = g_match_info_fetch (info, 1);
 
     if (port_string == NULL) {
-        g_warning ("Failed to retrieve the matched regex information.\n");
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REGEX, "Regex pattern number 1 not found.\n");
+        g_propagate_error (error_loc, phantom_error);
 
         FLAG = ALL;
+        goto cleanup;
     }
 
-    guint port = atoi (port_string);
+    port = atoi (port_string);
     g_free(port_string);
 
     result = g_inet_socket_address_new (g_inet_socket_address_get_address ((GInetSocketAddress *) remote_socket_addr), port);
 
+    gchar *ip_adress = g_inet_address_to_string (g_inet_socket_address_get_address ((GInetSocketAddress *) result));
+
+    g_message ("Phantom found on port %d with the IPV4 address: %s.\n", port, ip_adress);
+
+    g_free (ip_adress);
+
+    cleanup:
     switch (FLAG) {
         case ALL:
             g_match_info_free (info);
@@ -434,13 +477,15 @@ uca_phantom_communicate_discover (UcaPhantomCommunicate *self, GError **error) {
     return result;
 }
 
-/*
- * Private communication method. All requests pass by here.
- * TODO: Doc
-*/
+/**
+ * UcaPhantomCommunicate:
+ *
+ * The #UcaPhantomCommunicate struct contains only private data and should
+ * only be accessed using the provided API.
+ */
 static gboolean
-uca_phantom_communicate (UcaPhantomCommunicate *self, PhantomRequest *request, PhantomReply *reply, GError **error) {
-    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+uca_phantom_communicate (UcaPhantomCommunicate *self, PhantomRequest *request, PhantomReply *reply, GError **error_loc) {
+    g_return_val_if_fail (error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail (request != NULL || reply != NULL, FALSE);
 
     GError *sub_error = NULL;
@@ -449,20 +494,17 @@ uca_phantom_communicate (UcaPhantomCommunicate *self, PhantomRequest *request, P
     GOutputStream * ostream = g_io_stream_get_output_stream (G_IO_STREAM (self->connection));
     GInputStream * istream = g_io_stream_get_input_stream (G_IO_STREAM (self->connection));
 
-    gboolean sucess = g_output_stream_write_all (
+    request->write_size = g_output_stream_write (
         ostream,
         request->raw,
         request->size,
-        &request->write_size,
         NULL,
         &sub_error);
     
-    if (!sucess) {
+    if (request->write_size < -1) {
         g_warning ("Could not write request: %s\n", sub_error->message);
-        g_propagate_error (error, sub_error);
-        g_error_free (sub_error);
+        g_propagate_error (error_loc, sub_error);
 
-        // g_output_stream_close (ostream, NULL, NULL);
         g_output_stream_flush (ostream, NULL, NULL);
 
         return FALSE;
@@ -479,8 +521,7 @@ uca_phantom_communicate (UcaPhantomCommunicate *self, PhantomRequest *request, P
     if (reply->read_size < -1) {
         g_warning ("Could not read reply: %s\n", sub_error->message);
         g_input_stream_close (istream, NULL, NULL);
-        g_propagate_error (error, sub_error);
-        g_error_free (sub_error);
+        g_propagate_error (error_loc, sub_error);
 
         g_input_stream_close (istream, NULL, NULL);
         return FALSE;
@@ -488,6 +529,8 @@ uca_phantom_communicate (UcaPhantomCommunicate *self, PhantomRequest *request, P
     else if (reply->read_size == 0) {
         g_warning ("Reached EOF on stream.\n");
     }
+
+    g_print ("raw: %s\n", reply->raw); 
 
     g_output_stream_flush (ostream, NULL, NULL);
 
@@ -503,7 +546,10 @@ UcaPhantomCommunicate *uca_phantom_communicate_new (void) {
 }
 
 gboolean uca_phantom_communicate_attempt_connect (UcaPhantomCommunicate *self, GError **error_loc) {
-    GError *error = NULL;
+    g_return_val_if_fail (error_loc == NULL || *error_loc == NULL, FALSE);
+
+    GError *sub_error = NULL;
+    GError *phantom_error = NULL;
 
     switch (self->ipsource) {
     case USE_ENV:
@@ -513,32 +559,50 @@ gboolean uca_phantom_communicate_attempt_connect (UcaPhantomCommunicate *self, G
         self->address = g_inet_socket_address_new_from_string ((self->xenabled) ? self->xip : self->ip, self->port);
         break;
     case USE_DISCOVERY:
-        self->address = uca_phantom_communicate_discover(self, &error);
+        self->address = uca_phantom_communicate_discover(self, &sub_error);
         break;
     
     default:
+        g_warning ("Invalid ipsource value. Fatal error.");
+        return FALSE;
         break;
+    }
+
+    if (self->address == NULL && sub_error != NULL) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_ADRESS, "Could not discover the phantom: %s\n", sub_error->message);
+        g_propagate_error (error_loc, phantom_error);
+        g_error_free (sub_error);
+
+        return FALSE;
+    }
+    if (self->address != NULL && sub_error != NULL) {
+        g_warning ("Error when getting the adress of the phantom: %s\n", sub_error->message);
+        g_clear_error (&sub_error);
     }
 
     g_message ("Attempting to connect to the phantom...\n");
 
-
-    /* connect to the host */
+    /* connect to the phantom */
     self->connection = g_socket_client_connect (
         self->client,
         G_SOCKET_CONNECTABLE (self->address),
         NULL,
-        &error);
+        &sub_error);
     
+    if (self->connection == NULL && sub_error != NULL) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT, "Could not connect to the phantom: %s\n", sub_error->message);
+        g_propagate_error (error_loc, phantom_error);
+        g_error_free (sub_error);
 
-    /* don't forget to check for errors */
-    if (error != NULL) {
         return FALSE;
+    }
+    if (self->connection != NULL && sub_error != NULL) {
+        g_warning ("Error occured when trying to connect to phantom: %s\n", sub_error->message);
+        g_clear_error (&sub_error);
     }
 
     g_message ("Connected to Phantom \n");
     // TODO print info on phantom
-
     return TRUE;
 }
 
@@ -547,9 +611,12 @@ gboolean uca_phantom_communicate_attempt_connect (UcaPhantomCommunicate *self, G
  * TODO: Doc
  * Note: All parameter data belongs to the user!
 */
-gboolean uca_phantom_get_variable (UcaPhantomCommunicate *self, guint variable_flag, GValue *return_value, GError **error) {
-    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+gboolean uca_phantom_get_variable (UcaPhantomCommunicate *self, guint variable_flag, GValue *return_value, GError **error_loc) {
+    g_return_val_if_fail (error_loc == NULL || *error_loc == NULL, FALSE);
+    g_return_val_if_fail (variable_flag < N_UNIT_PROPERTIES, FALSE);
+
     GError *sub_error = NULL;
+    GError *phantom_error = NULL;
     gchar pattern[] = "\\s:\\s";
 
     // Setup the request 
@@ -559,13 +626,14 @@ gboolean uca_phantom_get_variable (UcaPhantomCommunicate *self, guint variable_f
         .size = 0,
         .write_size = 0
     };
+
     // Manually build the message to ensure that the string is correclty NULL-ended
-    // request.raw = g_strconcat("get ", request.variable.name, "\n", NULL);
     request.size = (strlen (request.variable.name) + strlen ("get \r\n")) * sizeof (request.raw);
-    request.raw = g_malloc0 ((request.size) * sizeof (request.raw));
+    request.raw = g_malloc0 (request.size);
     
-    if (request.raw==NULL) {
-        g_warning ("Could not allocate and assemble request message. Aborting\n");
+    if (request.raw == NULL) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GET_VARIABLE, "Could not allocate and assemble request message. Fatal error.\n");
+        g_propagate_error (error_loc, phantom_error);
         return FALSE;
     }
 
@@ -583,44 +651,44 @@ gboolean uca_phantom_get_variable (UcaPhantomCommunicate *self, guint variable_f
     reply.raw = g_malloc0 (reply.size * sizeof (reply.raw));
 
     if (reply.raw == NULL) {
-        g_warning ("Could not allocate and assemble reply buffer. Aborting\n");
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GET_VARIABLE, "Could not allocate reply message. Fatal error.\n");
+        g_propagate_error (error_loc, phantom_error);
+        g_free (request.raw);
         return FALSE;
     }
 
-    g_print (" > request: '%s' \n", request.raw);
+    g_debug (" > request: '%s' \n", request.raw);
 
     // Communicate request to phantom
     gboolean communicated = uca_phantom_communicate (self, &request, &reply, &sub_error);
 
-    if (!communicated) {
-        g_warning ("Failed to retrieve Unit variable %s: %s\n", request.variable.name, sub_error->message);
-        
-        if (sub_error != NULL) {
-            g_propagate_error (error, sub_error);
-            g_error_free (sub_error);
-        }
+    if (!communicated && sub_error != NULL) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GET_VARIABLE, "Failed to retrieve Unit variable %s: %s\n", request.variable.name, sub_error->message);
+        g_propagate_error (error_loc, phantom_error);
+        g_error_free (sub_error);
 
         g_free (request.raw);
         g_free (reply.raw);
         return FALSE;
     }
+
+    if (communicated && sub_error != NULL) {
+        g_warning ("Error when retrieving Unit variable %s: %s\n", request.variable.name, sub_error->message);
+        g_clear_error (&sub_error);
+    }
     g_free (request.raw);
     request.raw  = NULL;
 
-    g_print (" > reply: '%s' \n", reply.raw);
+    g_debug (" > reply: '%s' \n", reply.raw);
 
     // Extract the actual data from the raw reply
     GRegex* regex = g_regex_new (pattern, 0, 0, &sub_error);
 
-    if (regex == NULL ) {
-        g_warning ("Failed to create regex object. Aborting...");
+    if (regex == NULL) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GET_VARIABLE, "Failed to create regex object. Aborting...: %s\n", sub_error->message);
+        g_propagate_error (error_loc, phantom_error);
+        g_error_free (sub_error);
 
-        if (sub_error != NULL) {
-            g_propagate_error (error, sub_error);
-            g_error_free (sub_error);
-        }
-
-        g_free (request.raw);
         g_free (reply.raw);
         return FALSE;
     }
@@ -633,6 +701,9 @@ gboolean uca_phantom_get_variable (UcaPhantomCommunicate *self, guint variable_f
     // Check for error mesage from phantom
     if (g_str_has_prefix (prefix, "ERR")) {
         g_warning ("Invalid phantom command: %s\n", reply.raw);
+        g_free (reply.raw);
+        g_strfreev (matched);
+        g_regex_unref (regex);
         return FALSE;
     }
 
@@ -655,11 +726,7 @@ gboolean uca_phantom_get_variable (UcaPhantomCommunicate *self, guint variable_f
         break;
     // // TODO : handle these cases in a more custom way in the future ?
     // case PHANTOM_TYPE_HEX:
-    //     g_value_set_string (&reply.value, var);
-    //     break;
     // case PHANTOM_TYPE_RES:
-    //     g_value_set_string (&reply.value, var);
-    //     break;
     default:
         g_warning ("Type not handled yet!\n");
         break;
@@ -670,6 +737,97 @@ gboolean uca_phantom_get_variable (UcaPhantomCommunicate *self, guint variable_f
     matched = NULL;
     g_regex_unref (regex);
     regex = NULL;
+    g_free (reply.raw);
+    reply.raw  = NULL;
+    
+    return TRUE;
+}
+
+
+/*
+ * Set unit variable
+ * TODO: Doc
+ * Note: All parameter data belongs to the user!
+*/
+gboolean uca_phantom_set_variable (UcaPhantomCommunicate *self, guint variable_flag, const char *set_value, GError **error_loc) {
+    g_return_val_if_fail (error_loc == NULL || *error_loc == NULL, FALSE);
+    g_return_val_if_fail (variable_flag < N_UNIT_PROPERTIES, FALSE);
+
+    GError *sub_error = NULL;
+    GError *phantom_error = NULL;
+
+    // Setup the request 
+    PhantomRequest request = {
+        .variable = variables[variable_flag],
+        .raw = NULL,
+        .size = 0,
+        .write_size = 0
+    };
+
+    // Manually build the message to ensure that the string is correclty NULL-ended
+    request.size = (strlen ("set  \r\n") + strlen (request.variable.name) + strlen (set_value)) * sizeof (request.raw);
+    request.raw = g_malloc0 (request.size);
+    
+    if (request.raw == NULL) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_VARIABLE, "Could not allocate and assemble request message. Fatal error.\n");
+        g_propagate_error (error_loc, phantom_error);
+        return FALSE;
+    }
+
+    g_strlcat(request.raw, "set ", request.size);
+    g_strlcat(request.raw, request.variable.name, request.size);
+    g_strlcat(request.raw, " ", request.size);
+    g_strlcat(request.raw, set_value, request.size);
+    g_strlcat(request.raw, "\r\n", request.size);   
+
+    // Setup the reply
+    PhantomReply reply = {
+        .size = 512,
+        .raw = NULL,
+        .value = G_VALUE_INIT,
+        .read_size = 0
+    };
+    reply.raw = g_malloc0 (reply.size);
+
+    if (reply.raw == NULL) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_VARIABLE, "Could not allocate reply message. Fatal error.\n");
+        g_propagate_error (error_loc, phantom_error);
+        g_free (request.raw);
+        return FALSE;
+    }
+
+    // Communicate request to phantom
+    gboolean communicated = uca_phantom_communicate (self, &request, &reply, &sub_error);
+
+    g_debug (" > request: '%s' \n", request.raw);
+    g_debug (" > reply: '%s' \n", reply.raw);
+    g_free (request.raw);
+    request.raw  = NULL;
+
+    if (!communicated && sub_error != NULL) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_VARIABLE, "There was an error when writing %s: %s\n", request.variable.name, sub_error->message);
+        g_propagate_error (error_loc, phantom_error);
+        g_clear_error (&sub_error);
+
+        g_free (reply.raw);
+        return FALSE;
+    }
+
+    if (communicated && sub_error != NULL) {
+        g_warning ("Error when setting Unit variable %s: %s\n", request.variable.name, sub_error->message);
+        g_clear_error (&sub_error);
+    }
+    
+    if (g_strcmp0 (reply.raw, "Ok!") != 0) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_VARIABLE, "Failed to set Unit variable %s: %s\n", request.variable.name, reply.raw);
+        g_propagate_error (error_loc, phantom_error);
+        g_free (reply.raw);
+        reply.raw  = NULL;
+
+        return FALSE;
+    }
+   
+    // Cleanup
     g_free (reply.raw);
     reply.raw  = NULL;
     
