@@ -27,8 +27,8 @@
 #include <unistd.h>
 
 #include "uca-phantom-communicate.h"
-#include "unit_variables.h"
-
+#include "uca-phantom-variables.h"
+#include "uca-phantom-commands.h"
 
 enum TerminatePhantomDiscover {
     ALL,
@@ -62,8 +62,8 @@ enum {
  * 
 */
 typedef struct _PhantomRequest {
-    Unit variable;
-    gchar* raw;
+    PhantomCommand command;
+    gchar* message;
     gsize size;
     gssize write_size;
 } PhantomRequest;
@@ -496,7 +496,7 @@ uca_phantom_communicate (UcaPhantomCommunicate *self, PhantomRequest *request, P
 
     request->write_size = g_output_stream_write (
         ostream,
-        request->raw,
+        request->message,
         request->size,
         NULL,
         &sub_error);
@@ -530,7 +530,7 @@ uca_phantom_communicate (UcaPhantomCommunicate *self, PhantomRequest *request, P
         g_warning ("Reached EOF on stream.\n");
     }
 
-    g_print ("raw: %s\n", reply->raw); 
+    g_debug ("raw: %s\n", reply->raw); 
 
     g_output_stream_flush (ostream, NULL, NULL);
 
@@ -606,80 +606,156 @@ gboolean uca_phantom_communicate_attempt_connect (UcaPhantomCommunicate *self, G
     return TRUE;
 }
 
-/*
- * Get unit variable
- * TODO: Doc
- * Note: All parameter data belongs to the user!
-*/
-gboolean uca_phantom_get_variable (UcaPhantomCommunicate *self, guint variable_flag, GValue *return_value, GError **error_loc) {
+/**
+ * @brief Send a command to the phantom and get the reply
+ * 
+ * @paragraph This variadic function is used to send a command to the phantom and get the reply. 
+ * The command is specified by the command_flag. The reply is stored in the caller-owned reply struct.
+ * 
+ * @param self 
+ * @param command_flag 
+ * @param reply 
+ * @param error_loc 
+ * @param ... 
+ * @return gboolean 
+ */
+gboolean uca_phantom_run_command (UcaPhantomCommunicate *self, guint command_flag, PhantomReply *reply, GError **error_loc, ...) {
+    g_return_val_if_fail (error_loc == NULL || *error_loc == NULL, FALSE);
+    g_return_val_if_fail (command_flag < N_UNIT_COMMANDS, FALSE);
+
+    GError *sub_error = NULL;
+    GError *phantom_error = NULL;
+
+    // Setup the request 
+    PhantomRequest request = {
+        .command = Commands[command_flag],
+        .message = NULL,
+        .size = 0,
+        .write_size = 0
+    };
+
+    // Setup args of command
+    va_list va_args;
+    guint nb_args = 0;
+    guint nb_arg_max = Commands[command_flag].argc;
+    gchar *next_arg = NULL;
+    const gchar *args[nb_arg_max];
+
+    va_start (va_args, error_loc);
+    while ((next_arg = va_arg (va_args, gchar *)) != NULL) {
+        nb_args++;
+        if (nb_args > nb_arg_max) {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_RUN_COMMAND, "Too many arguments for command %s. Expected %d, got %d.\n", Commands[command_flag].name, Commands[command_flag].argc, nb_args);
+            g_propagate_error (error_loc, phantom_error);
+            return FALSE;
+        }
+        args[nb_args - 1] = next_arg;
+    }
+    va_end (va_args);
+
+    gsize args_len = 0;
+    for (guint i = 0; i < nb_args; i++) {
+        args_len += strlen (args[i]);
+    }
+
+    // Manually build the message to ensure that the string is correclty NULL-ended
+    request.size = (strlen (request.command.name) + request.command.argc + args_len + strlen ("\r\n")) * sizeof (request.message);
+    request.message = g_malloc0 (request.size);
+    
+    if (request.message == NULL) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_RUN_COMMAND, "Could not allocate and assemble request message. Fatal error.\n");
+        g_propagate_error (error_loc, phantom_error);
+        return FALSE;
+    }
+
+    g_strlcat(request.message, request.command.name, request.size);
+    g_strlcat(request.message, " ", request.size);
+    for (guint i = 0; i < nb_args-1; i++) {
+        g_strlcat(request.message, args[i], request.size);
+        g_strlcat(request.message, " ", request.size);
+    }
+    g_strlcat(request.message, args[nb_args-1], request.size); // Last arg does not have a space after it
+    g_strlcat(request.message, "\r\n", request.size);
+
+    // Setup the reply
+    *reply = (PhantomReply) {
+        .raw = NULL,
+        .size = 512,
+        .value = G_VALUE_INIT,
+        .read_size = 0
+    };
+
+    reply->raw = g_malloc0 (reply->size);
+
+    if (reply->raw == NULL) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_RUN_COMMAND, "Could not allocate reply message. Fatal error.\n");
+        g_propagate_error (error_loc, phantom_error);
+        g_free (request.message);
+        return FALSE;
+    }
+
+    // Communicate request to phantom
+    gboolean communicated = uca_phantom_communicate (self, &request, reply, &sub_error);
+
+    g_debug ("> request:\n%s \n", request.message);
+    g_debug ("> reply:\n%s \n", reply->raw);
+    g_free (request.message);
+    request.message  = NULL;
+
+    if (!communicated && sub_error != NULL) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_RUN_COMMAND, "Failed to run command %s: %s\n", request.command.name, sub_error->message);
+        g_propagate_error (error_loc, phantom_error);
+        g_clear_error (&sub_error);
+
+        g_free (reply->raw);
+        return FALSE;
+    }
+
+    if (communicated && sub_error != NULL) {
+        g_warning ("Successfully ran command %s. However, an error occured: %s\n", request.command.name, sub_error->message);
+        g_clear_error (&sub_error);
+    }
+    
+    if (g_str_has_prefix (reply->raw, "ERR:") == TRUE) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_RUN_COMMAND, "Phantom returned an error when running command '%s': \n\t> %s\n", request.command.name, reply->raw);
+        g_propagate_error (error_loc, phantom_error);
+        g_free (reply->raw);
+        reply->raw  = NULL;
+
+        return FALSE;
+    }
+    
+    return TRUE;
+}
+
+/**
+ * @brief Get the value of a variable from the phantom
+ * 
+ * @paragraph This function will get the value of a unit variable from the phantom using the uca_phantom_run_command function.
+ * 
+ * @param self 
+ * @param variable_flag 
+ * @param return_value 
+ * @param error_loc 
+ * @return gboolean 
+ */
+gboolean uca_phantom_get_variable(UcaPhantomCommunicate *self, guint variable_flag, GValue *return_value, GError **error_loc) {
     g_return_val_if_fail (error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail (variable_flag < N_UNIT_PROPERTIES, FALSE);
 
     GError *sub_error = NULL;
     GError *phantom_error = NULL;
     gchar pattern[] = "\\s:\\s";
+    PhantomReply reply;
 
-    // Setup the request 
-    PhantomRequest request = {
-        .variable = variables[variable_flag],
-        .raw = NULL,
-        .size = 0,
-        .write_size = 0
-    };
+    gboolean res = uca_phantom_run_command (self, CMD_GET, &reply, &sub_error, variables[variable_flag].name, NULL);
 
-    // Manually build the message to ensure that the string is correclty NULL-ended
-    request.size = (strlen (request.variable.name) + strlen ("get \r\n")) * sizeof (request.raw);
-    request.raw = g_malloc0 (request.size);
-    
-    if (request.raw == NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GET_VARIABLE, "Could not allocate and assemble request message. Fatal error.\n");
+    if (res != TRUE && sub_error != NULL) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GET_VARIABLE, "Failed to get variable %s: %s\n", variables[variable_flag].name, sub_error->message);
         g_propagate_error (error_loc, phantom_error);
-        return FALSE;
-    }
-
-    g_strlcat(request.raw, "get ", request.size);
-    g_strlcat(request.raw, request.variable.name, request.size);
-    g_strlcat(request.raw, "\r\n", request.size);
-
-    // Setup the reply
-    PhantomReply reply = {
-        .size = 512,
-        .raw = NULL,
-        .value = G_VALUE_INIT,
-        .read_size = 0
-    };
-    reply.raw = g_malloc0 (reply.size * sizeof (reply.raw));
-
-    if (reply.raw == NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GET_VARIABLE, "Could not allocate reply message. Fatal error.\n");
-        g_propagate_error (error_loc, phantom_error);
-        g_free (request.raw);
-        return FALSE;
-    }
-
-    g_debug (" > request: '%s' \n", request.raw);
-
-    // Communicate request to phantom
-    gboolean communicated = uca_phantom_communicate (self, &request, &reply, &sub_error);
-
-    if (!communicated && sub_error != NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GET_VARIABLE, "Failed to retrieve Unit variable %s: %s\n", request.variable.name, sub_error->message);
-        g_propagate_error (error_loc, phantom_error);
-        g_error_free (sub_error);
-
-        g_free (request.raw);
-        g_free (reply.raw);
-        return FALSE;
-    }
-
-    if (communicated && sub_error != NULL) {
-        g_warning ("Error when retrieving Unit variable %s: %s\n", request.variable.name, sub_error->message);
         g_clear_error (&sub_error);
+        return FALSE;
     }
-    g_free (request.raw);
-    request.raw  = NULL;
-
-    g_debug (" > reply: '%s' \n", reply.raw);
 
     // Extract the actual data from the raw reply
     GRegex* regex = g_regex_new (pattern, 0, 0, &sub_error);
@@ -701,6 +777,10 @@ gboolean uca_phantom_get_variable (UcaPhantomCommunicate *self, guint variable_f
     // Check for error mesage from phantom
     if (g_str_has_prefix (prefix, "ERR")) {
         g_warning ("Invalid phantom command: %s\n", reply.raw);
+
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GET_VARIABLE, "Invalid phantom command: %s\n", reply.raw);
+        g_propagate_error (error_loc, phantom_error);
+
         g_free (reply.raw);
         g_strfreev (matched);
         g_regex_unref (regex);
@@ -708,10 +788,10 @@ gboolean uca_phantom_get_variable (UcaPhantomCommunicate *self, guint variable_f
     }
 
     g_value_unset (return_value);
-    g_value_init (return_value, request.variable.type);
+    g_value_init (return_value, variables[variable_flag].type);
 
     // Use Gvalue container to store it
-    switch (request.variable.type) {
+    switch (variables[variable_flag].type) {
     case G_TYPE_STRING:
         g_value_set_string (return_value, suffix);
         break;
@@ -743,93 +823,27 @@ gboolean uca_phantom_get_variable (UcaPhantomCommunicate *self, guint variable_f
     return TRUE;
 }
 
-
-/*
- * Set unit variable
- * TODO: Doc
- * Note: All parameter data belongs to the user!
-*/
-gboolean uca_phantom_set_variable (UcaPhantomCommunicate *self, guint variable_flag, const char *set_value, GError **error_loc) {
+// Make set variable function using the run command function
+gboolean uca_phantom_set_variable(UcaPhantomCommunicate *self, guint variable_flag, const gchar *value, GError **error_loc) {
     g_return_val_if_fail (error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail (variable_flag < N_UNIT_PROPERTIES, FALSE);
+    g_return_val_if_fail (value != NULL, FALSE);
+    g_return_val_if_fail (variables[variable_flag].flags & G_PARAM_WRITABLE, FALSE);
 
     GError *sub_error = NULL;
     GError *phantom_error = NULL;
+    PhantomReply reply;
 
-    // Setup the request 
-    PhantomRequest request = {
-        .variable = variables[variable_flag],
-        .raw = NULL,
-        .size = 0,
-        .write_size = 0
-    };
+    gboolean res = uca_phantom_run_command (self, CMD_SET, &reply, &sub_error, variables[variable_flag].name, value, NULL);
 
-    // Manually build the message to ensure that the string is correclty NULL-ended
-    request.size = (strlen ("set  \r\n") + strlen (request.variable.name) + strlen (set_value)) * sizeof (request.raw);
-    request.raw = g_malloc0 (request.size);
-    
-    if (request.raw == NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_VARIABLE, "Could not allocate and assemble request message. Fatal error.\n");
-        g_propagate_error (error_loc, phantom_error);
-        return FALSE;
-    }
-
-    g_strlcat(request.raw, "set ", request.size);
-    g_strlcat(request.raw, request.variable.name, request.size);
-    g_strlcat(request.raw, " ", request.size);
-    g_strlcat(request.raw, set_value, request.size);
-    g_strlcat(request.raw, "\r\n", request.size);   
-
-    // Setup the reply
-    PhantomReply reply = {
-        .size = 512,
-        .raw = NULL,
-        .value = G_VALUE_INIT,
-        .read_size = 0
-    };
-    reply.raw = g_malloc0 (reply.size);
-
-    if (reply.raw == NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_VARIABLE, "Could not allocate reply message. Fatal error.\n");
-        g_propagate_error (error_loc, phantom_error);
-        g_free (request.raw);
-        return FALSE;
-    }
-
-    // Communicate request to phantom
-    gboolean communicated = uca_phantom_communicate (self, &request, &reply, &sub_error);
-
-    g_debug (" > request: '%s' \n", request.raw);
-    g_debug (" > reply: '%s' \n", reply.raw);
-    g_free (request.raw);
-    request.raw  = NULL;
-
-    if (!communicated && sub_error != NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_VARIABLE, "There was an error when writing %s: %s\n", request.variable.name, sub_error->message);
+    if (res != TRUE && sub_error != NULL) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_VARIABLE, "Failed to set variable '%s':\n\t> %s\n", variables[variable_flag].name, sub_error->message);
         g_propagate_error (error_loc, phantom_error);
         g_clear_error (&sub_error);
-
-        g_free (reply.raw);
         return FALSE;
     }
-
-    if (communicated && sub_error != NULL) {
-        g_warning ("Error when setting Unit variable %s: %s\n", request.variable.name, sub_error->message);
-        g_clear_error (&sub_error);
-    }
-    
-    if (g_strcmp0 (reply.raw, "Ok!") != 0) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_VARIABLE, "Failed to set Unit variable %s: %s\n", request.variable.name, reply.raw);
-        g_propagate_error (error_loc, phantom_error);
-        g_free (reply.raw);
-        reply.raw  = NULL;
-
-        return FALSE;
-    }
-   
-    // Cleanup
     g_free (reply.raw);
     reply.raw  = NULL;
-    
+
     return TRUE;
 }
