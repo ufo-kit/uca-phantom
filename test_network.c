@@ -1,7 +1,7 @@
 #include <gio/gio.h>
 #include <gmodule.h>
 #include <glib-object.h>
-#include <time.h>
+#include <unistd.h>
 
 #include "uca-phantom-communicate.h"
 
@@ -33,7 +33,7 @@ void attempt_get_variable(UcaPhantomCommunicate *communicator, guint variable_fl
     GValue val = G_VALUE_INIT;
     gboolean result = FALSE;
 
-    result = uca_phantom_get_variable (communicator, variable_flag, &val, &error);
+    result = uca_phantom_communicate_get_variable (communicator, variable_flag, &val, &error);
 
     if (!result && error != NULL) {
         g_print ("Houston theres a problem: %s", error->message);
@@ -47,56 +47,60 @@ void attempt_get_variable(UcaPhantomCommunicate *communicator, guint variable_fl
 
 gboolean main() {
     GError *error = NULL;
+    gboolean result;
 
     UcaPhantomCommunicate *communicator = uca_phantom_communicate_new();
     gboolean connected = uca_phantom_communicate_attempt_connect(communicator, &error);
-
-
-    if (!connected) {
+    if (!connected && error != NULL) {
         g_print ("Houston theres a problem: %s\n", error->message);
         g_error_free (error);
         g_object_unref (communicator);
         return FALSE;
     }
-
-    if (error != NULL) {
+    
+    result = uca_phantom_communicate_start_readout(communicator, &error);
+    if (!result && error != NULL) {
         g_print ("Yo there was an error: %s\n", error->message);
         g_error_free (error);
+        g_object_unref (communicator);
+        return FALSE;
     }
-
-    // 23214
-
-    attempt_get_variable(communicator, PROP_META_NAME);
-
-    uca_phantom_set_variable(communicator, PROP_META_NAME, "\"23214\"", &error);
-
-    if (error != NULL) {
+   
+    // Arm phantom
+    result = uca_phantom_communicate_arm (communicator, "1", &error);
+    if (!result && error != NULL) {
         g_print ("Yo there was an error: %s\n", error->message);
         g_error_free (error);
+        g_object_unref (communicator);
+        return FALSE;
     }
 
-    attempt_get_variable(communicator, PROP_META_NAME);
+    // Trigger phantom
+    result = uca_phantom_communicate_trigger (communicator, &error);
+    if (!result && error != NULL) {
+        g_print ("Yo there was an error: %s\n", error->message);
+        g_error_free (error);
+        g_object_unref (communicator);
+        return FALSE;
+    }
 
-    // struct timespec req, rem;
-    // req.tv_sec = 0;
-    // req.tv_nsec = 5e+6;
+    // Grab frames from phantom cine
+    result = uca_phantom_communicate_request_images(communicator, 1, 200, IMG_8, TS_NONE, &error);
+    if (!result && error != NULL) {
+        g_print ("Yo there was an error: %s\n", error->message);
+        g_error_free (error);
+        g_object_unref (communicator);
+        return FALSE;
+    }
 
-    // for (int i=0; i < N_UNIT_PROPERTIES; i++) {
-    //     result = uca_phantom_get_variable (communicator, i, &val, &error);
-    //     if (!result && error != NULL) {
-    //         g_print ("Houston theres a problem: %s\n", error->message);
-    //         g_error_free (error);
-    //         g_object_unref (communicator);
-    //         return FALSE;
-    //     }
-        
-    //     // print_gvalue (i, &val);
-    //     g_value_unset (&val);
-    //     // nanosleep(&req, &rem);
-    // }
+    result = uca_phantom_communicate_stop_readout(communicator, &error);
+    if (!result && error != NULL) {
+        g_print ("Yo there was an error: %s\n", error->message);
+        g_error_free (error);
+        g_object_unref (communicator);
+        return FALSE;
+    }
 
     g_object_unref (communicator);
-
-
     return TRUE;
 }

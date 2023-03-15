@@ -8,6 +8,22 @@ G_BEGIN_DECLS
 #define UCA_TYPE_PHANTOM_COMMUNICATE (uca_phantom_communicate_get_type ())
 G_DECLARE_FINAL_TYPE (UcaPhantomCommunicate, uca_phantom_communicate, UCA, PHANTOM_COMMUNICATE, GObject)
 
+
+typedef struct _PhantomRequest PhantomRequest;
+typedef struct _PhantomReply PhantomReply;
+
+typedef struct _CaptureSettings CaptureSettings;
+struct _CaptureSettings {
+    guint16 width, height;
+    gfloat fps;
+    guint exposure;
+    gfloat focal_length;
+    gfloat aperture;
+    guint post_trigger;
+    guint8 aquisition_mode;
+    guint8 trigger_mode;
+};
+
 #define UCA_PHANTOM_COMMUNICATE_ERROR (uca_phantom_communicate_error_quark ())
 typedef enum {
     // Phantom general error codes
@@ -20,15 +36,21 @@ typedef enum {
     UCA_PHANTOM_COMMUNICATE_ERROR_RECEIVE,
     UCA_PHANTOM_COMMUNICATE_ERROR_ADRESS,
     UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT,
+    UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_DATASTREAM,
     // Phantom communication error codes
     UCA_PHANTOM_COMMUNICATE_ERROR_GET_VARIABLE,
     UCA_PHANTOM_COMMUNICATE_ERROR_SET_VARIABLE,
     UCA_PHANTOM_COMMUNICATE_ERROR_RUN_COMMAND,
+    UCA_PHANTOM_COMMUNICATE_ERROR_GET_CAPTURE_SETTINGS,
+    UCA_PHANTOM_COMMUNICATE_ERROR_SET_CAPTURE_SETTINGS,
+    UCA_PHANTOM_COMMUNICATE_ERROR_GET_RESOLUTION,
     UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING,
     UCA_PHANTOM_COMMUNICATE_ERROR_STOP_RECORDING,
     UCA_PHANTOM_COMMUNICATE_ERROR_TRIGGER,
+    UCA_PHANTOM_COMMUNICATE_ERROR_DISCONNECT_DATASTREAM,
     UCA_PHANTOM_COMMUNICATE_ERROR_NEXT_EVENT,
     UCA_PHANTOM_COMMUNICATE_ERROR_NO_DATA,
+    UCA_PHANTOM_COMMUNICATE_ERROR_INVALID_ARGUMENT,
     UCA_PHANTOM_COMMUNICATE_ERROR_MAYBE_CORRUPTED
 } UcaPhantomCommunicateError;
 
@@ -37,8 +59,34 @@ typedef enum {
 */
 UcaPhantomCommunicate *uca_phantom_communicate_new (void);
 gboolean uca_phantom_communicate_attempt_connect (UcaPhantomCommunicate *self, GError **error_loc);
-gboolean uca_phantom_get_variable (UcaPhantomCommunicate *self, guint variable_flag, GValue *return_value, GError **error);
-gboolean uca_phantom_set_variable (UcaPhantomCommunicate *self, guint variable_flag, const char *set_value, GError **error_loc);
+gboolean uca_phantom_communicate_run_command (UcaPhantomCommunicate *self, guint command_flag, PhantomReply *reply, GError **error_loc, ...);
+gboolean uca_phantom_communicate_get_variable (UcaPhantomCommunicate *self, guint variable_flag, GValue *return_value, GError **error);
+gboolean uca_phantom_communicate_set_variable (UcaPhantomCommunicate *self, guint variable_flag, const char *set_value, GError **error_loc);
+void uca_phantom_communicate_print_capture_settings (UcaPhantomCommunicate *self);
+gboolean uca_phantom_communicate_get_capture_settings (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
+gboolean uca_phantom_communicate_set_capture_settings (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
+gboolean uca_phantom_communicate_start_readout(UcaPhantomCommunicate *self, GError **error_loc);
+gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate *self, GError **error_loc);
+gboolean uca_phantom_communicate_arm(UcaPhantomCommunicate *self, gchar *cine, GError **error_loc);
+gboolean uca_phantom_communicate_trigger (UcaPhantomCommunicate *self, GError **error_loc);
+gboolean uca_phantom_communicate_request_images (UcaPhantomCommunicate *self, gint cine, guint nb_images, guint img_format, guint ts_format, GError **error_loc);
+
+typedef enum _ImageFormat {
+    IMG_8,
+    IMG_8R,
+    IMG_P16,
+    IMG_P16R,
+    IMG_P10,
+    IMG_P12L
+} ImageFormat;
+
+typedef enum _TimestampFormat {
+    TS_SHORT,
+    TS_SHORT32,
+    TS_LONG,
+    TS_LONG32,
+    TS_NONE // No timestamp is requested
+} TimestampFormat;
 
 enum PhantomUnitIds {
     PROP_INFO_SENSOR,

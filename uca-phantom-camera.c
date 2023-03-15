@@ -608,6 +608,7 @@ phantom_talk (UcaPhantomCameraPrivate *priv,
 
     // Returning the final reply
     g_debug("C REPLY: %s", reply);
+    g_print("C REPLY: %s", reply);
     return reply;
 }
 
