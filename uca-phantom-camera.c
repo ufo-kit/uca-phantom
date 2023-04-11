@@ -2387,7 +2387,7 @@ phantom_get_address(UcaPhantomCameraPrivate *priv, GError **error) {
  */
 static void
 phantom_connect (UcaPhantomCameraPrivate *priv, GError **error) {
-    g_warning("Inside connect");
+    g_warning("Inside connect!");
     GSocketAddress *addr;
     addr = phantom_get_address (priv, &priv->construct_error);
     g_warning("After address");
@@ -2539,7 +2539,6 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
     if (priv->enable_10ge && priv->iface == NULL) {
-        
         g_set_error_literal (error, UCA_CAMERA_ERROR, UCA_CAMERA_ERROR_DEVICE,
                              "Trying to use 10GE but no network adapter is given");
 

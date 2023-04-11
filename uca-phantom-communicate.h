@@ -37,6 +37,7 @@ typedef enum {
     UCA_PHANTOM_COMMUNICATE_ERROR_ADRESS,
     UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT,
     UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_DATASTREAM,
+    UCA_PHANTOM_COMMUNICATE_ERROR_GET_MAC_ADDRESS,
     // Phantom communication error codes
     UCA_PHANTOM_COMMUNICATE_ERROR_GET_VARIABLE,
     UCA_PHANTOM_COMMUNICATE_ERROR_SET_VARIABLE,
@@ -47,6 +48,8 @@ typedef enum {
     UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING,
     UCA_PHANTOM_COMMUNICATE_ERROR_STOP_RECORDING,
     UCA_PHANTOM_COMMUNICATE_ERROR_TRIGGER,
+    UCA_PHANTOM_COMMUNICATE_ERROR_UNPACK_IMAGE,
+    UCA_PHANTOM_COMMUNICATE_ERROR_GRAB_IMAGE,
     UCA_PHANTOM_COMMUNICATE_ERROR_DISCONNECT_DATASTREAM,
     UCA_PHANTOM_COMMUNICATE_ERROR_NEXT_EVENT,
     UCA_PHANTOM_COMMUNICATE_ERROR_NO_DATA,
@@ -70,6 +73,18 @@ gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate *self, GErro
 gboolean uca_phantom_communicate_arm(UcaPhantomCommunicate *self, gchar *cine, GError **error_loc);
 gboolean uca_phantom_communicate_trigger (UcaPhantomCommunicate *self, GError **error_loc);
 gboolean uca_phantom_communicate_request_images (UcaPhantomCommunicate *self, gint cine, guint nb_images, guint img_format, guint ts_format, GError **error_loc);
+gboolean uca_phantom_communicate_request_ximages (UcaPhantomCommunicate *self, guint cine, guint nb_images, guint img_format, guint ts_format, GError **error_loc);
+gboolean uca_phantom_communicate_grab_image (UcaPhantomCommunicate *self, gpointer data, GError **error_loc);
+
+
+gboolean uca_phantom_communicate_get_mac_address (UcaPhantomCommunicate *self, GError **error_loc);
+
+typedef enum _IP_SOURCE_FLAGS {
+    USE_ENV,
+    USE_CLASS,
+    USE_BCAST,
+    N_IP_FLAGS
+} IP_SOURCE_FLAGS;
 
 typedef enum _ImageFormat {
     IMG_8,
