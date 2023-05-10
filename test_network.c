@@ -67,50 +67,32 @@ void attempt_get_variable(UcaPhantomCommunicate *communicator, guint variable_fl
 }
 
 gboolean main() {
-    GError *error = NULL;
-    gboolean result;
+    // GError *error = NULL;
+    // gboolean result;
 
-    UcaPhantomCommunicate *communicator = g_object_new (UCA_TYPE_PHANTOM_COMMUNICATE, 
-        "phantom_ipsource", USE_CLASS,
-        "xnetcard", "enp4s0f1",
-        NULL);
+    // UcaPhantomCommunicate *communicator = g_object_new (UCA_TYPE_PHANTOM_COMMUNICATE, 
+    //     "phantom_ipsource", USE_CLASS,
+    //     "xnetcard", "enp4s0f1",
+    //     NULL);
    
-    gboolean connected = uca_phantom_communicate_attempt_connect(communicator, &error);
-    if (!connected && error != NULL) {
-        g_print ("Houston theres a problem: %s\n", error->message);
-        g_error_free (error);
-        g_object_unref (communicator);
-        return FALSE;
-    }
+    // gboolean connected = uca_phantom_communicate_connect_controlstream(communicator, &error);
+    // if (!connected && error != NULL) {
+    //     g_print ("Houston theres a problem: %s\n", error->message);
+    //     g_error_free (error);
+    //     g_object_unref (communicator);
+    //     return FALSE;
+    // }
     
-    result = uca_phantom_communicate_start_readout(communicator, &error);
-    if (!result && error != NULL) {
-        g_print ("Yo there was an error: %s\n", error->message);
-        g_error_free (error);
-        g_object_unref (communicator);
-        return FALSE;
-    }
+    // result = uca_phantom_communicate_start_readout(communicator, &error);
+    // if (!result && error != NULL) {
+    //     g_print ("Yo there was an error: %s\n", error->message);
+    //     g_error_free (error);
+    //     g_object_unref (communicator);
+    //     return FALSE;
+    // }
    
-    // Arm phantom
-    result = uca_phantom_communicate_arm (communicator, "1", &error);
-    if (!result && error != NULL) {
-        g_print ("Yo there was an error: %s\n", error->message);
-        g_error_free (error);
-        g_object_unref (communicator);
-        return FALSE;
-    }
-
-    // Trigger phantom
-    result = uca_phantom_communicate_trigger (communicator, &error);
-    if (!result && error != NULL) {
-        g_print ("Yo there was an error: %s\n", error->message);
-        g_error_free (error);
-        g_object_unref (communicator);
-        return FALSE;
-    }
-
-    // // Grab frames from phantom cine
-    // result = uca_phantom_communicate_request_images(communicator, 1, 2, IMG_8, TS_NONE, &error);
+    // // Arm phantom
+    // result = uca_phantom_communicate_arm (communicator, 1, &error);
     // if (!result && error != NULL) {
     //     g_print ("Yo there was an error: %s\n", error->message);
     //     g_error_free (error);
@@ -118,42 +100,60 @@ gboolean main() {
     //     return FALSE;
     // }
 
-    clock_t start = clock() ;
-    result = uca_phantom_communicate_request_ximages(communicator, 1, 1, IMG_P10, TS_NONE, &error);
-    if (!result && error != NULL) {
-        g_print ("Yo there was an error: %s\n", error->message);
-        g_error_free (error);
-        g_object_unref (communicator);
-        return FALSE;
-    }
+    // // Trigger phantom
+    // result = uca_phantom_communicate_trigger (communicator, 1, &error);
+    // if (!result && error != NULL) {
+    //     g_print ("Yo there was an error: %s\n", error->message);
+    //     g_error_free (error);
+    //     g_object_unref (communicator);
+    //     return FALSE;
+    // }
 
-    // allocate memory for image
-    guint16 *image = g_malloc0 (sizeof(guint16) * 2048 * 1952);
+    // // // Grab frames from phantom cine
+    // // result = uca_phantom_communicate_request_images(communicator, 1, 2, IMG_8, TS_NONE, &error);
+    // // if (!result && error != NULL) {
+    // //     g_print ("Yo there was an error: %s\n", error->message);
+    // //     g_error_free (error);
+    // //     g_object_unref (communicator);
+    // //     return FALSE;
+    // // }
+
+    // clock_t start = clock() ;
+    // result = uca_phantom_communicate_request_ximages(communicator, 1, 1, IMG_P10, TS_NONE, &error);
+    // if (!result && error != NULL) {
+    //     g_print ("Yo there was an error: %s\n", error->message);
+    //     g_error_free (error);
+    //     g_object_unref (communicator);
+    //     return FALSE;
+    // }
+
+    // // allocate memory for image
+    // guint16 *image = g_malloc0 (sizeof(guint16) * 2048 * 1952);
     
-    // get image
-    result = uca_phantom_communicate_grab_image (communicator, image, &error);
-    if (!result && error != NULL) {
-        g_print ("Yo there was an error: %s\n", error->message);
-        g_error_free (error);
-        g_object_unref (communicator);
-        return FALSE;
-    }
+    // // get image
+    // result = uca_phantom_communicate_grab_image (communicator, image, &error);
+    // if (!result && error != NULL) {
+    //     g_print ("Yo there was an error: %s\n", error->message);
+    //     g_error_free (error);
+    //     g_object_unref (communicator);
+    //     return FALSE;
+    // }
 
-    // Save image to file
-    save_image(image, 2048, 1952, "test_image.raw");
+    // // Save image to file
+    // save_image(image, 2048, 1952, "test_image.raw");
 
-    result = uca_phantom_communicate_stop_readout(communicator, &error);
-    if (!result && error != NULL) {
-        g_print ("Yo there was an error: %s\n", error->message);
-        g_error_free (error);
-        g_object_unref (communicator);
-        return FALSE;
-    }
-    double elapsed_time = (clock()-start)/(double)CLOCKS_PER_SEC ;
-    g_print ("Elapsed time: %f\n", elapsed_time);
+    // result = uca_phantom_communicate_stop_readout(communicator, &error);
+    // if (!result && error != NULL) {
+    //     g_print ("Yo there was an error: %s\n", error->message);
+    //     g_error_free (error);
+    //     g_object_unref (communicator);
+    //     return FALSE;
+    // }
+    // double elapsed_time = (clock()-start)/(double)CLOCKS_PER_SEC ;
+    // g_print ("Elapsed time: %f\n", elapsed_time);
 
-    g_free (image);
+    // g_free (image);
 
-    g_object_unref (communicator);
+    // g_object_unref (communicator);
     return TRUE;
 }

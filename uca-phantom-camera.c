@@ -2584,7 +2584,7 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
         /* set up listener */
         g_socket_listener_add_inet_port (priv->listener, 7116, G_OBJECT (camera), error);
         priv->accept = g_cancellable_new ();
-        priv->accept_thread = g_thread_new (NULL, (GThreadFunc) accept_img_data, priv);
+        priv->accept_thread =  (NULL, (GThreadFunc) accept_img_data, priv);
 
         /* wait for listener to become ready */
         result = (Result *) g_async_queue_pop (priv->result_queue);
@@ -2989,6 +2989,7 @@ finalize_receiving_image(UcaPhantomCameraPrivate *priv,
         // priv->xg_buffer contains the decoded image. priv->buffer contains the raw data
         memcpy (data, priv->xg_buffer, priv->roi_width * priv->roi_height * 2);
     } else {
+
         switch (priv->format) {
             case IMAGE_FORMAT_P10:
                 unpack_p10(data, priv->buffer, priv->roi_width * priv->roi_height);
@@ -3319,7 +3320,7 @@ static gboolean
 uca_phantom_camera_grab (UcaCamera *camera,
                          gpointer data,
                          GError **error)
-{
+{   
     UcaPhantomCameraPrivate *priv;
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
@@ -3921,7 +3922,7 @@ uca_phantom_camera_initable_iface_init (GInitableIface *iface)
  */
 static void
 uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
-{
+{    
     GObjectClass *oclass = G_OBJECT_CLASS (klass);
     UcaCameraClass *camera_class = UCA_CAMERA_CLASS (klass);
 
@@ -3949,6 +3950,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
     camera_class->write = uca_phantom_camera_write;
     camera_class->grab = uca_phantom_camera_grab;
     camera_class->trigger = uca_phantom_camera_trigger;
+
 
     // Here we set the additional function for reading out multiple cines
 
@@ -4246,6 +4248,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
 static void
 uca_phantom_camera_init (UcaPhantomCamera *self)
 {
+    
     UcaPhantomCameraPrivate *priv;
     self->priv = priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (self);
 
