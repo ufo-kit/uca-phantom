@@ -142,7 +142,8 @@ struct _PhantomReply {
 };
 
 const gchar *ImageFormatString[] = {"8", "8R", "P16", "P16R", "P10", "P12L"};
-const gfloat ImageBitDepth[] = {1, 1, 2, 2, 1.25, 1.5};
+const guint ImageBitDepth[] = {8, 8, 16, 16, 10, 12};
+const gfloat ImageByteDepth[] = {1, 1, 2, 2, 1.25, 1.5};
 
 
 typedef struct _InternalRequest {
@@ -224,6 +225,7 @@ struct _UcaPhantomCommunicate {
     // camera setup variables
     gboolean timestamping;
     TimestampFormat ts_format;
+    ImageFormat img_format;
     CaptureSettings settings;
 
     // Command stream connection variables
@@ -337,6 +339,7 @@ static void uca_phantom_communicate_class_init (UcaPhantomCommunicateClass *clas
             "Enable timestamping",
             FALSE,
             G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
+            
     
             
     g_object_class_install_properties (
@@ -1276,6 +1279,15 @@ static gboolean uca_phantom_communicate_get_resolution (UcaPhantomCommunicate *s
     return TRUE;
 }
 
+guint uca_phantom_communicate_get_pixel_width (UcaPhantomCommunicate *self) {
+    g_return_val_if_fail (self->control_state == CONNECTED, 0);
+    return self->settings.width;
+}
+guint uca_phantom_communicate_get_pixel_height (UcaPhantomCommunicate *self) {
+    g_return_val_if_fail (self->control_state == CONNECTED, 0);
+    return self->settings.height;
+}
+
 gboolean uca_phantom_communicate_get_capture_settings (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc) {
     // Use uca_phantom_commmunicate_get_variable to get the values of the variables in the CaptureSettings struct
     g_return_val_if_fail (error_loc == NULL || *error_loc == NULL, FALSE);
@@ -1833,6 +1845,11 @@ gboolean uca_phantom_communicate_request_images (
     GError *phantom_error = NULL;
     GError *sub_error = NULL;
     PhantomReply reply = {0, };
+
+    // TODO: check img_format is in the good range
+
+    // Set the global img_format
+    self->img_format = img_format;
 
     // Connect the datastreams
     if (self->xenabled) {
@@ -2424,7 +2441,7 @@ static gpointer uca_phantom_communicate_accept_img (gpointer data) {
 
         // Calculate the size of the image buffer
         nb_pixels = self->settings.width * self->settings.height;
-        image_size = nb_pixels * ImageBitDepth[request->img_format];
+        image_size = nb_pixels * ImageByteDepth[request->img_format];
         image_packet_size = image_size * request->nb_images;
 
         // print number of images and image size
@@ -2570,7 +2587,7 @@ static gpointer uca_phantom_communicate_accept_ximg (gpointer data) {
 
         // Calculate the size of the image buffer
         nb_pixels = self->settings.width * self->settings.height;
-        input_image_size = nb_pixels * ImageBitDepth[request->img_format]; // the packed image size
+        input_image_size = nb_pixels * ImageByteDepth[request->img_format]; // the packed image size
         input_packet_size = input_image_size * request->nb_images; // the packed image packet size
         output_image_size = nb_pixels * sizeof(guint16); // the unpacked image size
         output_packet_size = output_image_size * request->nb_images; // the unpacked image packet size

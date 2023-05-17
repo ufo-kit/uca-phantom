@@ -13,6 +13,7 @@
 
 #include <unistd.h>
 #include <stdint.h>
+#inclide <floats.h>
 
 
 #define UCA_PHANTOM_CAMERA_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE((obj), UCA_TYPE_PHANTOM_CAMERA, UcaPhantomCameraPrivate))
@@ -28,6 +29,27 @@ GQuark uca_phantom_camera_error_quark ()
 {
     return g_quark_from_static_string("uca-net-camera-error-quark");
 }
+
+static gint base_overrideables[] = {
+    PROP_NAME,
+    PROP_SENSOR_WIDTH,
+    PROP_SENSOR_HEIGHT,
+    PROP_SENSOR_PIXEL_WIDTH, // PROP_INFO_XMAX
+    PROP_SENSOR_PIXEL_HEIGHT, // PROP_INFO_YMAX
+    PROP_SENSOR_BITDEPTH, // described by ImageFormatString
+    PROP_TRIGGER_SOURCE, // UcaCameraTriggerSource
+    PROP_TRIGGER_TYPE, // UcaCameraTriggerType
+    PROP_EXPOSURE_TIME, // PROP_DEFC_EXP
+    PROP_FRAMES_PER_SECOND, // PROP_DEFC_RATE
+    PROP_ROI_X, // PROP_DEFC_META_OX
+    PROP_ROI_Y, // PROP_DEFC_META_OY
+    PROP_ROI_WIDTH, // PROP_DEFC_META_W
+    PROP_ROI_HEIGHT, // PROP_DEFC_META_H
+    PROP_ROI_WIDTH_MULTIPLIER, // PROP_INFO_XINC
+    PROP_ROI_HEIGHT_MULTIPLIER, // PROP_INFO_YINC
+    PROP_HAS_STREAMING,
+    PROP_HAS_CAMRAM_RECORDING
+};
 
 // Properties
 static GParamSpec *uca_phantom_camera_properties[N_UNIT_PROPERTIES] = { NULL, };
@@ -69,10 +91,9 @@ struct _UcaPhantomCameraPrivate {
 
     // Base class properties
     gchar *name;
-    guint sensor_width, sensor_height;
-    gfloat sensor_pixel_width, sensor_pixel_height;
-    guint sensor_bitdepth;
-    guint sensor_horizontal_binning, sensor_vertical_binning;
+    gfloat sensor_width, sensor_height;
+    guint sensor_pixel_width, sensor_pixel_height;
+    gstring sensor_bitdepth;
     UcaCameraTriggerSource trigger_source;
     UcaCameraTriggerType trigger_type;
     gfloat exposure_time;
@@ -81,7 +102,6 @@ struct _UcaPhantomCameraPrivate {
     gfloat roi_width_multiplier, roi_height_multiplier;
     gboolean has_streaming;
     gboolean has_camram_recording;
-    guint recorded_frames;
 
     // Phantom specific properties
     guint edr_exp; // EDR exposure time
@@ -293,11 +313,13 @@ uca_phantom_camera_set_property (GObject *object,
 
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (object);
 
-    switch (property_id) {
-    case PROP_NAME:
-        // Do nothing
-        break;
-    cade PROP_
+    GError *internal_error = NULL;
+    
+    else {
+        g_warning ("This Phantom Unit variable is unsuported!");
+        G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
+    }
+    
     
     default:
         break;
@@ -386,6 +408,48 @@ ufo_net_camera_initable_init (GInitable *initable,
         priv->connected = TRUE;
     }
 
+    // Init base class properties
+    priv->name = NULL;
+    priv->sensor_width = 0;
+    priv->sensor_height = 0;
+    priv->sensor_pixel_width = uca_phantom_communicate_get_pixel_width (priv->communicator);
+    priv->sensor_pixel_height = uca_phantom_communicate_get_pixel_height (priv->communicator);
+    priv->sensor_bitdepth = ImageBitDepth[IMG_P10]; // Select a default bigdepth
+    priv->trigger_source = UCA_CAMERA_TRIGGER_SOURCE_SOFTWARE;
+    priv->trigger_type = UCA_CAMERA_TRIGGER_TYPE_EDGE;
+    priv->exposure_time = ;
+    priv->frames_per_second = ;
+    priv->roi_x = ;
+    priv->roi_y = ;
+    priv->roi_width = ;
+    priv->roi_height = ;
+    priv->roi_width_multiplier = ;
+    priv->roi_height_multiplier = ;
+    priv->has_streaming = ;
+    priv->has_camram_recording = ;
+
+    // Phantom specific properties
+    priv->edr_exp = ; // EDR exposure time
+    priv->shutter_off = ;
+    priv->aexpmode = ; // Shutter off: always use maximum exposure time and minimum straddle time, aexpmode: auto exposure mode
+    priv->aexpcomp = ; // Auto exposure compensation
+    priv->nb_post_trigger_frames = ;
+    priv->nb_pre_trigger_frames = ;
+    priv->current_cine = ; // Current cine number in which the camera is recording
+
+    priv->sync_mode = ;
+    priv->acquisition_mode = ;
+    priv->image_format = ;
+    priv->timestamp_format = ;
+
+    // Network properties
+    priv->xnetcard = ;
+    priv->xenabled = ;
+    priv->connected = ;
+
+    priv->image_format = IMG_P10;
+    priv->timestamp_format = TS_NONE;
+
     return TRUE;
 }
 
@@ -424,25 +488,13 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass)
     camera_class->grab = uca_phantom_camera_grab;
     camera_class->trigger = uca_phantom_camera_trigger;
 
-    // Add the properties
-    for (guint i = N_BASE_PROPERTIES; i < N_UNIT_PROPERTIES; i++) {
-        GType type = Variables[i].type;
-        switch (type) {
-        case G_TYPE_BOOLEAN:
-            uca_phantom_camera_properties[i] = g_param_spec_boolean (
-                Variables[i].name,
-                NULL,
-                NULL,
-                Variables[i].default_value,
-                Variables[i].flags);
-            break;
-        
-        default:
-            break;
-        }  
+    // Implement the base class properties
+    for (guint i = 0; base_overrideables[i] != 0; i++) {
+        g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
     }
 
-
+    // Add the phantom specific unit variables as properties
+    
 
     g_type_class_add_private (klass, sizeof(UcaPhantomCameraPrivate));
 }
@@ -458,17 +510,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self) {
     UcaPhantomCameraPrivate *priv;
     self->priv = priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (self);
 
-    priv->xenabled = FALSE;
-    priv->current_cine = 0;
-    priv->xres, yres = 0;
-    priv->nb_post_trigger_frames = 100;
-    priv->nb_pre_trigger_frames = 100;
-    priv->current_cine = 1;
-
-    priv->image_format = IMG_P10;
-    priv->timestamp_format = TS_NONE;
-
-    gboolean xenabled;
+    
 
 }
 
