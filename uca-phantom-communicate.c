@@ -23,17 +23,17 @@
 #include "uca-phantom-commands.h"
 
 #define ETHERNET_HEADER_SIZE 32 // 16 bytes for ethernet header, 16 bytes for custom header
-#define MAX_KERNEL_RING_SIZE 1073741824 // 2GBytes = 2^31 - 1 Bytes
+#define MAX_KERNEL_RING_SIZE 2498560016 // 2GBytes = 2^31 - 1 Bytes
+                             
 #define MAX_NUMBER_CINE_DATA 1000 // Maximum number of cine data packets to receive
+#define MAX_SENSOR_PIXEL_WIDTH 2048 // Maximum sensor pixel width
+#define MAX_SENSOR_PIXEL_HEIGHT 1952 // Maximum sensor pixel height
 
 /**
  * TODO: 
- * - Add documentation
- * - Automatically discover phantom IP if not specified
- * 
- * - Implement state variables for control connection and data connection
+ * - Limit nb_images in request_images to frcount unit variable
  * - Implement cancelable functions
- * - Implement 10Gb Ethernet support
+ * - Add documentation
 */
 
 enum {
@@ -118,8 +118,6 @@ typedef struct _long_time_stamp32 { //cam.tsformat = 3
     unsigned int range_d3; // fourth 32bits received as rangedata, lsb first, big endian
 } long_time_stamp32;
 
-gsize TimestampSize[4] = {sizeof(short_time_stamp), sizeof(short_time_stamp32), sizeof(long_time_stamp), sizeof(long_time_stamp32)};
-gchar *TimestampFormatString[4] = {"0", "1", "2", "3"};
 /** @} */
 
 /**
@@ -140,11 +138,6 @@ struct _PhantomReply {
     gsize size;
     gssize read_size;
 };
-
-const gchar *ImageFormatString[] = {"8", "8R", "P16", "P16R", "P10", "P12L"};
-const guint ImageBitDepth[] = {8, 8, 16, 16, 10, 12};
-const gfloat ImageByteDepth[] = {1, 1, 2, 2, 1.25, 1.5};
-
 
 typedef struct _InternalRequest {
     guint64 nb_images;
@@ -193,6 +186,39 @@ typedef struct _CineData {
     gpointer RawTimestamps;
 } CineData;
 
+
+static GEnumValue sync_mode_values[] = {
+    { SYNC_MODE_FREE_RUN,           "SYNC_MODE_FREE_RUN",           "sync_mode_free_run" },
+    { SYNC_MODE_FSYNC,              "SYNC_MODE_FSYNC",              "sync_mode_fsync" },
+    { SYNC_MODE_IRIG,               "SYNC_MODE_IRIG",               "sync_mode_irig" },
+    { SYNC_MODE_VIDEO_FRAME_RATE,   "SYNC_MODE_VIDEO_FRAME_RATE",   "sync_mode_video_frame_rate" },
+    { 0, NULL, NULL }
+};
+
+static GEnumValue acquisition_mode_values[] = {
+    { ACQUISITION_MODE_STANDARD,        "ACQUISITION_MODE_STANDARD",        "acquisition_mode_standard" },
+    { ACQUISITION_MODE_STANDARD_BINNED, "ACQUISITION_MODE_STANDARD_BINNED", "acquisition_mode_standard_binned" },
+    { ACQUISITION_MODE_HS,              "ACQUISITION_MODE_HS",              "acquisition_mode_hs" },
+    { ACQUISITION_MODE_HS_BINNED,       "ACQUISITION_MODE_HS_BINNED",       "acquisition_mode_hs_binned" },
+    { 0, NULL, NULL }
+};
+
+const ImageFormatSpec ImageFormatSpecs[] = {
+    {"8", 8, 1},
+    {"8R", 8, 1},
+    {"P16", 16, 2},
+    {"P16R", 16, 2},
+    {"P10", 10, 1.25},
+    {"P12L", 12, 1.5}
+};
+
+const TimestampSpec TimestampSpecs[] = {
+    {"0", sizeof(short_time_stamp), 0},
+    {"1", sizeof(short_time_stamp32), 0},
+    {"2", sizeof(long_time_stamp), 0},
+    {"3", sizeof(long_time_stamp32), 0}
+};
+
 // Forward declaration of overrideable functions
 static void uca_phantom_communicate_set_property (GObject  *object, guint property_id, const GValue *value, GParamSpec *pspec);
 static void uca_phantom_communicate_get_property (GObject *object, guint property_id, GValue *value, GParamSpec *pspec);
@@ -201,14 +227,14 @@ static void uca_phantom_communicate_dispose (GObject *object);
 static void uca_phantom_communicate_finalize (GObject *object);
 
 static gboolean uca_phantom_communicate_get_resolution (UcaPhantomCommunicate *self, guint16 *width, guint16 *height, GError **error_loc);
-gboolean uca_phantom_communicate_get_capture_settings (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
+gboolean uca_phantom_communicate_get_settings (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
 
 static GParamSpec *uca_phantom_communicate_properties[N_PROPERTIES] = {NULL, };
 
 struct _UcaPhantomCommunicate {
     GObject parent_object;
 
-    gboolean xenabled;
+    gboolean xenabled, timestamping;
     gchar *phantom_ip, *phantom_xip;
     gchar *netcard_ip, *netcard_xip;
     gchar *netcard, *xnetcard;
@@ -223,9 +249,6 @@ struct _UcaPhantomCommunicate {
     AcquisitionState phantom_state;
 
     // camera setup variables
-    gboolean timestamping;
-    TimestampFormat ts_format;
-    ImageFormat img_format;
     CaptureSettings settings;
 
     // Command stream connection variables
@@ -357,7 +380,8 @@ static void uca_phantom_communicate_init (UcaPhantomCommunicate *instance) {
     instance->xnetcard = NULL;
     instance->netcard_ip = NULL;
     instance->netcard_xip = NULL;
-    instance->xenabled = TRUE;
+    instance->xenabled = FALSE;
+    instance->timestamping = FALSE;
 
     instance->data_port = 7116;
 
@@ -386,9 +410,35 @@ static void uca_phantom_communicate_init (UcaPhantomCommunicate *instance) {
     instance->request_queue = g_async_queue_new();
 
     // Camera setup variables
-    instance->timestamping = FALSE;
-    instance->ts_format = TS_NONE;
-    instance->settings = (CaptureSettings) {0, };
+    instance->settings = (CaptureSettings) {
+        .sync_mode = SYNC_MODE_FREE_RUN,
+        .acquisition_mode = ACQUISITION_MODE_STANDARD,
+        .image_format = IMG_P10,
+        .timestamp_format = TS_NONE,
+
+        .sensor_pixel_width = 2048,
+        .sensor_pixel_height = 1952,
+        .sensor_bit_depth = ImageFormatSpecs[IMG_P10].bit_depth,
+        .trigger_source = UCA_CAMERA_TRIGGER_SOURCE_SOFTWARE,
+        .trigger_type = UCA_CAMERA_TRIGGER_TYPE_EDGE,
+        .frames_per_second = 1000.0,
+        .exposure_time = 0.0,
+        .roi_pixel_x = 0,
+        .roi_pixel_y = 0,
+        .roi_pixel_width = 2048,
+        .roi_pixel_height = 1952,
+        .roi_width_multiplier = 1,
+        .roi_height_multiplier = 1,
+        .focal_length = 0.0,
+        .aperture = 0.0,
+        .edr_exp = 0,
+        .shutter_off = 0,
+        .aexpmode = 0,
+        .aexpcomp = 0.0,
+        .nb_post_trigger_frames = 0,
+        .nb_pre_trigger_frames = 0,
+        .current_cine = 1,
+    };
 }
 
 static void uca_phantom_communicate_constructed (GObject *object) {
@@ -424,7 +474,7 @@ static void uca_phantom_communicate_dispose (GObject *object) {
     g_free (instance->netcard);
     g_free (instance->xnetcard);
 
-    // Empty the unpacked_images and the capture_settings arrays
+    // Empty the unpacked_images and the settings arrays
     g_ptr_array_free (instance->unpacked_images, TRUE);
     g_ptr_array_free (instance->capture_settings, TRUE);
 
@@ -921,14 +971,6 @@ gboolean uca_phantom_communicate_connect_controlstream (UcaPhantomCommunicate *s
         return FALSE;
     }
 
-    // Set up the resolution 
-    gboolean res = uca_phantom_communicate_get_resolution (self, &(self->settings.width), &(self->settings.height), error_loc);
-    if (!res) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT, "Could not get resolution: %s\n", sub_error->message);
-        g_propagate_error (error_loc, phantom_error);
-        return FALSE;
-    }
-
     // Get the remote address of the connection
     GSocketAddress *remote_address = g_socket_connection_get_remote_address (self->control_connection, &sub_error);
     if (sub_error != NULL || remote_address == NULL) {
@@ -956,13 +998,12 @@ gboolean uca_phantom_communicate_connect_controlstream (UcaPhantomCommunicate *s
 
     g_message ("Control connection established with phantom (%s:%d) -> (%s:%d)\n", local_ip_address, local_port, remote_ip_address, remote_port);
 
-
     g_object_unref (remote_address);
     g_object_unref (local_address);
 
     g_free (remote_ip_address);
     g_free (local_ip_address);
-    
+
     return TRUE;
 }
 
@@ -1109,8 +1150,18 @@ gboolean uca_phantom_communicate_get_variable(UcaPhantomCommunicate *self, guint
     GError *phantom_error = NULL;
     gchar pattern[] = "\\s:\\s";
     PhantomReply reply;
+    gchar *name = NULL;
+    gboolean res = FALSE;
 
-    gboolean res = uca_phantom_communicate_run_command (self, CMD_GET, &reply, &sub_error, variables[variable_flag].name, NULL);
+    // Check if the command is between CT_STATE and CT_META_GPS
+    if (variable_flag >= UNIT_CT_STATE && variable_flag <= UNIT_CT_META_GPS) {
+        name = g_strdup_printf (variables[variable_flag].name, self->settings.current_cine);
+        res = uca_phantom_communicate_run_command (self, CMD_GET, &reply, &sub_error, name, NULL);
+        g_free (name);
+    }
+    else {
+        res = uca_phantom_communicate_run_command (self, CMD_GET, &reply, &sub_error, variables[variable_flag].name, NULL);
+    }
 
     if (res != TRUE && sub_error != NULL) {
         g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GET_VARIABLE, "Failed to get variable %s: %s\n", variables[variable_flag].name, sub_error->message);
@@ -1229,7 +1280,7 @@ static gboolean uca_phantom_communicate_get_resolution (UcaPhantomCommunicate *s
     GValue resolution = G_VALUE_INIT;
     const gchar *reply = NULL;
 
-    gboolean res = uca_phantom_communicate_get_variable (self, PROP_DEFC_RES, &resolution, &sub_error);
+    gboolean res = uca_phantom_communicate_get_variable (self, UNIT_DEFC_RES, &resolution, &sub_error);
 
     if (res != TRUE && sub_error != NULL) {
         g_print("Failed to get resolution:\n\t> %s\n", sub_error->message);
@@ -1281,134 +1332,32 @@ static gboolean uca_phantom_communicate_get_resolution (UcaPhantomCommunicate *s
 
 guint uca_phantom_communicate_get_pixel_width (UcaPhantomCommunicate *self) {
     g_return_val_if_fail (self->control_state == CONNECTED, 0);
-    return self->settings.width;
+    return self->settings.sensor_pixel_width;
 }
 guint uca_phantom_communicate_get_pixel_height (UcaPhantomCommunicate *self) {
     g_return_val_if_fail (self->control_state == CONNECTED, 0);
-    return self->settings.height;
+    return self->settings.sensor_pixel_height;
 }
-
-gboolean uca_phantom_communicate_get_capture_settings (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc) {
-    // Use uca_phantom_commmunicate_get_variable to get the values of the variables in the CaptureSettings struct
-    g_return_val_if_fail (error_loc == NULL || *error_loc == NULL, FALSE);
-    g_return_val_if_fail (self->control_state == CONNECTED, FALSE);
-
-    GError *sub_error = NULL;
-    GError *phantom_error = NULL;
-    GValue value = G_VALUE_INIT;
-    gboolean res = FALSE;
-
-    // Height and width
-    res = uca_phantom_communicate_get_resolution (self, &(settings->width), &(settings->height), &sub_error);
-    if (res != TRUE && sub_error != NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GET_CAPTURE_SETTINGS, "Failed to get resolution:\n\t> %s\n", sub_error->message);
-        g_propagate_error (error_loc, phantom_error);
-        g_clear_error (&sub_error);
-        return FALSE;
-    }
-
-    // FPS
-    res = uca_phantom_communicate_get_variable (self, PROP_DEFC_RATE, &value, &sub_error);
-    if (res != TRUE && sub_error != NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GET_CAPTURE_SETTINGS, "Failed to get fps:\n\t> %s\n", sub_error->message);
-        g_propagate_error (error_loc, phantom_error);
-        g_clear_error (&sub_error);
-        return FALSE;
-    }
-    settings->fps = g_value_get_float (&value);
-    g_value_reset (&value);
-
-    // Exposure
-    res = uca_phantom_communicate_get_variable (self, PROP_DEFC_EXP, &value, &sub_error);
-    if (res != TRUE && sub_error != NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GET_CAPTURE_SETTINGS, "Failed to get exposure:\n\t> %s\n", sub_error->message);
-        g_propagate_error (error_loc, phantom_error);
-        g_clear_error (&sub_error);
-        return FALSE;
-    }
-    settings->exposure = g_value_get_uint (&value);
-    g_value_reset (&value);
-
-    // Focal length
-    res = uca_phantom_communicate_get_variable (self, PROP_META_FLEN, &value, &sub_error);
-    if (res != TRUE && sub_error != NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GET_CAPTURE_SETTINGS, "Failed to get focal length:\n\t> %s\n", sub_error->message);
-        g_propagate_error (error_loc, phantom_error);
-        g_clear_error (&sub_error);
-        return FALSE;
-    }
-    settings->focal_length = g_value_get_float (&value);
-    g_value_reset (&value);
-
-    // Aperture
-    res = uca_phantom_communicate_get_variable (self, PROP_META_FSTOP, &value, &sub_error);
-    if (res != TRUE && sub_error != NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GET_CAPTURE_SETTINGS, "Failed to get aperture:\n\t> %s\n", sub_error->message);
-        g_propagate_error (error_loc, phantom_error);
-        g_clear_error (&sub_error);
-        return FALSE;
-    }
-    settings->aperture = g_value_get_float (&value);
-    g_value_reset (&value);
-
-    // Post trigger
-    res = uca_phantom_communicate_get_variable (self, PROP_DEFC_PTFRAMES, &value, &sub_error);
-    if (res != TRUE && sub_error != NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GET_CAPTURE_SETTINGS, "Failed to get number of post trigger frames:\n\t> %s\n", sub_error->message);
-        g_propagate_error (error_loc, phantom_error);
-        g_clear_error (&sub_error);
-        return FALSE;
-    }
-    settings->post_trigger = g_value_get_uint (&value);
-    g_value_reset (&value);
-
-    // TODO: Aquisition mode
-    // res = uca_phantom_communicate_get_variable (self, PROP_DEFC_ACQMODE, &value, &sub_error);
-    // if (res != TRUE && sub_error != NULL) {
-    //     g_print("Failed to get aquisition mode:\n\t> %s\n", sub_error->message);
-    //     g_clear_error (&sub_error);
-    //     return FALSE;
-    // }
-    // self->settings->aquisition_mode = g_value_get_int (&value);
-
-    // TODO: Trigger mode
-    // res = uca_phantom_communicate_get_variable (self, PROP_DEFC_TRIGMODE, &value, &sub_error);
-    // if (res != TRUE && sub_error != NULL) {
-    //     g_print("Failed to get trigger mode:\n\t> %s\n", sub_error->message);
-    //     g_clear_error (&sub_error);
-    //     return FALSE;
-    // }
-    // self->settings->trigger_mode = g_value_get_int (&value);
-    
-    g_value_unset (&value);
-
-    return TRUE;
-
-}
-
 
 
 /**
  * Print the current capture settings
 */
-void uca_phantom_communicate_print_capture_settings (UcaPhantomCommunicate *self) {
+void uca_phantom_communicate_print_settings (UcaPhantomCommunicate *self) {
     g_return_if_fail (self != NULL);
     g_return_if_fail (self->control_state == CONNECTED);
 
-    g_print ("Capture settings:\n");
-    g_print ("\tResolution: %dx%d\n", self->settings.width, self->settings.height);
-    g_print ("\tFPS: %f\n", self->settings.fps);
-    g_print ("\tExposure: %d\n", self->settings.exposure);
-    g_print ("\tFocal length: %f\n", self->settings.focal_length);
-    g_print ("\tAperture: %f\n", self->settings.aperture);
-    g_print ("\tPost trigger: %d\n", self->settings.post_trigger);
-    // g_print ("\tAquisition mode: %d\n", self->settings.aquisition_mode);
-    // g_print ("\tTrigger mode: %d\n", self->settings.trigger_mode);
 }
 
-
-gboolean uca_phantom_communicate_set_capture_settings (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc) {
-    g_return_val_if_fail (settings != NULL, FALSE);
+/**
+ * @brief Set the capture settings object
+ * 
+ * @param self 
+ * @param settings 
+ * @param error_loc 
+ * @return gboolean 
+ */
+gboolean uca_phantom_communicate_set_settings (UcaPhantomCommunicate *self, CaptureSettings settings, GError **error_loc) {
     g_return_val_if_fail(self->control_state == CONNECTED, FALSE);
 
     GError *sub_error = NULL;
@@ -1416,85 +1365,222 @@ gboolean uca_phantom_communicate_set_capture_settings (UcaPhantomCommunicate *se
     PhantomReply reply;
     gboolean res;
 
-    // use set command to set varaibles of Defc struct
-    gchar *resolution = g_strdup_printf ("%dx%d", settings->width, settings->height);
-    gchar *fps = g_strdup_printf ("%f", settings->fps);
-    gchar *focal_length = g_strdup_printf ("%f", settings->focal_length);
-    gchar *aperture = g_strdup_printf ("%f", settings->aperture);
-    gchar *exposure = g_strdup_printf ("%d", settings->exposure);
-    gchar *ptframes = g_strdup_printf ("%d", settings->post_trigger);
-    // gchar *acqmode = g_strdup_printf ("%d", settings->aquisition_mode);
-    // gchar *trigmode = g_strdup_printf ("%d", settings->trigger_mode);
-
-    res = uca_phantom_communicate_set_variable (self, PROP_DEFC_RES, resolution, &sub_error);
-    if (res != TRUE && sub_error != NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_CAPTURE_SETTINGS, "Failed to set resolution:\n\t> %s\n", sub_error->message);
-        g_propagate_error (error_loc, phantom_error);
-        g_clear_error (&sub_error);
-        return FALSE;
+    if (settings.trigger_source != self->settings.trigger_source) {
+        self->settings.trigger_source = settings.trigger_source;
+        // TODO: Set trigger source
     }
-    res = uca_phantom_communicate_set_variable (self, PROP_DEFC_RATE, fps, &sub_error);
-    if (res != TRUE && sub_error != NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_CAPTURE_SETTINGS, "Failed to set fps:\n\t> %s\n", sub_error->message);
-        g_propagate_error (error_loc, phantom_error);
-        g_clear_error (&sub_error);
-        return FALSE;
+    if (settings.trigger_type != self->settings.trigger_type) {
+        self->settings.trigger_type = settings.trigger_type;
+        // TODO: Set trigger type
     }
-    res = uca_phantom_communicate_set_variable (self, PROP_DEFC_EXP, exposure, &sub_error);
-    if (res != TRUE && sub_error != NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_CAPTURE_SETTINGS, "Failed to set exposure:\n\t> %s\n", sub_error->message);
-        g_propagate_error (error_loc, phantom_error);
-        g_clear_error (&sub_error);
-        return FALSE;
-    }
-    res = uca_phantom_communicate_set_variable (self, PROP_DEFC_PTFRAMES, ptframes, &sub_error);
-    if (res != TRUE && sub_error != NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_CAPTURE_SETTINGS, "Failed to set post_trigger:\n\t> %s\n", sub_error->message);
-       g_propagate_error (error_loc, phantom_error);
-        g_clear_error (&sub_error);
-        return FALSE;
-    }
-    res = uca_phantom_communicate_run_command (self, CMD_SET_LENS_APERTURE, &reply, &sub_error, aperture, NULL);
-    if (res != TRUE && sub_error != NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_CAPTURE_SETTINGS, "Failed to set aperture:\n\t> %s\n", sub_error->message);
-        g_propagate_error (error_loc, phantom_error);
-        g_clear_error (&sub_error);
-        return FALSE;
-    }
-    res = uca_phantom_communicate_run_command (self, CMD_MOVE_FOCUS, &reply, &sub_error, focal_length, NULL);
-    if (res != TRUE && sub_error != NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_CAPTURE_SETTINGS, "Failed to set focal_length:\n\t> %s\n", sub_error->message);
-        g_propagate_error (error_loc, phantom_error);
-        g_clear_error (&sub_error);
-        return FALSE;
+    if (settings.acquisition_mode != self->settings.acquisition_mode) {
+        self->settings.acquisition_mode = settings.acquisition_mode;
+        // TODO: Set acquisition mode
     }
 
-    // gboolean res = uca_phantom_communicate_set_variable (self, PROP_DEFC_ACQMODE, acqmode, &sub_error);
-    // if (res != TRUE && sub_error != NULL) {
-    //     g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_CAPTURE_SETTINGS, "Failed to set aquisition_mode:\n\t> %s\n", sub_error->message);
-    //     g_propagate_error (&priv->error, phantom_error);
-    //     g_clear_error (&sub_error);
-    //     return FALSE;
-    // }
-    // gboolean res = uca_phantom_communicate_set_variable (self, PROP_DEFC_TRIGMODE, trigmode, &sub_error);
-    // if (res != TRUE && sub_error != NULL) {
-    //     g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_CAPTURE_SETTINGS, "Failed to set trigger_mode:\n\t> %s\n", sub_error->message);
-    //     g_propagate_error (&priv->error, phantom_error);
-    //     g_clear_error (&sub_error);
-    //     return FALSE;
-    // }
+    if (settings.image_format != self->settings.image_format) {
+        self->settings.image_format = settings.image_format;
+        self->settings.sensor_bit_depth = settings.sensor_bit_depth; // is set when requesting the images
+    }
+    if (settings.timestamp_format != self->settings.timestamp_format) {
+        self->settings.timestamp_format = settings.timestamp_format;
+    }
+    if (settings.focal_length != self->settings.focal_length) {
+        g_message ("Focal cannot be set by software\n"); // Focal length can only be set manually
+    }
+    if (settings.nb_pre_trigger_frames != self->settings.nb_pre_trigger_frames) {
+        self->settings.nb_pre_trigger_frames = settings.nb_pre_trigger_frames; // is set when requesting the images
+    }
+    if (settings.current_cine != self->settings.current_cine) {
+        self->settings.current_cine = settings.current_cine; // is set when requesting the images
+    }
+
+    if (settings.sync_mode != self->settings.sync_mode) {
+        self->settings.sync_mode = settings.sync_mode;
+        gchar *sync_mode = g_strdup_printf ("%d", settings.sync_mode);
+        res = uca_phantom_communicate_set_variable (self, UNIT_CAM_SYNCIMG, sync_mode, &sub_error);
+        g_free (sync_mode);
+        if (res != TRUE && sub_error != NULL) {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS, "Failed to set sync mode to %d:\n\t> %s\n", settings.sync_mode, sub_error->message);
+            g_propagate_error (error_loc, phantom_error);
+            g_error_free (sub_error);
+            return FALSE;
+        }
+    }
+
+    if (settings.sensor_pixel_width != self->settings.sensor_pixel_width || settings.sensor_pixel_height != self->settings.sensor_pixel_height) {
+        self->settings.sensor_pixel_width = settings.sensor_pixel_width;
+        self->settings.sensor_pixel_height = settings.sensor_pixel_height;
+        gchar *resolution = g_strdup_printf ("%dx%d", settings.sensor_pixel_width, settings.sensor_pixel_height);
+        res = uca_phantom_communicate_set_variable (self, UNIT_DEFC_RES, resolution, &sub_error);
+        g_free (resolution);
+        if (res != TRUE && sub_error != NULL) {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS, "Failed to set sensor resolution %dx%d:\n\t> %s\n", settings.sensor_pixel_width, settings.sensor_pixel_height, sub_error->message);
+            g_propagate_error (error_loc, phantom_error);
+            g_clear_error (&sub_error);
+            return FALSE;
+        }
+    }
+    if (settings.frames_per_second != self->settings.frames_per_second) {
+        self->settings.frames_per_second = settings.frames_per_second;
+        gchar *fps = g_strdup_printf ("%f", settings.frames_per_second);
+        res = uca_phantom_communicate_set_variable (self, UNIT_DEFC_RATE, fps, &sub_error);
+        g_free (fps);
+        if (res != TRUE && sub_error != NULL) {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS, "Failed to set frames per second to %f:\n\t> %s\n", settings.frames_per_second, sub_error->message);
+            g_propagate_error (error_loc, phantom_error);
+            g_clear_error (&sub_error);
+            return FALSE;
+        }
+    }
+    if (settings.exposure_time != self->settings.exposure_time) {
+        self->settings.exposure_time = settings.exposure_time;
+        gchar *exposure = g_strdup_printf ("%f", settings.exposure_time);
+        res = uca_phantom_communicate_set_variable (self, UNIT_DEFC_EXP, exposure, &sub_error);
+        g_free (exposure);
+        if (res != TRUE && sub_error != NULL) {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS, "Failed to set exposure time to %f:\n\t> %s\n", settings.exposure_time, sub_error->message);
+            g_propagate_error (error_loc, phantom_error);
+            g_clear_error (&sub_error);
+            return FALSE;
+        }
+    }
+    if (settings.roi_pixel_x != self->settings.roi_pixel_x) {
+        self->settings.roi_pixel_x = settings.roi_pixel_x;
+        gchar *roi = g_strdup_printf ("%d", settings.roi_pixel_x);
+        res = uca_phantom_communicate_set_variable (self, UNIT_DEFC_META_OX, roi, &sub_error);
+        g_free (roi);
+        if (res != TRUE && sub_error != NULL) {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS, "Failed to set ROI to %dx%d:\n\t> %s\n", settings.roi_pixel_x, settings.roi_pixel_y, sub_error->message);
+            g_propagate_error (error_loc, phantom_error);
+            g_clear_error (&sub_error);
+            return FALSE;
+        }
+    }
+    if (settings.roi_pixel_y != self->settings.roi_pixel_y) {
+        self->settings.roi_pixel_y = settings.roi_pixel_y;
+        gchar *roi = g_strdup_printf ("%d", settings.roi_pixel_y);
+        res = uca_phantom_communicate_set_variable (self, UNIT_DEFC_META_OY, roi, &sub_error);
+        g_free (roi);
+        if (res != TRUE && sub_error != NULL) {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS, "Failed to set ROI to %dx%d:\n\t> %s\n", settings.roi_pixel_x, settings.roi_pixel_y, sub_error->message);
+            g_propagate_error (error_loc, phantom_error);
+            g_clear_error (&sub_error);
+            return FALSE;
+        }
+    }
+    if (settings.roi_pixel_width != self->settings.roi_pixel_width) {
+        self->settings.roi_pixel_width = settings.roi_pixel_width;
+        gchar *roi = g_strdup_printf ("%d", settings.roi_pixel_width);
+        res = uca_phantom_communicate_set_variable (self, UNIT_DEFC_META_W, roi, &sub_error);
+        g_free (roi);
+        if (res != TRUE && sub_error != NULL) {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS, "Failed to set ROI to %dx%d:\n\t> %s\n", settings.roi_pixel_x, settings.roi_pixel_y, sub_error->message);
+            g_propagate_error (error_loc, phantom_error);
+            g_clear_error (&sub_error);
+            return FALSE;
+        }
+    }
+    if (settings.roi_pixel_height != self->settings.roi_pixel_height) {
+        self->settings.roi_pixel_height = settings.roi_pixel_height;
+        gchar *roi = g_strdup_printf ("%d", settings.roi_pixel_height);
+        res = uca_phantom_communicate_set_variable (self, UNIT_DEFC_META_H, roi, &sub_error);
+        g_free (roi);
+        if (res != TRUE && sub_error != NULL) {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS, "Failed to set ROI to %dx%d:\n\t> %s\n", settings.roi_pixel_x, settings.roi_pixel_y, sub_error->message);
+            g_propagate_error (error_loc, phantom_error);
+            g_clear_error (&sub_error);
+            return FALSE;
+        }
+    }
+    if (settings.aperture != self->settings.aperture) {
+        PhantomReply reply;
+        self->settings.aperture = settings.aperture;
+        gchar *aperture = g_strdup_printf ("%f", settings.aperture);
+        res = uca_phantom_communicate_run_command (self, CMD_SET_LENS_APERTURE, &reply, &sub_error, aperture, NULL);
+        g_free (aperture);
+        g_free (reply.raw);
+        if (res != TRUE && sub_error != NULL) {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS, "Failed to set aperture to %f:\n\t> %s\n", settings.aperture, sub_error->message);
+            g_propagate_error (error_loc, phantom_error);
+            g_clear_error (&sub_error);
+            return FALSE;
+        }
+    }
+    if (settings.edr_exp != self->settings.edr_exp) {
+        self->settings.edr_exp = settings.edr_exp;
+        gchar *edr_exp = g_strdup_printf ("%d", settings.edr_exp);
+        res = uca_phantom_communicate_set_variable (self, UNIT_DEFC_EDREXP, edr_exp, &sub_error);
+        g_free (edr_exp);
+        if (res != TRUE && sub_error != NULL) {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS, "Failed to set EDR exposure to %d:\n\t> %s\n", settings.edr_exp, sub_error->message);
+            g_propagate_error (error_loc, phantom_error);
+            g_clear_error (&sub_error);
+            return FALSE;
+        }
+    }
+    if (settings.shutter_off != self->settings.shutter_off) {
+        self->settings.shutter_off = settings.shutter_off;
+        gchar *shutter_off = g_strdup_printf ("%d", settings.shutter_off);
+        res = uca_phantom_communicate_set_variable (self, UNIT_DEFC_SHOFF, shutter_off, &sub_error);
+        g_free (shutter_off);
+        if (res != TRUE && sub_error != NULL) {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS, "Failed to set shutter off to %d:\n\t> %s\n", settings.shutter_off, sub_error->message);
+            g_propagate_error (error_loc, phantom_error);
+            g_clear_error (&sub_error);
+            return FALSE;
+        }
+    }
+    if (settings.aexpmode != self->settings.aexpmode) {
+        self->settings.aexpmode = settings.aexpmode;
+        gchar *aexpmode = g_strdup_printf ("%d", settings.aexpmode);
+        res = uca_phantom_communicate_set_variable (self, UNIT_DEFC_AEXPMODE, aexpmode, &sub_error);
+        g_free (aexpmode);
+        if (res != TRUE && sub_error != NULL) {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS, "Failed to set auto exposure mode to %d:\n\t> %s\n", settings.aexpmode, sub_error->message);
+            g_propagate_error (error_loc, phantom_error);
+            g_clear_error (&sub_error);
+            return FALSE;
+        }
+    }
+    if (settings.aexpcomp != self->settings.aexpcomp) {
+        self->settings.aexpcomp = settings.aexpcomp;
+        gchar *aexpcomp = g_strdup_printf ("%f", settings.aexpcomp);
+        res = uca_phantom_communicate_set_variable (self, UNIT_DEFC_AEXPCOMP, aexpcomp, &sub_error);
+        g_free (aexpcomp);
+        if (res != TRUE && sub_error != NULL) {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS, "Failed to set auto exposure compensation to %f:\n\t> %s\n", settings.aexpcomp, sub_error->message);
+            g_propagate_error (error_loc, phantom_error);
+            g_clear_error (&sub_error);
+            return FALSE;
+        }
+    }
+    if (settings.nb_post_trigger_frames != self->settings.nb_post_trigger_frames) {
+        self->settings.nb_post_trigger_frames = settings.nb_post_trigger_frames;
+        gchar *nb_post_trigger_frames = g_strdup_printf ("%d", settings.nb_post_trigger_frames);
+        res = uca_phantom_communicate_set_variable (self, UNIT_DEFC_PTFRAMES, nb_post_trigger_frames, &sub_error);
+        g_free (nb_post_trigger_frames);
+        if (res != TRUE && sub_error != NULL) {
+            g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS, "Failed to set number of post trigger frames to %d:\n\t> %s\n", settings.nb_post_trigger_frames, sub_error->message);
+            g_propagate_error (error_loc, phantom_error);
+            g_clear_error (&sub_error);
+            return FALSE;
+        }
+    }
+    
+
     return TRUE;
 }
 
-gboolean uca_phantom_communicate_connect_datastream (UcaPhantomCommunicate *self, guint16 port, GError **error_loc) {
+gboolean uca_phantom_communicate_connect_datastream (UcaPhantomCommunicate *self, GError **error_loc) {
     g_return_val_if_fail (error_loc == NULL || *error_loc == NULL, FALSE);
 
     GError *sub_error = NULL;
     GError *phantom_error = NULL;
 
     if (!g_socket_listener_add_inet_port (
-        G_SOCKET_LISTENER (self->service), port, NULL, &sub_error)) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_DATASTREAM, "Failed to listen on port %d:\n\t> %s\n", port, sub_error->message);
+        G_SOCKET_LISTENER (self->service), self->data_port, NULL, &sub_error)) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_DATASTREAM, "Failed to listen on port %d:\n\t> %s\n", self->data_port, sub_error->message);
         g_propagate_error (error_loc, phantom_error);
         g_clear_error (&sub_error);
         return FALSE;
@@ -1504,12 +1590,12 @@ gboolean uca_phantom_communicate_connect_datastream (UcaPhantomCommunicate *self
     PhantomReply reply;
 
     // 7117
-    gchar *arg = g_strdup_printf ("{port:%d}", port);
+    gchar *arg = g_strdup_printf ("{port:%d}", self->data_port);
 
     gboolean res = uca_phantom_communicate_run_command (self, CMD_START_DATA_CONNECTION, &reply, &sub_error, arg, NULL);
 
     if (res != TRUE && sub_error != NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_DATASTREAM, "Failed to connect to datastream on port %d:\n\t> %s\n", 7117, sub_error->message);
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_DATASTREAM, "Failed to connect to datastream on port %d:\n\t> %s\n", self->data_port, sub_error->message);
         g_propagate_error (error_loc, phantom_error);
         g_clear_error (&sub_error);
         return FALSE;
@@ -1522,7 +1608,7 @@ gboolean uca_phantom_communicate_connect_datastream (UcaPhantomCommunicate *self
 
     self->data_connection = g_socket_listener_accept (G_SOCKET_LISTENER (self->service), NULL, NULL, &sub_error);
     if (sub_error != NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_DATASTREAM, "Failed to connect to datastream on port %d:\n\t> %s\n", port, sub_error->message);
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_DATASTREAM, "Failed to connect to datastream on port %d:\n\t> %s\n", self->data_port, sub_error->message);
         g_propagate_error (error_loc, phantom_error);
         g_clear_error (&sub_error);
         return FALSE;
@@ -1580,14 +1666,13 @@ gboolean uca_phantom_communicate_connect_xdatastream (UcaPhantomCommunicate *sel
     printf("Opening device %s for packet capture\n", self->xnetcard);
 
     // Set the capture options
-    pcap_set_snaplen(self->handle, 65536);
+    pcap_set_snaplen(self->handle, 65535);
     pcap_set_promisc(self->handle, FALSE);
-    pcap_set_timeout(self->handle, 1000);
+    pcap_set_timeout(self->handle, 1);
     pcap_set_rfmon(self->handle, FALSE);
 
-    // Use size of a Jumbo frame
     pcap_set_buffer_size(self->handle, MAX_KERNEL_RING_SIZE);
-    pcap_set_immediate_mode(self->handle, TRUE); // Set the capture mechanism to PACKET_MMAP
+    pcap_set_immediate_mode(self->handle, FALSE); // Set the capture mechanism to PACKET_MMAP
 
     // Activate the capture self->handle
     if (pcap_activate(self->handle) == -1) {
@@ -1598,9 +1683,9 @@ gboolean uca_phantom_communicate_connect_xdatastream (UcaPhantomCommunicate *sel
         self->handle = NULL;
         return FALSE;
     }
-
+    // ether proto 0x88b7
     // Compile the filter to capture packets with ethertype 0x88b7
-    if (pcap_compile(self->handle, &fp, "ether proto 0x88b7", 0, PCAP_NETMASK_UNKNOWN) == -1) {
+    if (pcap_compile(self->handle, &fp, "", 1, PCAP_NETMASK_UNKNOWN) == -1) {
         g_print ("Error compiling filter: %s\n", pcap_geterr(self->handle));
         g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_XDATASTREAM, "Failed to connect to xdatastream:\n\t> %s\n", pcap_geterr(self->handle));
         g_propagate_error (error_loc, phantom_error);
@@ -1648,39 +1733,93 @@ gboolean uca_phantom_communicate_disconnect_datastream (UcaPhantomCommunicate *s
     return TRUE;
 }
 
+/**
+ * @brief 
+ * 
+ * @param self 
+ * @param settings 
+ * @param error_loc 
+ * @return gboolean 
+ */
 gboolean uca_phantom_communicate_arm (UcaPhantomCommunicate *self, guint cine, GError **error_loc) {
-    static guint prev_cine = -1;
     g_return_val_if_fail (error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(self->control_state == CONNECTED, FALSE);
 
-    if (self->phantom_state == ACQUIRING || prev_cine == cine) {
+    GError *sub_error = NULL;
+    GError *phantom_error = NULL;
+    gchar *cine_str;
+    gboolean res;
+    PhantomReply reply;
+
+    if (self->settings.current_cine != cine) {
+        self->settings.current_cine = cine;
+    }
+    else {
+        // First delete the current cine
+        // cine_str = g_strdup_printf("%d", cine);
+        // res = uca_phantom_communicate_run_command (self, CMD_DELETE_A_CINE, &reply, &sub_error, cine_str, NULL);
+        // g_free (cine_str);
+        // if (res != TRUE && sub_error != NULL) {
+        //     g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_DELETE_CINE, "Failed to delete cine:\n\t> %s\n", sub_error->message);
+        //     g_propagate_error (error_loc, phantom_error);
+        //     g_clear_error (&sub_error);
+        //     g_free (reply.raw);
+        //     return FALSE;
+        // }
+        // g_free (reply.raw);
+    }
+
+    if (self->phantom_state == ACQUIRING) {
         g_message ("Phantom already armed in the cine %d\n", cine);
         return TRUE;
     }
-    else {
-        prev_cine = cine;
+
+    // Set the capture settings
+    cine_str = g_strdup_printf("%d", cine);
+    res = uca_phantom_communicate_run_command (self, CMD_START_RECORDING_IN_A_CINE, &reply, &sub_error, cine_str, NULL);
+    g_free(cine_str);
+    if (res != TRUE && sub_error != NULL) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to arm:\n\t> %s\n", sub_error->message);
+        g_propagate_error (error_loc, phantom_error);
+        g_clear_error (&sub_error);
+        g_free (reply.raw);
+        return FALSE;
     }
+
+    self->phantom_state = ACQUIRING;
+    g_free(reply.raw);
+
+    return TRUE;
+}
+
+/**
+ * @brief Trigger the camera to save ptframes into a cine in the camera's RAM.
+ * The cine is set using the rec command.
+ * 
+ * @param self 
+ * @param pt_frames 
+ * @param error_loc 
+ * @return gboolean 
+ */
+gboolean uca_phantom_communicate_trigger (UcaPhantomCommunicate *self, GError **error_loc) {
+    g_return_val_if_fail (error_loc == NULL || *error_loc == NULL, FALSE);
+    g_return_val_if_fail(self->control_state == CONNECTED, FALSE);
 
     GError *sub_error = NULL;
     GError *phantom_error = NULL;
 
+    gboolean res;
     PhantomReply reply;
 
-    gchar *cine_str = g_strdup_printf("%d", cine);
-
-    gboolean res = uca_phantom_communicate_run_command (self, CMD_START_RECORDING_IN_A_CINE, &reply, &sub_error, cine_str, NULL);
-
+    res = uca_phantom_communicate_run_command (self, CMD_SOFTWARE_TRIGGER, &reply, &sub_error, NULL);
     if (res != TRUE && sub_error != NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to arm:\n\t> %s\n", sub_error->message);
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to trigger:\n\t> %s\n", sub_error->message);
         g_propagate_error (error_loc, phantom_error);
         g_clear_error (&sub_error);
         return FALSE;
     }
 
-    self->phantom_state = ACQUIRING;
-
     g_free(reply.raw);
-    g_free(cine_str);
 
     return TRUE;
 }
@@ -1697,7 +1836,7 @@ gboolean uca_phantom_communicate_arm (UcaPhantomCommunicate *self, guint cine, G
  * NOTE: the function first sets the ptframes variable to the desired value, then triggers the camera.
  * Therefore there is a slight delay between the function call and the actual trigger.
  */
-gboolean uca_phantom_communicate_trigger (UcaPhantomCommunicate *self, GError **error_loc) {
+gboolean uca_phantom_communicate_trigger_ptframes (UcaPhantomCommunicate *self, guint ptframes, GError **error_loc) {
     g_return_val_if_fail (error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(self->control_state == CONNECTED, FALSE);
 
@@ -1706,10 +1845,21 @@ gboolean uca_phantom_communicate_trigger (UcaPhantomCommunicate *self, GError **
 
     gboolean res;
     PhantomReply reply;
+    gchar *value = g_strdup_printf("%d", ptframes);
+
+    // First set the number of post trigger frames
+    res = uca_phantom_communicate_set_variable (self, UNIT_DEFC_PTFRAMES, value, &sub_error);
+    g_free(value);
+    if (res != TRUE && sub_error != NULL) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_TRIGGER, "Failed to set ptframes:\n\t> %s\n", sub_error->message);
+        g_propagate_error (error_loc, phantom_error);
+        g_clear_error (&sub_error);
+        return FALSE;
+    }
 
     res = uca_phantom_communicate_run_command (self, CMD_SOFTWARE_TRIGGER, &reply, &sub_error, NULL);
     if (res != TRUE && sub_error != NULL) {
-        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to trigger:\n\t> %s\n", sub_error->message);
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_TRIGGER, "Failed to trigger:\n\t> %s\n", sub_error->message);
         g_propagate_error (error_loc, phantom_error);
         g_clear_error (&sub_error);
         return FALSE;
@@ -1833,24 +1983,53 @@ gboolean uca_phantom_communicate_get_mac_address (UcaPhantomCommunicate *self, G
 gboolean uca_phantom_communicate_request_images (
     UcaPhantomCommunicate *self,
     gint cine,
-    gint start,
     guint nb_images,
     guint img_format,
     guint ts_format,
     GError **error_loc) {
     g_return_val_if_fail (error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail (self->control_state == CONNECTED, FALSE);
-    g_return_val_if_fail (self->local_state == ACQUIRING, FALSE);
+    // g_return_val_if_fail (self->local_state == ACQUIRING, FALSE);
 
     GError *phantom_error = NULL;
     GError *sub_error = NULL;
     PhantomReply reply = {0, };
+    gchar *request_format = NULL;
+    GValue val = G_VALUE_INIT;
+    GValue val2 = G_VALUE_INIT;
+    gboolean result = FALSE;
 
     // TODO: check img_format is in the good range
 
-    // Set the global img_format
-    self->img_format = img_format;
+    // Update CaptureSettings
+    self->settings.current_cine = cine;
+    self->settings.nb_pre_trigger_frames = -nb_images;
+    self->settings.image_format = img_format;
+    self->settings.timestamp_format = ts_format;
 
+    // Get first image index from phantom and nb images
+    result = uca_phantom_communicate_get_variable (self, UNIT_CT_FIRSTFR, &val, &phantom_error);
+    if (result != TRUE && phantom_error != NULL) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES, "Failed to get first image index:\n\t> %s\n", phantom_error->message);
+        g_propagate_error (error_loc, phantom_error);
+        return FALSE;
+    }
+    result = uca_phantom_communicate_get_variable (self, UNIT_CT_FRCOUNT, &val2, &phantom_error);
+    if (result != TRUE && phantom_error != NULL) {
+        g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES, "Failed to get first image index:\n\t> %s\n", phantom_error->message);
+        g_propagate_error (error_loc, phantom_error);
+        return FALSE;
+    }
+    gint cine_start_index = g_value_get_int (&val);
+    gint cine_nb_recorded_images = g_value_get_uint (&val2);
+    g_value_unset (&val);
+    g_value_unset (&val2);
+
+    gint start = cine_start_index;
+    gint total = nb_images;
+    g_print ("cine_start_index: %d\n", cine_start_index);
+    g_print ("cine_nb_recorded_images: %d\n", cine_nb_recorded_images);
+    
     // Connect the datastreams
     if (self->xenabled) {
         // Get the mac address of the camera
@@ -1877,7 +2056,7 @@ gboolean uca_phantom_communicate_request_images (
 
         // Setup the arguments for ximg command
         // ximg {cine:<cine_number>, start:<first_frame>, cnt:<frame_count>, dest:<mac_address>, from:<image_source>}
-        request_format = g_strdup_printf ("{cine:%d, start:%d, cnt:%d, fmt:%s, dest:%s}", cine, start, nb_images, ImageFormatString[img_format], mac);
+        request_format = g_strdup_printf ("{cine:%d, start:%d, cnt:%d, fmt:%s, dest:%s, from:%d}", cine, start, total, ImageFormatSpecs[img_format].format_string, mac, 0);
         g_print ("img_args: %s\n", request_format);
         g_free (mac);
         if (request_format == NULL) {
@@ -1888,7 +2067,7 @@ gboolean uca_phantom_communicate_request_images (
     }
     else {
         // Setup the arguments for image transfer on 1Gb ethernet
-        request_format = g_strdup_printf ("{cine:%d, start:%d, cnt:%d, fmt:%s}", cine, 0, nb_images, ImageFormatString[img_format]);
+        request_format = g_strdup_printf ("{cine:%d, start:%d, cnt:%d, fmt:%s}", cine, start, total, ImageFormatSpecs[img_format].format_string);
         if (request_format == NULL) {
             g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to allocate memory for get_images command");
             g_propagate_error (error_loc, phantom_error);
@@ -1965,7 +2144,7 @@ gboolean uca_phantom_communicate_request_images (
 //     // Check if the default timestamp format has changed and update it if necessary
 //     if (ts_format != self->ts_format && self->timestamping == TRUE) {
 //         self->ts_format = ts_format;
-//         result = uca_phantom_communicate_set_variable (self, PROP_CAM_TSFORMAT, TimestampFormatString[ts_format], &sub_error);
+//         result = uca_phantom_communicate_set_variable (self, UNIT_CAM_TSFORMAT, TimestampFormatString[ts_format], &sub_error);
 //         if (result != TRUE && sub_error != NULL) {
 //             g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to set timestamp format:\n\t> %s\n", sub_error->message);
 //             g_propagate_error (error_loc, phantom_error);
@@ -2172,7 +2351,7 @@ gboolean uca_phantom_communicate_request_images (
 //     // Check if the default timestamp format has changed and update it if necessary
 //     if (ts_format != self->ts_format && self->timestamping == TRUE) {
 //         self->ts_format = ts_format;
-//         gboolean res = uca_phantom_communicate_set_variable (self, PROP_CAM_TSFORMAT, TimestampFormatString[ts_format], &sub_error);
+//         gboolean res = uca_phantom_communicate_set_variable (self, UNIT_CAM_TSFORMAT, TimestampFormatString[ts_format], &sub_error);
 //         if (res != TRUE && sub_error != NULL) {
 //             g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to set timestamp format:\n\t> %s\n", sub_error->message);
 //             g_propagate_error (error_loc, phantom_error);
@@ -2440,8 +2619,8 @@ static gpointer uca_phantom_communicate_accept_img (gpointer data) {
         }
 
         // Calculate the size of the image buffer
-        nb_pixels = self->settings.width * self->settings.height;
-        image_size = nb_pixels * ImageByteDepth[request->img_format];
+        nb_pixels = self->settings.sensor_pixel_width * self->settings.sensor_pixel_height;
+        image_size = nb_pixels * ImageFormatSpecs[request->img_format].byte_depth;
         image_packet_size = image_size * request->nb_images;
 
         // print number of images and image size
@@ -2494,8 +2673,6 @@ static gpointer uca_phantom_communicate_accept_img (gpointer data) {
             // Create a new CineData struct
             CineData *cine_data = g_new0 (CineData, 1);
             cine_data->Settings = csettings;
-            cine_data->ImgFormat = request->img_format;
-            cine_data->TsFormat = self->ts_format;
 
             cine_data->NbImages = 1;
             cine_data->NbPixelsPerImage = nb_pixels;
@@ -2507,7 +2684,6 @@ static gpointer uca_phantom_communicate_accept_img (gpointer data) {
             cine_data->RawTimestamps = ts_buffer;
 
             // Increment the output buffer pointer
-            // TODO: image_size or NbPixelsPerImage
             output_buffer += nb_pixels;
 
             // Push it to the unpacked queue
@@ -2547,8 +2723,8 @@ static gpointer uca_phantom_communicate_accept_ximg (gpointer data) {
     int read_all = FALSE;
     InternalRequest *request = NULL;
 
-    struct pcap_pkthdr *pkt_header;
-    const guint8 *pkt_data;
+    struct pcap_pkthdr *pkt_header = NULL;
+    const guint8 *pkt_data = NULL;
 
     gsize remaining_bytes = 0;
 
@@ -2583,11 +2759,11 @@ static gpointer uca_phantom_communicate_accept_ximg (gpointer data) {
         }
 
         // print settings.width and settings.height
-        g_print ("Accept thread: Width: %d, Height: %d\n", self->settings.width, self->settings.height);
+        g_print ("Accept thread: Width: %d, Height: %d\n", self->settings.sensor_pixel_width, self->settings.sensor_pixel_height);
 
         // Calculate the size of the image buffer
-        nb_pixels = self->settings.width * self->settings.height;
-        input_image_size = nb_pixels * ImageByteDepth[request->img_format]; // the packed image size
+        nb_pixels = self->settings.sensor_pixel_width * self->settings.sensor_pixel_height;
+        input_image_size = nb_pixels * ImageFormatSpecs[request->img_format].byte_depth; // the packed image size
         input_packet_size = input_image_size * request->nb_images; // the packed image packet size
         output_image_size = nb_pixels * sizeof(guint16); // the unpacked image size
         output_packet_size = output_image_size * request->nb_images; // the unpacked image packet size
@@ -2605,9 +2781,13 @@ static gpointer uca_phantom_communicate_accept_ximg (gpointer data) {
         remaining_bytes = input_packet_size;
         buffer_pointer = image_buffer;
 
+        g_print ("input packet size: %ld\n", input_packet_size);
+
         // Read the image data directly from kernel buffer using pcap_next_ex
         while (TRUE) {
+
             read_all = pcap_next_ex (self->handle, &pkt_header, &pkt_data);
+
             if (read_all == 0) {
                 g_print ("Beeing read from live capture\n");
             }
@@ -2634,8 +2814,10 @@ static gpointer uca_phantom_communicate_accept_ximg (gpointer data) {
             remaining_bytes -= pkt_header->len - ETHERNET_HEADER_SIZE;
 
             if (remaining_bytes <= 0) {
+                g_print ("Accept thread: All bytes of image frame have been read\n");
                 break; // All bytes of the image frame have been read
             }
+            // g_print ("Accept thread: %ld bytes remaining\n", remaining_bytes);
         }
         
         bytes_read = input_packet_size - remaining_bytes;
@@ -2653,7 +2835,6 @@ static gpointer uca_phantom_communicate_accept_ximg (gpointer data) {
         CineData *cine_data = g_new0 (CineData, 1);
         cine_data->Settings = g_memdup (&self->settings, sizeof(CaptureSettings));
         cine_data->ImgFormat = request->img_format;
-        cine_data->TsFormat = self->ts_format;
 
         cine_data->NbImages = request->nb_images;
         cine_data->NbPixelsPerImage = nb_pixels;
@@ -2666,7 +2847,7 @@ static gpointer uca_phantom_communicate_accept_ximg (gpointer data) {
 
         // Add the data to the queue
         g_async_queue_push (self->packed_queue, cine_data);
-        g_print ("Accept thread: pushed the received image to packed queue\n", bytes_read);
+        g_print ("Accept thread: pushed the received image to packed queue \n");
 
         // Free the request
         uca_phantom_communicate_free_request (request);
@@ -2916,8 +3097,6 @@ gpointer uca_phantom_communicate_unpack_ximg (gpointer data) {
             // Get a pointer to the current CineData struct in the array
             CineData *new_cine_data = g_new0 (CineData, 1);
             new_cine_data->Settings = cine_data->Settings;
-            new_cine_data->ImgFormat = cine_data->ImgFormat;
-            new_cine_data->TsFormat = cine_data->TsFormat;
 
             new_cine_data->NbImages = 1;
             new_cine_data->NbPixelsPerImage = cine_data->NbPixelsPerImage;
@@ -2927,7 +3106,6 @@ gpointer uca_phantom_communicate_unpack_ximg (gpointer data) {
             new_cine_data->RawImages = NULL;
             new_cine_data->UnpackedImages = cine_data->UnpackedImages + i * cine_data->SizePerImageUnpacked;
             new_cine_data->RawTimestamps = NULL;
-
 
             // Update the offset
             // image_buffer_offset += cine_data->NbPixelsPerImage;
@@ -3008,42 +3186,6 @@ gboolean uca_phantom_communicate_start_readout (UcaPhantomCommunicate *self, GEr
 
     return TRUE;
 }
-
-
-// /**
-//  * @brief Grab the next image from a given CinData object
-//  * 
-//  * @param self 
-//  * @param error_loc 
-//  * @return gboolean 
-//  */
-// gboolean uca_phantom_communicate_grab_next_image (UcaPhantomCommunicate *self, CineData *cine_data, guint image_index, gpointer data, GError **error_loc) {
-//     g_return_val_if_fail (error_loc == NULL || *error_loc == NULL, FALSE);
-
-//     GError *phantom_error = NULL;
-//     guint bit_depth = (cine_data->format > IMG_8R) ? 2 : 1;
-
-//     gsize image_size = bit_depth * cine_data->settings->width * cine_data->settings->height;
-
-//     g_print ("Grabbing image of size%ld\n", image_size);
-
-//     // Get the next image from the CineData object
-//     if (image_index < cine_data->nb_images) {
-//         // Copy the image data to the output buffer
-//         memcpy (data, (cine_data->UnpackedImages+image_index), image_size);
-//         // Print the first 10 bytes of the image of format guint8
-//         for (int i = 0; i < 10; i++) {
-//             g_print ("%d ", *((guint8 *)data+i));
-//         }
-//     }
-//     else {
-//         g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GRAB_IMAGE, "Image index out of bounds.");
-//         g_propagate_error (error_loc, phantom_error);
-//         return FALSE;
-//     }
-
-//     return TRUE;
-// }
 
 /**
  * @brief Generic grab image function
