@@ -39,84 +39,117 @@ gboolean stop = FALSE;
 gboolean read_all = FALSE;
 
 ringbuf_t ring_buffer;
-hid_t file_id, group_id, attr_id, dataset_id, dataspace_id;
+GArray *pkt_buffer;
+gsize total_data_received = 0;
 
+gdouble data_rate = 0;
 
-// void init_hdf5_file() {
-//     // Create a new HDF5 file
-//     file_id = H5Fcreate(HDF5_FILE, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
+void data_rate_thread (struct timeval *start) {
+    static gsize last_total_data_received = 0;
+    struct timeval now;
+    gettimeofday (&now, NULL);
 
-//     // Create a dataset with unlimited size
-//     hsize_t initial_dims[1] = {0};
-//     hsize_t max_dims[1] = {H5S_UNLIMITED};
-//     hid_t dataspace_id = H5Screate_simple(1, initial_dims, max_dims);
+    gdouble delta = (now.tv_sec - start->tv_sec) + (now.tv_usec - start->tv_usec) / 1000000.0;
+    if (delta == 0) {
+        data_rate = 0;
+        g_print ("Delta is 0\n");
+    }
+    else
+        data_rate = (total_data_received - last_total_data_received) / delta;
 
-//     // Create a dataset creation property list with chunked storage
-//     hid_t plist_id = H5Pcreate(H5P_DATASET_CREATE);
-//     hsize_t chunk_dims[1] = {1024};
-//     H5Pset_chunk(plist_id, 1, chunk_dims);
+    if (data_rate > 0)
+        g_print ("%f\n", data_rate);
 
-//     // Create the dataset
-//     dataset_id = H5Dcreate2(file_id, "data", H5T_NATIVE_USHORT, dataspace_id, H5P_DEFAULT, plist_id, H5P_DEFAULT);
+    last_total_data_received = total_data_received;
+}
 
-//     // Close the dataspace and property list
-//     H5Sclose(dataspace_id);
-//     H5Pclose(plist_id);
-// }
-
-// void write_data_to_hdf5(uint8_t *data, size_t data_length) {
-//     // Get the current size of the dataset
-//     hid_t dataspace_id = H5Dget_space(dataset_id);
-//     hsize_t current_dims[1];
-//     H5Sget_simple_extent_dims(dataspace_id, current_dims, NULL);
-
-//     // Extend the dataset
-//     hsize_t new_dims[1] = {current_dims[0] + data_length};
-//     H5Dset_extent(dataset_id, new_dims);
-
-//     // Select the hyperslab to write the new data
-//     H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, current_dims, NULL, &data_length, NULL);
-
-//     // Create a memory dataspace
-//     hid_t memspace_id = H5Screate_simple(1, &data_length, NULL);
-
-//     // Write the data to the dataset
-//     H5Dwrite(dataset_id, H5T_NATIVE_USHORT, memspace_id, dataspace_id, H5P_DEFAULT, data);
-
-//     // Close the dataspaces
-//     H5Sclose(memspace_id);
-//     H5Sclose(dataspace_id);
-// }
-
-// void close_hdf5_file() {
-//     // Close the dataset and file
-//     H5Dclose(dataset_id);
-//     H5Fclose(file_id);
-// }
-
-
-gpointer capture_thread (gpointer data) {
-    int *ptr_nb_images = (int*) data;
-    int nb_images = *ptr_nb_images;
-
-    guint64 total_data_received = 0;
-
+gpointer stats_thread (gpointer data) {
+    struct timeval start;
+    gettimeofday (&start, NULL);
     while (!stop) {
-        gpointer head = ringbuf_head(ring_buffer);
-        if (pfring_recv(ring, head, MAX_BUFFER_SIZE, &hdr, 1) > 0) {
-            // Get the number of bytes received
-            total_data_received += hdr.caplen;
-        }
+        data_rate_thread (&start);
+        sleep (1);
     }
 
-    g_print ("Total data received: %ld\n", total_data_received);
+    g_print ("Closing stats thread\n");
 
+    return NULL;
+}
+
+void capture_callback (const struct pfring_pkthdr *header, const u_char *packet, const u_char *user_bytes) {
+
+    // Get the number of bytes received
+    total_data_received += header->caplen;
+
+    // Add the packet to the ring buffer
+    ringbuf_memcpy_into(ring_buffer, packet, header->caplen);
+}
+
+gpointer capture_thread (gpointer data) {
+    // Use pfring_loop  to receive packets
+    g_print ("Starting capture thread\n");
+    int retval = pfring_loop(ring, capture_callback, NULL, 0);
+    if (retval < 0) {
+        g_print ("Error receiving packets\n");
+    }
+
+    g_print ("Closing capture thread\n");
+
+    // pkt_buff = g_malloc0 (MAX_MTU_SNAPLEN * sizeof (pkt_buff));
+    // if (pkt_buff == NULL) {
+    //     printf("Error allocating packet buffer\n");
+    //     return NULL;
+    // }
+
+    // while (!stop) {
+    //     if (pfring_recv(ring, &pkt_buff, MAX_MTU_SNAPLEN, &hdr, 1) > 0) {
+    //         // Get the number of bytes received
+    //         total_data_received += hdr.caplen;
+    //         // Add the packet to the ring buffer
+    //         ringbuf_memcpy_into(ring_buffer, pkt_buff, hdr.caplen);
+    //     }
+    // }
+    return NULL;
+}
+
+gpointer read_thread (gpointer data) {
+    g_print ("Starting read thread\n");
+    guint8 *pkt_buff = g_malloc0 (MAX_MTU_SNAPLEN * sizeof (pkt_buff));
+    if (pkt_buff == NULL) {
+        printf("Error allocating packet buffer\n");
+        return NULL;
+    }
+
+    while (!stop) {
+        if (ringbuf_read(ring_buffer, pkt_buff, MAX_MTU_SNAPLEN) > 0) {
+            // Get the number of bytes received
+            total_data_received += hdr.caplen;
+            // Add the packet to the ring buffer
+            ringbuf_memcpy_into(ring_buffer, pkt_buff, hdr.caplen);
+        }
+    }
+    return NULL;
+}
+
+gpointer unpack_thread (gpointer data) {
+
+    gsize bytes_left = 0;
+
+    while (!stop) {
+        bytes_left = total_data_received;
+
+        while (bytes_left > 0) {
+        }
+    }
     return NULL;
 }
 
 void handle_sigint (int sig) {
     printf("Received SIGINT\n");
     stop = TRUE;
+    g_print ("Total data received: %ld\n", total_data_received);
+
+    pfring_breakloop (ring);
 }
 
 int main(int argc, char *argv[]) {
@@ -146,14 +179,6 @@ int main(int argc, char *argv[]) {
         printf("Error allocating ring buffer\n");
         return -1;
     }
-
-    // Create the HDF5 file
-    file_id = H5Fcreate(HDF5_FILE, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
-    if (file_id < 0) {
-        printf("Error creating HDF5 file\n");
-        return -1;
-    }
-
 
     ring = pfring_open(ETH10GB, MAX_MTU_SNAPLEN, PF_RING_REENTRANT);
     if (ring == NULL) {
@@ -208,8 +233,36 @@ int main(int argc, char *argv[]) {
 
     sleep(2);
 
+    // Start the capture thread
+    for (i = 0; i < NUM_THREADS; i++) {
+        threads[i] = g_thread_new ("capture_thread", capture_thread, NULL);
+    }
+
+    // Start stats thread
+    GThread *stats = g_thread_new ("stats_thread", stats_thread, NULL);
+
+    // Request the images from the camera
+    for (i = 10; i < max_nb_images; i+=10) {
+        g_print ("Requesting image %d\n", i);
+        result = uca_phantom_communicate_request_images (communicator, cine, i, IMG_P12L, TS_NONE, &error);
+        if (!result && error != NULL) {
+            g_print ("Yo there was an error: %s\n", error->message);
+            g_error_free (error);
+            g_object_unref (communicator);
+            return FALSE;
+        }
+    }
+
+    // join the stats thread
+    g_thread_join (stats);
+
+    // Wait for the capture thread to finish
+    for (i = 0; i < NUM_THREADS; i++) {
+        g_thread_join (threads[i]);
+        g_print ("Thread %d finished\n", i);
+    }
     
-    ringbuf_free (ring_buffer);
+    ringbuf_free (&ring_buffer);
     pfring_close(ring); 
 
     return 0;

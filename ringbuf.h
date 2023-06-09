@@ -72,60 +72,24 @@ gsize ringbuf_capacity(const struct ringbuf_t *rb);
  * The number of free/available bytes in the ring buffer. This value
  * is never larger than the ring buffer's usable capacity.
  */
-gsize ringbuf_bytes_free(const struct ringbuf_t *rb);
+gsize ringbuf_bytes_free(struct ringbuf_t *rb);
 
 /*
  * The number of bytes currently being used in the ring buffer. This
  * value is never larger than the ring buffer's usable capacity.
  */
-gsize ringbuf_bytes_used(const struct ringbuf_t *rb);
+gsize ringbuf_bytes_used(struct ringbuf_t *rb);
 
-gint ringbuf_is_full(const struct ringbuf_t *rb);
+int ringbuf_is_full(struct ringbuf_t *rb);
 
-gint ringbuf_is_empty(const struct ringbuf_t *rb);
-
-/*
- * Const access to the head and tail pointers of the ring buffer.
- */
-const gpointer ringbuf_tail(const struct ringbuf_t *rb);
-
-const gpointer ringbuf_head(const struct ringbuf_t *rb);
+int ringbuf_is_empty(struct ringbuf_t *rb);
 
 /*
- * Removed!
- *
- * Locate the first occurrence of character c (converted to an
- * unsigned char) in ring buffer rb, beginning the search at offset
- * bytes from the ring buffer's tail pointer. The function returns the
- * offset of the character from the ring buffer's tail pointer, if
- * found. If c does not occur in the ring buffer, the function returns
- * the number of bytes used in the ring buffer.
- *
- * Note that the offset parameter and the returned offset are logical
- * offsets from the tail pointer, not necessarily linear offsets.
+ * access to the head and tail pointers of the ring buffer.
  */
-// gsize ringbuf_findchr(const struct ringbuf_t *rb, gint c, gsize offset);
+gconstpointer ringbuf_tail(struct ringbuf_t *rb);
 
-/*
- * Beginning at ring buffer dst's head pointer, fill the ring buffer
- * with a repeating sequence of len bytes, each of value c (converted
- * to an unsigned char). len can be as large as you like, but the
- * function will never write more than ringbuf_buffer_size(dst) bytes
- * in a single invocation, since that size will cause all bytes in the
- * ring buffer to be written exactly once each.
- *
- * Note that if len is greater than the number of free bytes in dst,
- * the ring buffer will overflow. When an overflow occurs, the state
- * of the ring buffer is guaranteed to be consistent, including the
- * head and tail pointers; old data will simply be overwritten in FIFO
- * fashion, as needed. However, note that, if calling the function
- * results in an overflow, the value of the ring buffer's tail pointer
- * may be different than it was before the function was called.
- *
- * Returns the actual number of bytes written to dst: len, if
- * len < ringbuf_buffer_size(dst), else ringbuf_buffer_size(dst).
- */
-gsize ringbuf_memset(ringbuf_t dst, gint c, gsize len);
+gconstpointer ringbuf_head(struct ringbuf_t *rb);
 
 /*
  * Copy n bytes from a contiguous memory area src into the ring buffer
@@ -140,24 +104,7 @@ gsize ringbuf_memset(ringbuf_t dst, gint c, gsize len);
  * overflow, the value of the ring buffer's tail pointer may be
  * different than it was before the function was called.
  */
-gpointer ringbuf_memcpy_into(ringbuf_t dst, const gpointer src, gsize count);
-
-/*
- * This convenience function calls read(2) on the file descriptor fd,
- * using the ring buffer rb as the destination buffer for the read,
- * and returns the value returned by read(2). It will only call
- * read(2) once, and may return a short count.
- *
- * It is possible to read more data from the file descriptor than is
- * available in the buffer; i.e., it's possible to overflow the ring
- * buffer using this function. When an overflow occurs, the state of
- * the ring buffer is guaranteed to be consistent, including the head
- * and tail pointers: old data will simply be overwritten in FIFO
- * fashion, as needed. However, note that, if calling the function
- * results in an overflow, the value of the ring buffer's tail pointer
- * may be different than it was before the function was called.
- */
-gssize ringbuf_read(gint fd, ringbuf_t rb, gsize count);
+gpointer ringbuf_memcpy_into(ringbuf_t dst, gconstpointer src, gsize count);
 
 /*
  * Copy n bytes from the ring buffer src, starting from its tail
@@ -196,31 +143,6 @@ gpointer ringbuf_memcpy_from(gpointer dst, ringbuf_t src, gsize count);
  * no bytes are written to the file descriptor, and the function will
  * return 0.
  */
-gssize ringbuf_write(gint fd, ringbuf_t rb, gsize count);
-
-/*
- * Copy count bytes from ring buffer src, starting from its tail
- * pointer, into ring buffer dst. Returns dst's new head pointer after
- * the copy is finished.
- *
- * Note that this copy is destructive with respect to the ring buffer
- * src: any bytes copied from src into dst are no longer available in
- * src after the copy is complete, and src will have 'count' more free
- * bytes than it did before the function was called.
- *
- * It is possible to copy more data from src than is available in dst;
- * i.e., it's possible to overflow dst using this function. When an
- * overflow occurs, the state of dst is guaranteed to be consistent,
- * including the head and tail pointers; old data will simply be
- * overwritten in FIFO fashion, as needed. However, note that, if
- * calling the function results in an overflow, the value dst's tail
- * pointer may be different than it was before the function was
- * called.
- *
- * It is *not* possible to underflow src; if count is greater than the
- * number of bytes used in src, no bytes are copied, and the function
- * returns 0.
- */
-gpointer ringbuf_copy(ringbuf_t dst, ringbuf_t src, gsize count);
+gssize ringbuf_write(int fd, ringbuf_t rb, gsize count);
 
 #endif /* INCLUDED_RINGBUF_H */
