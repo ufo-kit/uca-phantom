@@ -108,7 +108,8 @@ typedef struct{
     guint16 sensor_pixel_width, sensor_pixel_height, sensor_bit_depth;
     UcaCameraTriggerSource trigger_source;
     UcaCameraTriggerType trigger_type;
-    gfloat frames_per_second, exposure_time;
+    gfloat frames_per_second;
+    gdouble exposure_time;
     gint roi_pixel_x, roi_pixel_y, roi_pixel_width, roi_pixel_height;
     guint roi_width_multiplier, roi_height_multiplier;
 
@@ -134,13 +135,14 @@ extern const TimestampSpec TimestampSpecs[];
 */
 UcaPhantomCommunicate *uca_phantom_communicate_new (void);
 gboolean uca_phantom_communicate_connect_controlstream (UcaPhantomCommunicate *self, GError **error_loc);
+gboolean uca_phantom_communicate_connect_datastream(UcaPhantomCommunicate *self, GError **error_loc);
 gboolean uca_phantom_communicate_connect_xdatastream (UcaPhantomCommunicate *self, GError **error_loc);
 gboolean uca_phantom_communicate_run_command (UcaPhantomCommunicate *self, guint command_flag, PhantomReply *reply, GError **error_loc, ...);
 gboolean uca_phantom_communicate_get_variable (UcaPhantomCommunicate *self, guint variable_flag, GValue *return_value, GError **error);
 gboolean uca_phantom_communicate_set_variable (UcaPhantomCommunicate *self, guint variable_flag, const char *set_value, GError **error_loc);
 void uca_phantom_communicate_print_capture_settings (UcaPhantomCommunicate *self);
-gboolean uca_phantom_communicate_get_capture_settings (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
-gboolean uca_phantom_communicate_set_capture_settings (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
+gboolean uca_phantom_communicate_get_settings (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
+gboolean uca_phantom_communicate_set_settings (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
 gboolean uca_phantom_communicate_start_readout(UcaPhantomCommunicate *self, GError **error_loc);
 gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate *self, GError **error_loc);
 gboolean uca_phantom_communicate_arm (UcaPhantomCommunicate *self, guint cine, GError **error_loc);
