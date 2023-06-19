@@ -66,6 +66,7 @@ enum {
     PROP_TIMESTAMP_FORMAT,
     PROP_XNETCARD,
     PROP_XENABLED,
+    PROP_LIVE_IMAGES,
     N_PHANTOM_PROPERTIES
 };
 
@@ -91,6 +92,7 @@ struct _UcaPhantomCameraPrivate {
     guint max_sensor_resolution_width, max_sensor_resolution_height;
     guint expdead, xinc, yinc;
     gboolean has_streaming, has_camram_recording;
+    gboolean live_images;
     CaptureSettings settings; // Groups all the main writeable properties
 
     // Network properties
@@ -282,6 +284,19 @@ uca_phantom_camera_grab (UcaCamera *camera,
     // First request the images using the communicator
     GError *internal_error = NULL;
 
+    if (priv->live_images) {
+        if (!uca_phantom_communicate_request_images (
+                priv->communicator, 
+                priv->settings.current_cine, 
+                1,
+                priv->settings.image_format,
+                priv->settings.timestamp_format,
+                &internal_error)) {
+            g_propagate_error (error, internal_error);
+            return FALSE;
+        }
+    }
+
     // Grab single image!
     if (!uca_phantom_communicate_grab_image (priv->communicator, data, &internal_error)) {
         g_propagate_error (error, internal_error);
@@ -417,7 +432,13 @@ uca_phantom_camera_set_property (GObject *object,
         case PROP_XENABLED:
             priv->xenabled = g_value_get_boolean (value);
             g_object_set (priv->communicator, "xenabled", priv->xenabled, NULL);
-
+            break;
+        case PROP_LIVE_IMAGES:
+            priv->live_images = g_value_get_boolean (value);
+            if (priv->live_images) 
+                priv->settings.current_cine = -1;
+            else
+                priv->settings.current_cine = 1;
             break;
         default:
             // Warn if the property is not defined in this class
@@ -552,6 +573,9 @@ uca_phantom_camera_get_property (GObject *object,
             break;
         case PROP_XENABLED:
             g_value_set_boolean (value, priv->xenabled);
+            break;
+        case PROP_LIVE_IMAGES:
+            g_value_set_uint (value, priv->live_images);
             break;
         default:
             // Warn if the property is not defined in this class
@@ -845,6 +869,13 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
                               "X enabled",
                               TRUE,
                               G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+                            
+    uca_phantom_camera_properties[PROP_LIVE_IMAGES] =
+        g_param_spec_boolean ("liveimages",
+                           "Grab images from live cine",
+                           "rab images from live cine",
+                           FALSE,
+                           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
     // Implement the base class properties
     for (guint i = 0; base_overrideables[i] != 0; i++) {
@@ -856,8 +887,6 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
 
     g_type_class_add_private (klass, sizeof(UcaPhantomCameraPrivate));
 }
-
-
 
 /**
  *
