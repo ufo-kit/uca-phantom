@@ -5,7 +5,7 @@
 #include <uca/uca-camera.h>
 
 #include "uca-phantom-communicate.h"
-#include "uca-phantom-camera-re.h"
+#include "uca-phantom-camera.h"
 
 // SSE(128) instructions AVX(256); library intrisincs 
 // UCA UFO SSE 

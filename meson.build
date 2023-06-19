@@ -27,7 +27,7 @@ uca_headers = include_directories('@0@/@1@/uca'.format(get_option('prefix'), 'in
 plugindir = uca_dep.get_pkgconfig_variable('plugindir')
 
 phantom = library('ucaphantom',
-    sources: ['uca-phantom-communicate.c', 'uca-phantom-camera-re.c', 'ringbuf.c'],
+    sources: ['uca-phantom-communicate.c', 'uca-phantom-camera.c'],
     dependencies: deps,
     include_directories: headers,
     install: true,
