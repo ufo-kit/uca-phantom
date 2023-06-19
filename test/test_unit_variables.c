@@ -102,9 +102,6 @@ gboolean main() {
     GError *error = NULL;
     gboolean result;
 
-    int cine = 1;
-    guint nb_images = 100;
-
     UcaPhantomCommunicate *communicator = g_object_new (UCA_TYPE_PHANTOM_COMMUNICATE, 
         "phantom_ipsource", USE_CLASS,
         "xenabled", TRUE,
@@ -119,43 +116,6 @@ gboolean main() {
         g_object_unref (communicator);
         return FALSE;
     }
-
-    result = uca_phantom_communicate_connect_xdatastream (communicator, &error);
-    if (!result && error != NULL) {
-        g_print ("Houston theres a problem: %s\n", error->message);
-        g_error_free (error);
-        g_object_unref (communicator);
-        return FALSE;
-    }
-
-    result = uca_phantom_communicate_start_readout(communicator, &error);
-    if (!result && error != NULL) {
-        g_print ("Yo there was an error: %s\n", error->message);
-        g_error_free (error);
-        g_object_unref (communicator);
-        return FALSE;
-    }
-    
-
-    result = uca_phantom_communicate_arm (communicator, cine, &error);
-    if (!result && error != NULL) {
-        g_print ("Yo there was an error: %s\n", error->message);
-        g_error_free (error);
-        g_object_unref (communicator);
-        return FALSE;
-    }
-
-    sleep(2);
-
-    result = uca_phantom_communicate_trigger (communicator, &error);
-    if (!result && error != NULL) {
-        g_print ("Yo there was an error: %s\n", error->message);
-        g_error_free (error);
-        g_object_unref (communicator);
-        return FALSE;
-    }
-
-    sleep(2);
 
     // attempt_get_variable (communicator, UNIT_INFO_CINEMEM);
     // attempt_get_variable (communicator, UNIT_INFO_MEMSZ);
@@ -179,51 +139,9 @@ gboolean main() {
     // attempt_get_variable (communicator, UNIT_CAM_STARTONACQ);
     // attempt_get_variable (communicator, UNIT_INFO_FEATURES);
 
-    
-
-    result = uca_phantom_communicate_request_images(communicator, cine, nb_images, IMG_P12L, TS_NONE, &error);
-    if (!result && error != NULL) {
-        g_print ("Yo there was an error: %s\n", error->message);
-        g_error_free (error);
-        g_object_unref (communicator);
-        return FALSE;
-    }
-
     // attempt_get_variable (communicator, UNIT_DEFC_RATE);
     // attempt_get_variable (communicator, UNIT_DEFC_RES);
 
-    // Save images
-    guint16 *image = NULL;
-    for (gsize i = 0; i < nb_images; i++) {
-        image = g_malloc0 (2 * 2048 * 1952);
-
-        result = uca_phantom_communicate_grab_image (communicator, image, &error);
-        if (!result && error != NULL) {
-            g_print ("Yo there was an error: %s\n", error->message);
-            g_error_free (error);
-            g_object_unref (communicator);
-            return FALSE;
-        }
-
-        for (int i = 0; i < 10; i++) {
-            g_print("%d ", *(guint16 *)(image + i));
-        }
-        g_print("\n");
-
-        gchar *filename = g_strdup_printf ("image_%ld.dat", i);
-        save_image (image, 2048, 1952, filename);
-
-        g_free (filename);
-        g_free (image);
-    }
-
-    result = uca_phantom_communicate_stop_readout(communicator, &error);
-    if (!result && error != NULL) {
-        g_print ("Yo there was an error whenn trying to stop: %s\n", error->message);
-        g_error_free (error);
-        g_object_unref (communicator);
-        return FALSE;
-    }
 
     g_object_unref (communicator);
     return TRUE;

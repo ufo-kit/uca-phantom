@@ -3245,6 +3245,10 @@ gpointer uca_phantom_communicate_unpack_ximg(gpointer data)
         // Append a copy of the current capture settings
         g_ptr_array_add(self->capture_settings, cine_data->Settings);
 
+        for (int i = 0; i < 10; i++) {
+            g_print("%d ", *(guint16 *)(cine_data->UnpackedImages + i));
+        }
+
         // Create a CineData struct for each image in the image buffer
         // CineData *new_cine_data = g_new0 (CineData, cine_data->nb_images);
         gpointer image_buffer_offset = cine_data->UnpackedImages;
@@ -3363,7 +3367,6 @@ gboolean uca_phantom_communicate_grab_image(UcaPhantomCommunicate *self, gpointe
         g_propagate_error(error_loc, phantom_error);
         return FALSE;
     }
-
 
     // copy the image data to the output buffer
     // CAUTION : no verification is done on the size of the output buffer...
