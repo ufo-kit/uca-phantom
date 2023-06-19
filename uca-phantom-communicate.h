@@ -2,27 +2,15 @@
 #define UCA_PHANTOM_COMMUNICATE_H
 
 #include <glib-object.h>
+#include <uca/uca-camera.h>
 
 G_BEGIN_DECLS
 
 #define UCA_TYPE_PHANTOM_COMMUNICATE (uca_phantom_communicate_get_type ())
 G_DECLARE_FINAL_TYPE (UcaPhantomCommunicate, uca_phantom_communicate, UCA, PHANTOM_COMMUNICATE, GObject)
 
-
 typedef struct _PhantomRequest PhantomRequest;
 typedef struct _PhantomReply PhantomReply;
-
-typedef struct _CaptureSettings CaptureSettings;
-struct _CaptureSettings {
-    guint16 width, height;
-    gfloat fps;
-    guint exposure;
-    gfloat focal_length;
-    gfloat aperture;
-    guint post_trigger;
-    guint8 aquisition_mode;
-    guint8 trigger_mode;
-};
 
 #define UCA_PHANTOM_COMMUNICATE_ERROR (uca_phantom_communicate_error_quark ())
 typedef enum {
@@ -37,43 +25,130 @@ typedef enum {
     UCA_PHANTOM_COMMUNICATE_ERROR_ADRESS,
     UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT,
     UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_DATASTREAM,
+    UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_XDATASTREAM,
     UCA_PHANTOM_COMMUNICATE_ERROR_GET_MAC_ADDRESS,
     // Phantom communication error codes
     UCA_PHANTOM_COMMUNICATE_ERROR_GET_VARIABLE,
     UCA_PHANTOM_COMMUNICATE_ERROR_SET_VARIABLE,
     UCA_PHANTOM_COMMUNICATE_ERROR_RUN_COMMAND,
-    UCA_PHANTOM_COMMUNICATE_ERROR_GET_CAPTURE_SETTINGS,
-    UCA_PHANTOM_COMMUNICATE_ERROR_SET_CAPTURE_SETTINGS,
+    UCA_PHANTOM_COMMUNICATE_ERROR_NOTIFY,
+    UCA_PHANTOM_COMMUNICATE_ERROR_GET_SETTINGS,
+    UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS,
     UCA_PHANTOM_COMMUNICATE_ERROR_GET_RESOLUTION,
     UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING,
     UCA_PHANTOM_COMMUNICATE_ERROR_STOP_RECORDING,
+    UCA_PHANTOM_COMMUNICATE_ERROR_DELETE_CINE,
     UCA_PHANTOM_COMMUNICATE_ERROR_TRIGGER,
+    UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES,
     UCA_PHANTOM_COMMUNICATE_ERROR_UNPACK_IMAGE,
     UCA_PHANTOM_COMMUNICATE_ERROR_GRAB_IMAGE,
+    UCA_PHANTOM_COMMUNICATE_ERROR_ACCEPT_XIMG,
+    UCA_PHANTOM_COMMUNICATE_ERROR_ACCEPT_IMG,
     UCA_PHANTOM_COMMUNICATE_ERROR_DISCONNECT_DATASTREAM,
+    UCA_PHANTOM_COMMUNICATE_ERROR_STOP_READOUT,
     UCA_PHANTOM_COMMUNICATE_ERROR_NEXT_EVENT,
     UCA_PHANTOM_COMMUNICATE_ERROR_NO_DATA,
     UCA_PHANTOM_COMMUNICATE_ERROR_INVALID_ARGUMENT,
     UCA_PHANTOM_COMMUNICATE_ERROR_MAYBE_CORRUPTED
 } UcaPhantomCommunicateError;
 
+typedef enum {
+    SYNC_MODE_FREE_RUN = 0,
+    SYNC_MODE_FSYNC,
+    SYNC_MODE_IRIG,
+    SYNC_MODE_VIDEO_FRAME_RATE,
+} SyncMode;
+
+typedef enum {
+    ACQUISITION_MODE_STANDARD = 0,
+    ACQUISITION_MODE_STANDARD_BINNED = 2,
+    ACQUISITION_MODE_HS = 5,
+    ACQUISITION_MODE_HS_BINNED = 7,
+    ACQUISITION_MODE_BRIGHT_FIELD
+} AcquisitionMode;
+
+typedef enum {
+    AUTO_EXP_MODE_OFF = 0,
+    AUTO_EXP_MODE_AVERAGE,
+    AUTO_EXP_MODE_SPOT,
+    AUTO_EXP_MODE_CENTER
+} AutoExpMode;
+
+typedef enum {
+    IMG_8,
+    IMG_8R,
+    IMG_P16,
+    IMG_P16R,
+    IMG_P10,
+    IMG_P12L
+} ImageFormat;
+
+typedef enum {
+    TS_SHORT,
+    TS_SHORT32,
+    TS_LONG,
+    TS_LONG32,
+    TS_NONE // No timestamp is requested
+} TimestampFormat;
+
+typedef struct {
+    gchar *format_string;
+    guint bit_depth;
+    gfloat byte_depth;
+} ImageFormatSpec;
+
+typedef struct {
+    gchar *format_string;
+    guint bit_depth;
+    gfloat byte_depth;
+} TimestampSpec;
+
+typedef struct{
+    // base properties
+    guint16 sensor_pixel_width, sensor_pixel_height, sensor_bit_depth;
+    UcaCameraTriggerSource trigger_source;
+    UcaCameraTriggerType trigger_type;
+    gfloat frames_per_second;
+    gdouble exposure_time;
+    gint roi_pixel_x, roi_pixel_y, roi_pixel_width, roi_pixel_height;
+    guint roi_width_multiplier, roi_height_multiplier;
+
+    // phantom specific properties
+    gfloat focal_length, aperture;
+    guint edr_exp; // EDR exposure time
+    guint shutter_off, aexpmode;
+    gfloat aexpcomp; // Auto exposure compensation
+    guint nb_post_trigger_frames, nb_pre_trigger_frames;
+    guint current_cine; // Current cine number in which the camera is recording
+
+    SyncMode sync_mode;
+    AcquisitionMode acquisition_mode;
+    ImageFormat image_format;
+    TimestampFormat timestamp_format;
+} CaptureSettings;
+
+extern const ImageFormatSpec ImageFormatSpecs[];
+extern const TimestampSpec TimestampSpecs[];
+
 /*
  * Public methods
 */
 UcaPhantomCommunicate *uca_phantom_communicate_new (void);
-gboolean uca_phantom_communicate_attempt_connect (UcaPhantomCommunicate *self, GError **error_loc);
+gboolean uca_phantom_communicate_connect_controlstream (UcaPhantomCommunicate *self, GError **error_loc);
+gboolean uca_phantom_communicate_connect_datastream(UcaPhantomCommunicate *self, GError **error_loc);
+gboolean uca_phantom_communicate_connect_xdatastream (UcaPhantomCommunicate *self, GError **error_loc);
 gboolean uca_phantom_communicate_run_command (UcaPhantomCommunicate *self, guint command_flag, PhantomReply *reply, GError **error_loc, ...);
 gboolean uca_phantom_communicate_get_variable (UcaPhantomCommunicate *self, guint variable_flag, GValue *return_value, GError **error);
 gboolean uca_phantom_communicate_set_variable (UcaPhantomCommunicate *self, guint variable_flag, const char *set_value, GError **error_loc);
 void uca_phantom_communicate_print_capture_settings (UcaPhantomCommunicate *self);
-gboolean uca_phantom_communicate_get_capture_settings (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
-gboolean uca_phantom_communicate_set_capture_settings (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
+gboolean uca_phantom_communicate_get_settings (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
+gboolean uca_phantom_communicate_set_settings (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
 gboolean uca_phantom_communicate_start_readout(UcaPhantomCommunicate *self, GError **error_loc);
 gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate *self, GError **error_loc);
-gboolean uca_phantom_communicate_arm(UcaPhantomCommunicate *self, gchar *cine, GError **error_loc);
+gboolean uca_phantom_communicate_arm (UcaPhantomCommunicate *self, guint cine, GError **error_loc);
 gboolean uca_phantom_communicate_trigger (UcaPhantomCommunicate *self, GError **error_loc);
+gboolean uca_phantom_communicate_trigger_ptframes (UcaPhantomCommunicate *self, guint ptframes, GError **error_loc);
 gboolean uca_phantom_communicate_request_images (UcaPhantomCommunicate *self, gint cine, guint nb_images, guint img_format, guint ts_format, GError **error_loc);
-gboolean uca_phantom_communicate_request_ximages (UcaPhantomCommunicate *self, guint cine, guint nb_images, guint img_format, guint ts_format, GError **error_loc);
 gboolean uca_phantom_communicate_grab_image (UcaPhantomCommunicate *self, gpointer data, GError **error_loc);
 
 
@@ -86,238 +161,223 @@ typedef enum _IP_SOURCE_FLAGS {
     N_IP_FLAGS
 } IP_SOURCE_FLAGS;
 
-typedef enum _ImageFormat {
-    IMG_8,
-    IMG_8R,
-    IMG_P16,
-    IMG_P16R,
-    IMG_P10,
-    IMG_P12L
-} ImageFormat;
-
-typedef enum _TimestampFormat {
-    TS_SHORT,
-    TS_SHORT32,
-    TS_LONG,
-    TS_LONG32,
-    TS_NONE // No timestamp is requested
-} TimestampFormat;
-
 enum PhantomUnitIds {
-    PROP_INFO_SENSOR,
-    PROP_INFO_SNSVERSION,
-    PROP_INFO_CFA,
-    PROP_INFO_FILTER,
-    PROP_INFO_HWVER,
-    PROP_INFO_KERNEL,
-    PROP_INFO_SWVER,
-    PROP_INFO_XVER,
-    PROP_INFO_MODEL,
-    PROP_INFO_PVER,
-    PROP_INFO_SVER,
-    PROP_INFO_SERIAL,
-    PROP_INFO_NAME,
-    PROP_INFO_FEATURES,
-    PROP_INFO_IMGFORMATS,
-    PROP_INFO_VIDEOSYSTEMS,
-    PROP_INFO_MAXCINES,
-    PROP_INFO_XMAX,
-    PROP_INFO_YMAX,
-    PROP_INFO_XINC,
-    PROP_INFO_YINC,
-    PROP_INFO_WINX,
-    PROP_INFO_WINY,
-    PROP_INFO_KERNSZ,
-    PROP_INFO_MEMSZ,
-    PROP_INFO_CINEMEM,
-    PROP_INFO_MDEPTHS,
-    PROP_INFO_EXPDEAD,
-    PROP_INFO_MINEXP,
-    PROP_INFO_XBLOCK,
-    PROP_INFO_YBLOCK,
-    PROP_INFO_PIXPS,
-    PROP_INFO_ROTPS,
-    PROP_INFO_FOTPS,
-    PROP_INFO_MINFRATE,
-    PROP_INFO_MAXRATE,
-    PROP_INFO_TMODEL,
-    PROP_INFO_MAGTP,
-    PROP_INFO_RTOBYTEPS,
-    PROP_INFO_RTOPACKET,
-    PROP_INFO_RTOPACKETOVHEAD,
-    PROP_INFO_RTOFROVHEAD,
-    PROP_INFO_RTO_CHANNELS,
-    PROP_INFO_MODES,
-    PROP_META_NAME,
-    PROP_META_LENS,
-    PROP_META_FSTOP,
-    PROP_META_FLEN,
-    PROP_META_COMMENT,
-    PROP_META_XSET,
-    PROP_CAM_SYNCIMG,
-    PROP_CAM_FRDELAY,
-    PROP_CAM_RTOEN,
-    PROP_CAM_RTOTFR,
-    PROP_CAM_MEMBPP,
-    PROP_CAM_TRIGPOL,
-    PROP_CAM_TRIGFILT,
-    PROP_CAM_STARTONACQ,
-    PROP_CAM_TSFORMAT,
-    PROP_CAM_TCMODE,
-    PROP_CAM_MASTER,
-    PROP_CAM_APOFFDIS,
-    PROP_CAM_LONGREADY,
-    PROP_CAM_CINES,
-    PROP_CAM_DARK,
-    PROP_CAM_TSETSNS,
-    PROP_CAM_TSETCAM,
-    // PROP_CAM_TZ,
-    PROP_CAM_MODE,
-    PROP_ETH_IP,
-    PROP_ETH_NETMASK,
-    PROP_ETH_BROADCAST,
-    PROP_ETH_GATEWAY,
-    PROP_ETH_MTU,
-    PROP_ETH_XIP,
-    PROP_ETH_XNETMASK,
-    PROP_ETH_XBROADCAST,
-    PROP_VIDEO_SYSTEM,
-    PROP_VIDEO_OUTPUT,
-    PROP_VIDEO_FIELDS,
-    PROP_VIDEO_WIDESCREEN,
-    PROP_VIDEO_GENLOCK,
-    PROP_VIDEO_VFMODE,
-    PROP_VIDEO_UZOOM,
-    PROP_VIDEO_VOX,
-    PROP_VIDEO_VOY,
-    PROP_VIDEO_VOW,
-    PROP_VIDEO_VOH,
-    PROP_VIDEO_VW,
-    PROP_VIDEO_VH,
+    UNIT_INFO_SENSOR,
+    UNIT_INFO_SNSVERSION,
+    UNIT_INFO_CFA,
+    UNIT_INFO_FILTER,
+    UNIT_INFO_HWVER,
+    UNIT_INFO_KERNEL,
+    UNIT_INFO_SWVER,
+    UNIT_INFO_XVER,
+    UNIT_INFO_MODEL,
+    UNIT_INFO_PVER,
+    UNIT_INFO_SVER,
+    UNIT_INFO_SERIAL,
+    UNIT_INFO_NAME,
+    UNIT_INFO_FEATURES,
+    UNIT_INFO_IMGFORMATS,
+    UNIT_INFO_VIDEOSYSTEMS,
+    UNIT_INFO_MAXCINES,
+    UNIT_INFO_XMAX,
+    UNIT_INFO_YMAX,
+    UNIT_INFO_XINC,
+    UNIT_INFO_YINC,
+    UNIT_INFO_WINX,
+    UNIT_INFO_WINY,
+    UNIT_INFO_KERNSZ,
+    UNIT_INFO_MEMSZ,
+    UNIT_INFO_CINEMEM,
+    UNIT_INFO_MDEPTHS,
+    UNIT_INFO_EXPDEAD,
+    UNIT_INFO_MINEXP,
+    UNIT_INFO_XBLOCK,
+    UNIT_INFO_YBLOCK,
+    UNIT_INFO_PIXPS,
+    UNIT_INFO_ROTPS,
+    UNIT_INFO_FOTPS,
+    UNIT_INFO_MINFRATE,
+    UNIT_INFO_MAXRATE,
+    UNIT_INFO_TMODEL,
+    UNIT_INFO_MAGTP,
+    UNIT_INFO_RTOBYTEPS,
+    UNIT_INFO_RTOPACKET,
+    UNIT_INFO_RTOPACKETOVHEAD,
+    UNIT_INFO_RTOFROVHEAD,
+    UNIT_INFO_RTO_CHANNELS,
+    UNIT_INFO_MODES,
+    UNIT_META_NAME,
+    UNIT_META_LENS,
+    UNIT_META_FSTOP,
+    UNIT_META_FLEN,
+    UNIT_META_COMMENT,
+    UNIT_META_XSET,
+    UNIT_CAM_SYNCIMG,
+    UNIT_CAM_FRDELAY,
+    UNIT_CAM_RTOEN,
+    UNIT_CAM_RTOTFR,
+    UNIT_CAM_MEMBPP,
+    UNIT_CAM_TRIGPOL,
+    UNIT_CAM_TRIGFILT,
+    UNIT_CAM_STARTONACQ,
+    UNIT_CAM_TSFORMAT,
+    UNIT_CAM_TCMODE,
+    UNIT_CAM_MASTER,
+    UNIT_CAM_APOFFDIS,
+    UNIT_CAM_LONGREADY,
+    UNIT_CAM_CINES,
+    UNIT_CAM_DARK,
+    UNIT_CAM_TSETSNS,
+    UNIT_CAM_TSETCAM,
+    // UNIT_CAM_TZ,
+    UNIT_CAM_MODE,
+    UNIT_ETH_IP,
+    UNIT_ETH_NETMASK,
+    UNIT_ETH_BROADCAST,
+    UNIT_ETH_GATEWAY,
+    UNIT_ETH_MTU,
+    UNIT_ETH_XIP,
+    UNIT_ETH_XNETMASK,
+    UNIT_ETH_XBROADCAST,
+    UNIT_VIDEO_SYSTEM,
+    UNIT_VIDEO_OUTPUT,
+    UNIT_VIDEO_FIELDS,
+    UNIT_VIDEO_WIDESCREEN,
+    UNIT_VIDEO_GENLOCK,
+    UNIT_VIDEO_VFMODE,
+    UNIT_VIDEO_UZOOM,
+    UNIT_VIDEO_VOX,
+    UNIT_VIDEO_VOY,
+    UNIT_VIDEO_VOW,
+    UNIT_VIDEO_VOH,
+    UNIT_VIDEO_VW,
+    UNIT_VIDEO_VH,
     //
-    PROP_VIDEO_ADJ_RED,
-    PROP_VIDEO_ADJ_GREEN,
-    PROP_VIDEO_ADJ_BLUE,
-    PROP_VIDEO_ADJ_TOE,
-    PROP_VIDEO_ADJ_GAMMA,
-    PROP_VIDEO_ADJ_RGAMMA,
-    PROP_VIDEO_ADJ_BGAMMA,
-    PROP_VIDEO_ADJ_GAIN,
-    PROP_VIDEO_ADJ_OFFSET,
-    PROP_VIDEO_ADJ_FLARE,
-    PROP_VIDEO_ADJ_HUE,
-    PROP_VIDEO_ADJ_SAT,
-    PROP_VIDEO_ADJ_RPED,
-    PROP_VIDEO_ADJ_GPED,
-    PROP_VIDEO_ADJ_BPED,
-    PROP_VIDEO_ADJ_CHROMA,
-    PROP_VIDEO_ADJ_TONE,
-    PROP_VIDEO_ADJ_MATRIX,
-    PROP_VIDEO_ADJ_LOG,
+    UNIT_VIDEO_ADJ_RED,
+    UNIT_VIDEO_ADJ_GREEN,
+    UNIT_VIDEO_ADJ_BLUE,
+    UNIT_VIDEO_ADJ_TOE,
+    UNIT_VIDEO_ADJ_GAMMA,
+    UNIT_VIDEO_ADJ_RGAMMA,
+    UNIT_VIDEO_ADJ_BGAMMA,
+    UNIT_VIDEO_ADJ_GAIN,
+    UNIT_VIDEO_ADJ_OFFSET,
+    UNIT_VIDEO_ADJ_FLARE,
+    UNIT_VIDEO_ADJ_HUE,
+    UNIT_VIDEO_ADJ_SAT,
+    UNIT_VIDEO_ADJ_RPED,
+    UNIT_VIDEO_ADJ_GPED,
+    UNIT_VIDEO_ADJ_BPED,
+    UNIT_VIDEO_ADJ_CHROMA,
+    UNIT_VIDEO_ADJ_TONE,
+    UNIT_VIDEO_ADJ_MATRIX,
+    UNIT_VIDEO_ADJ_LOG,
     //
-    PROP_IRIG_SEC,
-    PROP_IRIG_YEARBEGIN,
-    PROP_IRIG_FLAGS,
-    PROP_IRIG_SIGNAL,
-    PROP_IRIG_GPS,
-    // PROP_IRIG_RANGE,
+    UNIT_IRIG_SEC,
+    UNIT_IRIG_YEARBEGIN,
+    UNIT_IRIG_FLAGS,
+    UNIT_IRIG_SIGNAL,
+    UNIT_IRIG_GPS,
+    // UNIT_IRIG_RANGE,
     //
-    PROP_MAG_STATE,
-    PROP_MAG_PROGRESS,
-    PROP_MAG_PROTECT,
-    PROP_MAG_SIZE,
-    PROP_MAG_USED,
-    PROP_MAG_TAKES,
-    PROP_MAG_VERSION,
-    PROP_MAG_ID,
-    PROP_MAG_RUNSTOP,
-    PROP_MAG_TYPE,
+    UNIT_MAG_STATE,
+    UNIT_MAG_PROGRESS,
+    UNIT_MAG_PROTECT,
+    UNIT_MAG_SIZE,
+    UNIT_MAG_USED,
+    UNIT_MAG_TAKES,
+    UNIT_MAG_VERSION,
+    UNIT_MAG_ID,
+    UNIT_MAG_RUNSTOP,
+    UNIT_MAG_TYPE,
     //
-    PROP_DEFC_RES,
-    PROP_DEFC_RATE,
-    PROP_DEFC_EXP,
-    PROP_DEFC_EDREXP,
-    PROP_DEFC_PTFRAMES,
-    PROP_DEFC_SHOFF,
-    PROP_DEFC_RAMP,
-    PROP_DEFC_BCOUNT,
-    PROP_DEFC_BPERIOD,
-    PROP_DEFC_HQENABLE,
-    PROP_DEFC_DECIMATION,
-    PROP_DEFC_FRCOUNT,
-    PROP_DEFC_FRSIZE,
-    PROP_DEFC_AEXPMODE,
-    PROP_DEFC_AEXPCOMP,
-    PROP_DEFC_META_OX,
-    PROP_DEFC_META_OY,
-    PROP_DEFC_META_W,
-    PROP_DEFC_META_H,
-    PROP_DEFC_META_OW,
-    PROP_DEFC_META_OH,
-    PROP_DEFC_META_CROP,
+    UNIT_DEFC_RES,
+    UNIT_DEFC_RATE,
+    UNIT_DEFC_EXP,
+    UNIT_DEFC_EDREXP,
+    UNIT_DEFC_PTFRAMES,
+    UNIT_DEFC_SHOFF,
+    UNIT_DEFC_RAMP,
+    UNIT_DEFC_BCOUNT,
+    UNIT_DEFC_BPERIOD,
+    UNIT_DEFC_HQENABLE,
+    UNIT_DEFC_DECIMATION,
+    UNIT_DEFC_FRCOUNT,
+    UNIT_DEFC_FRSIZE,
+    UNIT_DEFC_AEXPMODE,
+    UNIT_DEFC_AEXPCOMP,
+    UNIT_DEFC_META_OX,
+    UNIT_DEFC_META_OY,
+    UNIT_DEFC_META_W,
+    UNIT_DEFC_META_H,
+    UNIT_DEFC_META_OW,
+    UNIT_DEFC_META_OH,
+    UNIT_DEFC_META_CROP,
     //
-    PROP_CF_STATE,
-    PROP_CF_ACTION,
-    PROP_CF_SIZE,
-    PROP_CF_USED,
-    PROP_CF_PROGRESS,
-    PROP_CF_ERRRCODE,
+    UNIT_CF_STATE,
+    UNIT_CF_ACTION,
+    UNIT_CF_SIZE,
+    UNIT_CF_USED,
+    UNIT_CF_PROGRESS,
+    UNIT_CF_ERRRCODE,
     //    
-    // PROP_CT_STATE,
-    // PROP_CT_FRCOUNT,
-    // PROP_CT_FIRSTFR,
-    // PROP_CT_LASTFR,
-    // PROP_CT_FORMAT,
-    // PROP_CT_IN,
-    // PROP_CT_OUT,
-    // PROP_CT_START,
-    // PROP_CT_LEN,
-    // PROP_CT_FRSIZE,
-    // PROP_CT_FRSPACE,
-    // PROP_CT_TRIGTIME_SECS,
-    // PROP_CT_TRIGTIME_FRAC,
-    // PROP_CT_CAM,
-    // PROP_CT_INFO,
-    // PROP_CT_ADJ,
-    // PROP_CT_META_PBRATE,
-    // PROP_CT_META_TCRATE,
-    // PROP_CT_META_UUID,
-    // PROP_CT_META_SYSTEM,
-    // PROP_CT_META_TRIGTC,
-    // PROP_CT_META_PAX,
-    // PROP_CT_META_PAY,
-    // PROP_CT_META_PAOX,
-    // PROP_CT_META_PAOY,
-    // PROP_CT_META_OX,
-    // PROP_CT_META_OY,
-    // PROP_CT_META_OW,
-    // PROP_CT_META_OH,
-    // PROP_CT_META_W,
-    // PROP_CT_META_H,
-    // PROP_CT_META_CROP,
-    // PROP_CT_META_RESIZE,
-    // PROP_CT_META_GPS,
+    UNIT_CT_STATE,
+    UNIT_CT_FRCOUNT,
+    UNIT_CT_FIRSTFR,
+    UNIT_CT_LASTFR,
+    UNIT_CT_FORMAT,
+    UNIT_CT_IN,
+    UNIT_CT_OUT,
     //
-    PROP_AUTO_VIDEOPLAY,
-    PROP_AUTO_FLASHSAVE,
-    PROP_AUTO_FILESAVE,
-    PROP_AUTO_ACQRESTART,
-    PROP_AUTO_BREF,
-    PROP_AUTO_FIRSTFRAME,
-    PROP_AUTO_LASTFRAME,
-    PROP_AUTO_LOOPS,
-    PROP_AUTO_SPEED,
-    PROP_AUTO_PROGRESS,
-    PROP_AUTO_BREF_PROGRESS,
+    UNIT_CT_START,
+    UNIT_CT_LEN,
+    UNIT_CT_FRSIZE,
+    UNIT_CT_FRSPACE,
+    
+    UNIT_CT_TRIGTIME_SECS,
+    UNIT_CT_TRIGTIME_FRAC,
+    UNIT_CT_CAM,
+    UNIT_CT_INFO,
+    UNIT_CT_ADJ,
+    UNIT_CT_META_PBRATE,
+    UNIT_CT_META_TCRATE,
+    UNIT_CT_META_UUID,
+    UNIT_CT_META_SYSTEM,
+    UNIT_CT_META_TRIGTC,
+    UNIT_CT_META_PAX,
+    UNIT_CT_META_PAY,
+    UNIT_CT_META_PAOX,
+    UNIT_CT_META_PAOY,
+    UNIT_CT_META_OX,
+    UNIT_CT_META_OY,
+    UNIT_CT_META_OW,
+    UNIT_CT_META_OH,
+    UNIT_CT_META_W,
+    UNIT_CT_META_H,
+    UNIT_CT_META_CROP,
+    UNIT_CT_META_RESIZE,
+    UNIT_CT_META_GPS,
     //
-    PROP_AUTO_TRIGGER_X,
-    PROP_AUTO_TRIGGER_Y,
-    PROP_AUTO_TRIGGER_W,
-    PROP_AUTO_TRIGGER_H,
-    PROP_AUTO_TRIGGER_THRESHOLD,
-    PROP_AUTO_TRIGGER_AREA,
-    PROP_AUTO_TRIGGER_SPEED,
-    PROP_AUTO_TRIGGER_MODE,
+    UNIT_AUTO_VIDEOPLAY,
+    UNIT_AUTO_FLASHSAVE,
+    UNIT_AUTO_FILESAVE,
+    UNIT_AUTO_ACQRESTART,
+    UNIT_AUTO_BREF,
+    UNIT_AUTO_FIRSTFRAME,
+    UNIT_AUTO_LASTFRAME,
+    UNIT_AUTO_LOOPS,
+    UNIT_AUTO_SPEED,
+    UNIT_AUTO_PROGRESS,
+    UNIT_AUTO_BREF_PROGRESS,
+    //
+    UNIT_AUTO_TRIGGER_X,
+    UNIT_AUTO_TRIGGER_Y,
+    UNIT_AUTO_TRIGGER_W,
+    UNIT_AUTO_TRIGGER_H,
+    UNIT_AUTO_TRIGGER_THRESHOLD,
+    UNIT_AUTO_TRIGGER_AREA,
+    UNIT_AUTO_TRIGGER_SPEED,
+    UNIT_AUTO_TRIGGER_MODE,
     N_UNIT_PROPERTIES
 };
 

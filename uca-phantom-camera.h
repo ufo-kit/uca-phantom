@@ -72,6 +72,8 @@ struct _UcaPhantomCameraClass {
 
 GType uca_phantom_camera_get_type(void);
 
+UcaPhantomCamera *uca_phantom_camera_new(void);
+
 G_END_DECLS
 
 #endif
