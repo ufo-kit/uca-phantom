@@ -2104,6 +2104,8 @@ gboolean uca_phantom_communicate_request_images(
     GValue val = G_VALUE_INIT;
     GValue val2 = G_VALUE_INIT;
     gboolean result = FALSE;
+    gint cine_start_index = 0;
+    gint cine_nb_recorded_images = 0;
 
     // TODO: check img_format is in the good range
 
@@ -2111,41 +2113,40 @@ gboolean uca_phantom_communicate_request_images(
     self->settings.current_cine = cine;
     self->settings.image_format = img_format;
     self->settings.timestamp_format = ts_format;
-    result = uca_phantom_communicate_set_settings(self, &self->settings, &sub_error);
-    if (result != TRUE && sub_error != NULL)
-    {
-        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES, "Failed to set capture settings:\n\t> %s\n", sub_error->message);
-        g_propagate_error(error_loc, phantom_error);
-        return FALSE;
-    }
 
-    // Get first image index from phantom and nb images
-    result = uca_phantom_communicate_get_variable(self, UNIT_CT_FIRSTFR, &val, &phantom_error);
-    if (result != TRUE && phantom_error != NULL)
-    {
-        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES, "Failed to get first image index:\n\t> %s\n", phantom_error->message);
-        g_propagate_error(error_loc, phantom_error);
-        return FALSE;
-    }
-    result = uca_phantom_communicate_get_variable(self, UNIT_CT_FRCOUNT, &val2, &phantom_error);
-    if (result != TRUE && phantom_error != NULL)
-    {
-        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES, "Failed to get first image index:\n\t> %s\n", phantom_error->message);
-        g_propagate_error(error_loc, phantom_error);
-        return FALSE;
-    }
+    if (cine > 0) {
+        result = uca_phantom_communicate_set_settings(self, &self->settings, &sub_error);
+        if (result != TRUE && sub_error != NULL) {
+            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES, "Failed to set capture settings:\n\t> %s\n", sub_error->message);
+            g_propagate_error(error_loc, phantom_error);
+            return FALSE;
+        }
+        // Get first image index from phantom and nb images
+        result = uca_phantom_communicate_get_variable(self, UNIT_CT_FIRSTFR, &val, &phantom_error);
+        if (result != TRUE && phantom_error != NULL) {
+            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES, "Failed to get first image index:\n\t> %s\n", phantom_error->message);
+            g_propagate_error(error_loc, phantom_error);
+            return FALSE;
+        }
+        result = uca_phantom_communicate_get_variable(self, UNIT_CT_FRCOUNT, &val2, &phantom_error);
+        if (result != TRUE && phantom_error != NULL) {
+            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES, "Failed to get first image index:\n\t> %s\n", phantom_error->message);
+            g_propagate_error(error_loc, phantom_error);
+            return FALSE;
+        }
 
-    gint cine_start_index = g_value_get_int(&val);
-    gint cine_nb_recorded_images = g_value_get_uint(&val2);
-    g_value_unset(&val);
-    g_value_unset(&val2);
+        cine_start_index = g_value_get_int(&val);
+        cine_nb_recorded_images = g_value_get_uint(&val2);
+        g_value_unset(&val);
+        g_value_unset(&val2);
+    }
 
     gint start = 0;
 
-    if (self->settings.nb_pre_trigger_frames > -cine_start_index) {
+    if (self->settings.nb_pre_trigger_frames > -cine_start_index && cine > 0) {
         start = cine_start_index;
     }
-    else {
+    else if (self->settings.nb_pre_trigger_frames < -cine_start_index && cine > 0) {
         g_print ("UH OH pre trigger frames: %d\n", self->settings.nb_pre_trigger_frames);
 
         start = -self->settings.nb_pre_trigger_frames;
@@ -2159,11 +2160,14 @@ gboolean uca_phantom_communicate_request_images(
     // }
     g_print ("total: %d\n", total);
 
-    if (nb_images > cine_nb_recorded_images) {
+    if (nb_images > cine_nb_recorded_images && cine > 0) {
         total = cine_nb_recorded_images;
     }
-    else {
+    else if (nb_images < cine_nb_recorded_images && cine > 0) {
         total = nb_images;
+    }
+    else if (cine == -1) {
+        total = 1;
     }
 
     g_print("cine_start_index: %d\n", cine_start_index);
