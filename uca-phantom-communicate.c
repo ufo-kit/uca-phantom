@@ -1097,8 +1097,7 @@ gboolean uca_phantom_communicate_connect_controlstream(UcaPhantomCommunicate *se
  *
  * TODO: handle the variadic arguments better (i.e. format them into a string that fits the phantom's format)
  */
-gboolean uca_phantom_communicate_run_command(UcaPhantomCommunicate *self, guint command_flag, PhantomReply *reply, GError **error_loc, ...)
-{
+gboolean uca_phantom_communicate_run_command(UcaPhantomCommunicate *self, guint command_flag, PhantomReply *reply, GError **error_loc, ...){
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(command_flag < N_UNIT_COMMANDS, FALSE);
     g_return_val_if_fail(self->control_state == CONNECTED, FALSE);
@@ -1121,11 +1120,9 @@ gboolean uca_phantom_communicate_run_command(UcaPhantomCommunicate *self, guint 
     const gchar *args[nb_arg_max];
 
     va_start(va_args, error_loc);
-    while ((next_arg = va_arg(va_args, gchar *)) != NULL)
-    {
+    while ((next_arg = va_arg(va_args, gchar *)) != NULL) {
         nb_args++;
-        if (nb_args > nb_arg_max)
-        {
+        if (nb_args > nb_arg_max) {
             g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_RUN_COMMAND, "Too many arguments for command %s. Expected %d, got %d.\n", Commands[command_flag].name, Commands[command_flag].argc, nb_args);
             g_propagate_error(error_loc, phantom_error);
             return FALSE;
@@ -1135,8 +1132,7 @@ gboolean uca_phantom_communicate_run_command(UcaPhantomCommunicate *self, guint 
     va_end(va_args);
 
     gsize args_len = 0;
-    for (guint i = 0; i < nb_args; i++)
-    {
+    for (guint i = 0; i < nb_args; i++) {
         args_len += strlen(args[i]);
     }
 
@@ -1144,16 +1140,14 @@ gboolean uca_phantom_communicate_run_command(UcaPhantomCommunicate *self, guint 
     request.size = (strlen(request.command.name) + request.command.argc + args_len + strlen("\r\n")) * sizeof(request.message);
     request.message = g_malloc0(request.size);
 
-    if (request.message == NULL)
-    {
+    if (request.message == NULL) {
         g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_RUN_COMMAND, "Could not allocate and assemble request message. Fatal error.\n");
         g_propagate_error(error_loc, phantom_error);
         return FALSE;
     }
 
     g_strlcat(request.message, request.command.name, request.size);
-    for (guint i = 0; i < nb_args; i++)
-    {
+    for (guint i = 0; i < nb_args; i++) {
         g_strlcat(request.message, " ", request.size);
         g_strlcat(request.message, args[i], request.size);
     }
@@ -1168,8 +1162,7 @@ gboolean uca_phantom_communicate_run_command(UcaPhantomCommunicate *self, guint 
 
     reply->raw = g_malloc0(reply->size);
 
-    if (reply->raw == NULL)
-    {
+    if (reply->raw == NULL) {
         g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_RUN_COMMAND, "Could not allocate reply message. Fatal error.\n");
         g_propagate_error(error_loc, phantom_error);
         g_free(request.message);
@@ -1184,8 +1177,7 @@ gboolean uca_phantom_communicate_run_command(UcaPhantomCommunicate *self, guint 
     g_free(request.message);
     request.message = NULL;
 
-    if (!communicated && sub_error != NULL)
-    {
+    if (!communicated && sub_error != NULL) {
         g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_RUN_COMMAND, "Failed to run command %s: %s\n", request.command.name, sub_error->message);
         g_propagate_error(error_loc, phantom_error);
         g_clear_error(&sub_error);
@@ -1194,14 +1186,12 @@ gboolean uca_phantom_communicate_run_command(UcaPhantomCommunicate *self, guint 
         return FALSE;
     }
 
-    if (communicated && sub_error != NULL)
-    {
+    if (communicated && sub_error != NULL) {
         g_warning("Successfully ran command %s. However, an error occured: %s\n", request.command.name, sub_error->message);
         g_clear_error(&sub_error);
     }
 
-    if (g_str_has_prefix(reply->raw, "ERR:") == TRUE)
-    {
+    if (g_str_has_prefix(reply->raw, "ERR:") == TRUE) {
         g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_RUN_COMMAND, "Phantom returned an error when running command '%s': \n\t> %s\n", request.command.name, reply->raw);
         g_propagate_error(error_loc, phantom_error);
         g_free(reply->raw);
@@ -2114,7 +2104,7 @@ gboolean uca_phantom_communicate_request_images(
     self->settings.image_format = img_format;
     self->settings.timestamp_format = ts_format;
 
-    if (cine > 0) {
+    if (cine >= 0) {
         result = uca_phantom_communicate_set_settings(self, &self->settings, &sub_error);
         if (result != TRUE && sub_error != NULL) {
             g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES, "Failed to set capture settings:\n\t> %s\n", sub_error->message);
@@ -2143,10 +2133,10 @@ gboolean uca_phantom_communicate_request_images(
 
     gint start = 0;
 
-    if (self->settings.nb_pre_trigger_frames > -cine_start_index && cine > 0) {
+    if (self->settings.nb_pre_trigger_frames > -cine_start_index && cine >= 0) {
         start = cine_start_index;
     }
-    else if (self->settings.nb_pre_trigger_frames < -cine_start_index && cine > 0) {
+    else if (self->settings.nb_pre_trigger_frames < -cine_start_index && cine >= 0) {
         g_print ("UH OH pre trigger frames: %d\n", self->settings.nb_pre_trigger_frames);
 
         start = -self->settings.nb_pre_trigger_frames;
@@ -2160,10 +2150,10 @@ gboolean uca_phantom_communicate_request_images(
     // }
     g_print ("total: %d\n", total);
 
-    if (nb_images > cine_nb_recorded_images && cine > 0) {
+    if (nb_images > cine_nb_recorded_images && cine >= 0) {
         total = cine_nb_recorded_images;
     }
-    else if (nb_images < cine_nb_recorded_images && cine > 0) {
+    else if (nb_images < cine_nb_recorded_images && cine >= 0) {
         total = nb_images;
     }
     else if (cine == -1) {
@@ -2174,12 +2164,10 @@ gboolean uca_phantom_communicate_request_images(
     g_print("cine_nb_recorded_images: %d\n", cine_nb_recorded_images);
 
     // Connect the datastreams
-    if (self->xenabled)
-    {
+    if (self->xenabled) {
         // Get the mac address of the camera
         gboolean res = uca_phantom_communicate_get_mac_address(self, &sub_error);
-        if (res != TRUE && sub_error != NULL)
-        {
+        if (res != TRUE && sub_error != NULL) {
             g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to get MAC address:\n\t> %s\n", sub_error->message);
             g_propagate_error(error_loc, phantom_error);
             g_clear_error(&sub_error);
@@ -2193,8 +2181,7 @@ gboolean uca_phantom_communicate_request_images(
                                      self->mac_address[3],
                                      self->mac_address[4],
                                      self->mac_address[5]);
-        if (mac == NULL)
-        {
+        if (mac == NULL) {
             g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to allocate memory for MAC address");
             g_propagate_error(error_loc, phantom_error);
             return FALSE;
@@ -2205,19 +2192,16 @@ gboolean uca_phantom_communicate_request_images(
         request_format = g_strdup_printf("{cine:%d, start:%d, cnt:%d, fmt:%s, dest:%s, from:%d}", cine, start, total, ImageFormatSpecs[img_format].format_string, mac, 0);
         g_print("img_args: %s\n", request_format);
         g_free(mac);
-        if (request_format == NULL)
-        {
+        if (request_format == NULL) {
             g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to allocate memory for get_ximages command");
             g_propagate_error(error_loc, phantom_error);
             return FALSE;
         }
     }
-    else
-    {
+    else {
         // Setup the arguments for image transfer on 1Gb ethernet
         request_format = g_strdup_printf("{cine:%d, start:%d, cnt:%d, fmt:%s}", cine, start, total, ImageFormatSpecs[img_format].format_string);
-        if (request_format == NULL)
-        {
+        if (request_format == NULL) {
             g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to allocate memory for get_images command");
             g_propagate_error(error_loc, phantom_error);
             return FALSE;
@@ -2233,8 +2217,7 @@ gboolean uca_phantom_communicate_request_images(
         &sub_error,
         request_format,
         NULL);
-    if (res != TRUE && sub_error != NULL)
-    {
+    if (res != TRUE && sub_error != NULL) {
         g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to get images:\n\t> %s\n", sub_error->message);
         g_propagate_error(error_loc, phantom_error);
         g_clear_error(&sub_error);
