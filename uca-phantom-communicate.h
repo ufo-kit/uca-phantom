@@ -148,7 +148,7 @@ gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate *self, GErro
 gboolean uca_phantom_communicate_arm (UcaPhantomCommunicate *self, guint cine, GError **error_loc);
 gboolean uca_phantom_communicate_trigger (UcaPhantomCommunicate *self, GError **error_loc);
 gboolean uca_phantom_communicate_trigger_ptframes (UcaPhantomCommunicate *self, guint ptframes, GError **error_loc);
-gboolean uca_phantom_communicate_request_images (UcaPhantomCommunicate *self, gint cine, guint nb_images, guint img_format, guint ts_format, GError **error_loc);
+gboolean uca_phantom_communicate_request_images (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
 gboolean uca_phantom_communicate_grab_image (UcaPhantomCommunicate *self, gpointer data, GError **error_loc);
 
 

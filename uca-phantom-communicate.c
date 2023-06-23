@@ -37,8 +37,7 @@
  * - Add documentation
  */
 
-enum
-{
+enum {
     PROP_PHANTOM_IP = 1,
     PROP_PHANTOM_XIP,
     PROP_NETCARD_IP,
@@ -57,8 +56,7 @@ enum
  * TODO: Add documentation
  * @{
  */
-enum TerminatePhantomDiscover
-{
+enum TerminatePhantomDiscover {
     ALL,
     REGEX,
     RECEIVE,
@@ -66,14 +64,12 @@ enum TerminatePhantomDiscover
     BCAST
 };
 
-typedef enum
-{
+typedef enum {
     CONNECTED,
     DISCONNECTED
 } ConnectionState;
 
-typedef enum
-{
+typedef enum {
     ACQUIRING,
     IDLE
 } AcquisitionState;
@@ -85,28 +81,24 @@ typedef enum
  * @{
  */
 
-typedef struct
-{
+typedef struct {
     gint x, y;
     guint w, h, threshold, area, speed, mode;
 } Trigger;
 
-typedef struct _short_time_stamp
-{                           // cam.tsformat = 0
+typedef struct _short_time_stamp {                           // cam.tsformat = 0
     unsigned int csecs;     // time from beginning of the year in 1/100 sec units
     unsigned short exptime; // exposure time in us
     unsigned short frac;    // bits[15..2]: fractions (us to 10000); b[1]:event;[0]:lock
 } short_time_stamp;
-typedef struct _short_time_stamp32
-{                             // cam.tsformat = 1
+typedef struct _short_time_stamp32 {                             // cam.tsformat = 1
     unsigned int csecs;       // time from beginning of the year in 1/100 sec units
     unsigned short exptime;   // exposure time in us
     unsigned short frac;      // bits[15..2]: fractions (us to 10000); b[1]:event; b[0]:lock
     unsigned short exptime32; // exposure time extension (1/65536 of a us)
     unsigned short frac32;    // time stamp extension (1/65536 of a us)
 } short_time_stamp32;
-typedef struct _long_time_stamp
-{                           // cam.tsformat = 2
+typedef struct _long_time_stamp {                           // cam.tsformat = 2
     unsigned int csecs;     // time from beginning of the year in 1/100 sec units
     unsigned short exptime; // exposure time in us
     unsigned short frac;    // bits[15..2]: fractions (us to 10000); bit[1]:event; bit[0]:lock
@@ -115,8 +107,7 @@ typedef struct _long_time_stamp
     unsigned int range_d2;  // third 32bits received as rangedata, lsb first, big endian
     unsigned int range_d3;  // fourth 32bits received as rangedata, lsb first, big endian
 } long_time_stamp;
-typedef struct _long_time_stamp32
-{                             // cam.tsformat = 3
+typedef struct _long_time_stamp32 {                             // cam.tsformat = 3
     unsigned int csecs;       // time from beginning of the year in 1/100 sec units
     unsigned short exptime;   // exposure time in us
     unsigned short frac;      // bits[15..2]: fractions (us to 10000); bit[1]:event; bit[0]:lock
@@ -135,24 +126,21 @@ typedef struct _long_time_stamp32
  * TODO: Add documentation
  * @{
  */
-struct _PhantomRequest
-{
+struct _PhantomRequest {
     PhantomCommand command;
     gchar *message;
     gsize size;
     gssize write_size;
 };
 
-struct _PhantomReply
-{
+struct _PhantomReply {
     gchar *raw;
     GValue value;
     gsize size;
     gssize read_size;
 };
 
-typedef struct _InternalRequest
-{
+typedef struct _InternalRequest {
     guint64 nb_images;
     ImageFormat img_format;
     gboolean end_request;
@@ -165,8 +153,7 @@ typedef struct _InternalRequest
  * size(bytes):  8   12  24  28
  *
  */
-typedef union
-{
+typedef union {
     short_time_stamp ts0;
     short_time_stamp32 ts1;
     long_time_stamp ts2;
@@ -184,8 +171,7 @@ typedef union
  * @param ts Timestamp
  *
  */
-typedef struct _CineData
-{
+typedef struct _CineData {
     CaptureSettings *Settings;
     ImageFormat ImgFormat;
     TimestampFormat TsFormat;
@@ -252,8 +238,7 @@ static GParamSpec *uca_phantom_communicate_properties[N_PROPERTIES] = {
     NULL,
 };
 
-struct _UcaPhantomCommunicate
-{
+struct _UcaPhantomCommunicate {
     GObject parent_object;
 
     gboolean xenabled, timestamping;
@@ -263,12 +248,14 @@ struct _UcaPhantomCommunicate
     guint control_port;
     guint data_port;
     guint8 mac_address[6];
+    gchar *mac_address_str, *request_image_string;
     guint phantom_ipsource;
 
-    ConnectionState control_state;
-    ConnectionState data_state;
-    AcquisitionState local_state;
-    AcquisitionState phantom_state;
+    ConnectionState control_connection_state;
+    ConnectionState data_connection_state;
+    ConnectionState xdata_connection_state;
+    AcquisitionState local_acquisition_state;
+    AcquisitionState phantom_acquisition_state;
 
     // camera setup variables
     CaptureSettings settings;
@@ -301,8 +288,7 @@ G_DEFINE_TYPE(UcaPhantomCommunicate, uca_phantom_communicate, G_TYPE_OBJECT)
 
 G_DEFINE_QUARK("uca-phantom-communicate-error-quark", uca_phantom_communicate_error)
 
-static void uca_phantom_communicate_class_init(UcaPhantomCommunicateClass *class)
-{
+static void uca_phantom_communicate_class_init(UcaPhantomCommunicateClass *class) {
     GObjectClass *gobject_class = G_OBJECT_CLASS(class);
 
     gobject_class->set_property = uca_phantom_communicate_set_property;
@@ -392,8 +378,7 @@ static void uca_phantom_communicate_class_init(UcaPhantomCommunicateClass *class
         uca_phantom_communicate_properties);
 }
 
-static void uca_phantom_communicate_init(UcaPhantomCommunicate *instance)
-{
+static void uca_phantom_communicate_init(UcaPhantomCommunicate *instance) {
     g_print("Initializing UcaPhantomCommunicate\n");
 
     instance->phantom_ip = NULL;
@@ -402,15 +387,17 @@ static void uca_phantom_communicate_init(UcaPhantomCommunicate *instance)
     instance->xnetcard = NULL;
     instance->netcard_ip = NULL;
     instance->netcard_xip = NULL;
-    instance->xenabled = FALSE;
+    instance->xenabled = TRUE;
     instance->timestamping = FALSE;
-
+    instance->mac_address_str = NULL;
+    instance->request_image_string = g_strdup("{cine:%d, start:%d, cnt:%d, fmt:%s %s}");
     instance->data_port = 7116;
 
-    instance->control_state = DISCONNECTED;
-    instance->data_state = DISCONNECTED;
-    instance->local_state = IDLE;
-    instance->phantom_state = IDLE;
+    instance->control_connection_state = DISCONNECTED;
+    instance->data_connection_state = DISCONNECTED;
+    instance->xdata_connection_state = DISCONNECTED;
+    instance->local_acquisition_state = IDLE;
+    instance->phantom_acquisition_state = IDLE;
 
     // create a new control connection
     instance->control_client = g_socket_client_new();
@@ -462,11 +449,10 @@ static void uca_phantom_communicate_init(UcaPhantomCommunicate *instance)
     };
 }
 
-static void uca_phantom_communicate_constructed(GObject *object)
-{
+static void uca_phantom_communicate_constructed(GObject *object) {
     UcaPhantomCommunicate *instance = UCA_PHANTOM_COMMUNICATE(object);
 
-    instance->control_state = DISCONNECTED;
+    instance->control_connection_state = DISCONNECTED;
 
     if (instance->xenabled)
         instance->packed_queue = g_async_queue_new();
@@ -476,8 +462,7 @@ static void uca_phantom_communicate_constructed(GObject *object)
     G_OBJECT_CLASS(uca_phantom_communicate_parent_class)->constructed(object);
 }
 
-static void uca_phantom_communicate_dispose(GObject *object)
-{
+static void uca_phantom_communicate_dispose(GObject *object) {
     UcaPhantomCommunicate *instance = UCA_PHANTOM_COMMUNICATE(object);
 
     g_print("Disposing UcaPhantomCommunicate\n");
@@ -497,6 +482,8 @@ static void uca_phantom_communicate_dispose(GObject *object)
     g_free(instance->netcard_xip);
     g_free(instance->netcard);
     g_free(instance->xnetcard);
+    g_free(instance->mac_address_str);
+    g_free(instance->request_image_string);
 
     // Empty the unpacked_images and the settings arrays
     g_ptr_array_free(instance->unpacked_images, TRUE);
@@ -536,8 +523,7 @@ static void uca_phantom_communicate_dispose(GObject *object)
     G_OBJECT_CLASS(uca_phantom_communicate_parent_class)->dispose(object);
 }
 
-static void uca_phantom_communicate_finalize(GObject *object)
-{
+static void uca_phantom_communicate_finalize(GObject *object) {
     UcaPhantomCommunicate *instance = UCA_PHANTOM_COMMUNICATE(object);
 
     g_socket_service_stop(instance->service);
@@ -584,33 +570,27 @@ static void uca_phantom_communicate_finalize(GObject *object)
 /*
  * Private class definitions
  */
-static void uca_phantom_communicate_set_phantom_ip(UcaPhantomCommunicate *self, const gchar *property)
-{
+static void uca_phantom_communicate_set_phantom_ip(UcaPhantomCommunicate *self, const gchar *property) {
     g_free(self->phantom_ip);
     self->phantom_ip = g_strdup(property);
 }
-static void uca_phantom_communicate_set_phantom_xip(UcaPhantomCommunicate *self, const gchar *property)
-{
+static void uca_phantom_communicate_set_phantom_xip(UcaPhantomCommunicate *self, const gchar *property) {
     g_free(self->phantom_xip);
     self->phantom_xip = g_strdup(property);
 }
-static void uca_phantom_communicate_set_netcard_ip(UcaPhantomCommunicate *self, const gchar *property)
-{
+static void uca_phantom_communicate_set_netcard_ip(UcaPhantomCommunicate *self, const gchar *property) {
     g_free(self->netcard_ip);
     self->netcard_ip = g_strdup(property);
 }
-static void uca_phantom_communicate_set_netcard_xip(UcaPhantomCommunicate *self, const gchar *property)
-{
+static void uca_phantom_communicate_set_netcard_xip(UcaPhantomCommunicate *self, const gchar *property) {
     g_free(self->netcard_xip);
     self->netcard_xip = g_strdup(property);
 }
-static void uca_phantom_communicate_set_netcard(UcaPhantomCommunicate *self, const gchar *property)
-{
+static void uca_phantom_communicate_set_netcard(UcaPhantomCommunicate *self, const gchar *property) {
     g_free(self->netcard);
     self->netcard = g_strdup(property);
 }
-static void uca_phantom_communicate_set_xnetcard(UcaPhantomCommunicate *self, const gchar *property)
-{
+static void uca_phantom_communicate_set_xnetcard(UcaPhantomCommunicate *self, const gchar *property) {
     g_free(self->xnetcard);
     self->xnetcard = g_strdup(property);
 }
@@ -634,8 +614,7 @@ static void uca_phantom_communicate_set_property(
     GObject *object,
     guint property_id,
     const GValue *value,
-    GParamSpec *pspec)
-{
+    GParamSpec *pspec) {
     UcaPhantomCommunicate *self = UCA_PHANTOM_COMMUNICATE(object);
 
     switch (property_id)
@@ -680,8 +659,7 @@ static void uca_phantom_communicate_get_property(
     GObject *object,
     guint property_id,
     GValue *value,
-    GParamSpec *pspec)
-{
+    GParamSpec *pspec) {
     UcaPhantomCommunicate *self = UCA_PHANTOM_COMMUNICATE(object);
 
     switch (property_id)
@@ -723,8 +701,7 @@ static void uca_phantom_communicate_get_property(
 }
 
 static gchar *
-uca_phantom_communicate_discover(UcaPhantomCommunicate *self, GError **error_loc)
-{
+uca_phantom_communicate_discover(UcaPhantomCommunicate *self, GError **error_loc) {
     // Note: find a way to do this without a goto statement.
 
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, NULL); // verify that error_loc is not set
@@ -901,11 +878,10 @@ cleanup:
  * only be accessed using the provided API.
  */
 static gboolean
-uca_phantom_communicate(UcaPhantomCommunicate *self, PhantomRequest *request, PhantomReply *reply, GError **error_loc)
-{
+uca_phantom_communicate(UcaPhantomCommunicate *self, PhantomRequest *request, PhantomReply *reply, GError **error_loc) {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(request != NULL || reply != NULL, FALSE);
-    g_return_val_if_fail(self->control_state == CONNECTED, FALSE);
+    g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
     g_return_val_if_fail(G_IS_INPUT_STREAM(self->input_controlstream), FALSE);
     g_return_val_if_fail(G_IS_OUTPUT_STREAM(self->output_controlstream), FALSE);
 
@@ -960,15 +936,13 @@ uca_phantom_communicate(UcaPhantomCommunicate *self, PhantomRequest *request, Ph
  * Public methods
  *
  */
-UcaPhantomCommunicate *uca_phantom_communicate_new(void)
-{
+UcaPhantomCommunicate *uca_phantom_communicate_new(void) {
     return g_object_new(UCA_TYPE_PHANTOM_COMMUNICATE, NULL);
 }
 
-gboolean uca_phantom_communicate_connect_controlstream(UcaPhantomCommunicate *self, GError **error_loc)
-{
+gboolean uca_phantom_communicate_connect_controlstream(UcaPhantomCommunicate *self, GError **error_loc) {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
-    g_return_val_if_fail(self->control_state == DISCONNECTED, FALSE);
+    g_return_val_if_fail(self->control_connection_state == DISCONNECTED, FALSE);
 
     GError *sub_error = NULL;
     GError *phantom_error = NULL;
@@ -1031,7 +1005,7 @@ gboolean uca_phantom_communicate_connect_controlstream(UcaPhantomCommunicate *se
         return FALSE;
     }
 
-    self->control_state = CONNECTED;
+    self->control_connection_state = CONNECTED;
 
     self->output_controlstream = g_io_stream_get_output_stream(G_IO_STREAM(self->control_connection));
     self->input_controlstream = g_io_stream_get_input_stream(G_IO_STREAM(self->control_connection));
@@ -1100,7 +1074,7 @@ gboolean uca_phantom_communicate_connect_controlstream(UcaPhantomCommunicate *se
 gboolean uca_phantom_communicate_run_command(UcaPhantomCommunicate *self, guint command_flag, PhantomReply *reply, GError **error_loc, ...){
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(command_flag < N_UNIT_COMMANDS, FALSE);
-    g_return_val_if_fail(self->control_state == CONNECTED, FALSE);
+    g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
 
     GError *sub_error = NULL;
     GError *phantom_error = NULL;
@@ -1214,11 +1188,10 @@ gboolean uca_phantom_communicate_run_command(UcaPhantomCommunicate *self, guint 
  * @param error_loc
  * @return gboolean
  */
-gboolean uca_phantom_communicate_get_variable(UcaPhantomCommunicate *self, guint variable_flag, GValue *return_value, GError **error_loc)
-{
+gboolean uca_phantom_communicate_get_variable(UcaPhantomCommunicate *self, guint variable_flag, GValue *return_value, GError **error_loc) {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(variable_flag < N_UNIT_PROPERTIES, FALSE);
-    g_return_val_if_fail(self->control_state == CONNECTED, FALSE);
+    g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
 
     GError *sub_error = NULL;
     GError *phantom_error = NULL;
@@ -1325,13 +1298,12 @@ gboolean uca_phantom_communicate_get_variable(UcaPhantomCommunicate *self, guint
  * @param error_loc
  * @return gboolean
  */
-gboolean uca_phantom_communicate_set_variable(UcaPhantomCommunicate *self, guint variable_flag, const gchar *value, GError **error_loc)
-{
+gboolean uca_phantom_communicate_set_variable(UcaPhantomCommunicate *self, guint variable_flag, const gchar *value, GError **error_loc) {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(variable_flag < N_UNIT_PROPERTIES, FALSE);
     g_return_val_if_fail(value != NULL, FALSE);
     g_return_val_if_fail(variables[variable_flag].flags & G_PARAM_WRITABLE, FALSE);
-    g_return_val_if_fail(self->control_state == CONNECTED, FALSE);
+    g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
 
     GError *sub_error = NULL;
     GError *phantom_error = NULL;
@@ -1352,10 +1324,9 @@ gboolean uca_phantom_communicate_set_variable(UcaPhantomCommunicate *self, guint
     return TRUE;
 }
 
-static gboolean uca_phantom_communicate_get_resolution(UcaPhantomCommunicate *self, guint16 *width, guint16 *height, GError **error_loc)
-{
+static gboolean uca_phantom_communicate_get_resolution(UcaPhantomCommunicate *self, guint16 *width, guint16 *height, GError **error_loc) {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
-    g_return_val_if_fail(self->control_state == CONNECTED, FALSE);
+    g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
 
     GError *sub_error = NULL;
     GError *phantom_error = NULL;
@@ -1416,24 +1387,21 @@ static gboolean uca_phantom_communicate_get_resolution(UcaPhantomCommunicate *se
     return TRUE;
 }
 
-guint uca_phantom_communicate_get_pixel_width(UcaPhantomCommunicate *self)
-{
-    g_return_val_if_fail(self->control_state == CONNECTED, 0);
+guint uca_phantom_communicate_get_pixel_width(UcaPhantomCommunicate *self) {
+    g_return_val_if_fail(self->control_connection_state == CONNECTED, 0);
     return self->settings.sensor_pixel_width;
 }
-guint uca_phantom_communicate_get_pixel_height(UcaPhantomCommunicate *self)
-{
-    g_return_val_if_fail(self->control_state == CONNECTED, 0);
+guint uca_phantom_communicate_get_pixel_height(UcaPhantomCommunicate *self) {
+    g_return_val_if_fail(self->control_connection_state == CONNECTED, 0);
     return self->settings.sensor_pixel_height;
 }
 
 /**
  * Print the current capture settings
  */
-void uca_phantom_communicate_print_settings(UcaPhantomCommunicate *self)
-{
+void uca_phantom_communicate_print_settings(UcaPhantomCommunicate *self) {
     g_return_if_fail(self != NULL);
-    g_return_if_fail(self->control_state == CONNECTED);
+    g_return_if_fail(self->control_connection_state == CONNECTED);
 }
 
 /**
@@ -1444,9 +1412,8 @@ void uca_phantom_communicate_print_settings(UcaPhantomCommunicate *self)
  * @param error_loc
  * @return gboolean
  */
-gboolean uca_phantom_communicate_set_settings(UcaPhantomCommunicate *self, CaptureSettings *ext_settings, GError **error_loc)
-{
-    g_return_val_if_fail(self->control_state == CONNECTED, FALSE);
+gboolean uca_phantom_communicate_set_settings(UcaPhantomCommunicate *self, CaptureSettings *ext_settings, GError **error_loc) {
+    g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
     static gboolean first_call = TRUE;
 
     GError *sub_error = NULL;
@@ -1639,16 +1606,14 @@ gboolean uca_phantom_communicate_set_settings(UcaPhantomCommunicate *self, Captu
     return TRUE;
 }
 
-gboolean uca_phantom_communicate_connect_datastream(UcaPhantomCommunicate *self, GError **error_loc)
-{
+gboolean uca_phantom_communicate_connect_datastream(UcaPhantomCommunicate *self, GError **error_loc) {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
 
     GError *sub_error = NULL;
     GError *phantom_error = NULL;
 
     if (!g_socket_listener_add_inet_port(
-            G_SOCKET_LISTENER(self->service), self->data_port, NULL, &sub_error))
-    {
+            G_SOCKET_LISTENER(self->service), self->data_port, NULL, &sub_error)) {
         g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_DATASTREAM, "Failed to listen on port %d:\n\t> %s\n", self->data_port, sub_error->message);
         g_propagate_error(error_loc, phantom_error);
         g_clear_error(&sub_error);
@@ -1704,6 +1669,8 @@ gboolean uca_phantom_communicate_connect_datastream(UcaPhantomCommunicate *self,
 
     g_message("Data connection established with phantom (%s:%d) -> (%s:%d)\n", local_ip_address, local_port, remote_ip_address, remote_port);
 
+    self->data_connection_state = CONNECTED;
+
     g_object_unref(remote_address);
     g_object_unref(local_address);
     g_free(remote_ip_address);
@@ -1718,8 +1685,7 @@ gboolean uca_phantom_communicate_connect_datastream(UcaPhantomCommunicate *self,
  * Opens a socket that accepts connections from the Phantom on port @port.
  *
  */
-gboolean uca_phantom_communicate_connect_xdatastream(UcaPhantomCommunicate *self, GError **error_loc)
-{
+gboolean uca_phantom_communicate_connect_xdatastream(UcaPhantomCommunicate *self, GError **error_loc) {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
 
     GError *phantom_error = NULL;
@@ -1780,15 +1746,14 @@ gboolean uca_phantom_communicate_connect_xdatastream(UcaPhantomCommunicate *self
     }
     pcap_freecode(&fp);
 
+    self->xdata_connection_state = CONNECTED;
+
     return TRUE;
 }
 
-gboolean uca_phantom_communicate_disconnect_datastream(UcaPhantomCommunicate *self, GError **error_loc)
-{
+gboolean uca_phantom_communicate_disconnect_datastream(UcaPhantomCommunicate *self, GError **error_loc) {
     // First check if started readout
-
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
-
     g_return_val_if_fail(G_IS_INPUT_STREAM(self->input_datastream), FALSE);
     g_return_val_if_fail(G_IS_SOCKET_CONNECTION(self->data_connection), FALSE);
 
@@ -1798,8 +1763,7 @@ gboolean uca_phantom_communicate_disconnect_datastream(UcaPhantomCommunicate *se
     // Data stream is ended when the socket is closed
     g_print("Closing input stream\n");
     g_input_stream_close(self->input_datastream, NULL, &sub_error);
-    if (sub_error != NULL)
-    {
+    if (sub_error != NULL) {
         g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_DISCONNECT_DATASTREAM, "Failed to close input stream:\n\t> %s\n", sub_error->message);
         g_propagate_error(error_loc, phantom_error);
         g_clear_error(&sub_error);
@@ -1807,6 +1771,24 @@ gboolean uca_phantom_communicate_disconnect_datastream(UcaPhantomCommunicate *se
     }
 
     g_print("Closing listener\n");
+    self->data_connection_state = DISCONNECTED;
+
+    return TRUE;
+}
+
+gboolean uca_phantom_communicate_disconnect_xdatastream(UcaPhantomCommunicate *self, GError **error_loc) {
+    // First check if started readout
+    g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
+    g_return_val_if_fail(G_IS_INPUT_STREAM(self->input_datastream), FALSE);
+    g_return_val_if_fail(G_IS_SOCKET_CONNECTION(self->data_connection), FALSE);
+
+    GError *sub_error = NULL;
+    GError *phantom_error = NULL;
+
+    pcap_close(self->handle);
+    self->handle = NULL;
+
+    self->xdata_connection_state = DISCONNECTED;
 
     return TRUE;
 }
@@ -1819,42 +1801,15 @@ gboolean uca_phantom_communicate_disconnect_datastream(UcaPhantomCommunicate *se
  * @param error_loc
  * @return gboolean
  */
-gboolean uca_phantom_communicate_arm(UcaPhantomCommunicate *self, guint cine, GError **error_loc)
-{
+gboolean uca_phantom_communicate_arm(UcaPhantomCommunicate *self, guint cine, GError **error_loc) {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
-    g_return_val_if_fail(self->control_state == CONNECTED, FALSE);
+    g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
 
     GError *sub_error = NULL;
     GError *phantom_error = NULL;
     gchar *cine_str;
     gboolean res;
     PhantomReply reply;
-
-    if (self->settings.current_cine != cine)
-    {
-        self->settings.current_cine = cine;
-    }
-    else
-    {
-        // First delete the current cine
-        // cine_str = g_strdup_printf("%d", cine);
-        // res = uca_phantom_communicate_run_command (self, CMD_DELETE_A_CINE, &reply, &sub_error, cine_str, NULL);
-        // g_free (cine_str);
-        // if (res != TRUE && sub_error != NULL) {
-        //     g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_DELETE_CINE, "Failed to delete cine:\n\t> %s\n", sub_error->message);
-        //     g_propagate_error (error_loc, phantom_error);
-        //     g_clear_error (&sub_error);
-        //     g_free (reply.raw);
-        //     return FALSE;
-        // }
-        // g_free (reply.raw);
-    }
-
-    if (self->phantom_state == ACQUIRING)
-    {
-        g_message("Phantom already armed in the cine %d\n", cine);
-        return TRUE;
-    }
 
     // Set the capture settings
     cine_str = g_strdup_printf("%d", cine);
@@ -1869,7 +1824,7 @@ gboolean uca_phantom_communicate_arm(UcaPhantomCommunicate *self, guint cine, GE
         return FALSE;
     }
 
-    self->phantom_state = ACQUIRING;
+    self->phantom_acquisition_state = ACQUIRING;
     g_free(reply.raw);
 
     return TRUE;
@@ -1884,10 +1839,9 @@ gboolean uca_phantom_communicate_arm(UcaPhantomCommunicate *self, guint cine, GE
  * @param error_loc
  * @return gboolean
  */
-gboolean uca_phantom_communicate_trigger(UcaPhantomCommunicate *self, GError **error_loc)
-{
+gboolean uca_phantom_communicate_trigger(UcaPhantomCommunicate *self, GError **error_loc) {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
-    g_return_val_if_fail(self->control_state == CONNECTED, FALSE);
+    g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
 
     GError *sub_error = NULL;
     GError *phantom_error = NULL;
@@ -1921,10 +1875,9 @@ gboolean uca_phantom_communicate_trigger(UcaPhantomCommunicate *self, GError **e
  * NOTE: the function first sets the ptframes variable to the desired value, then triggers the camera.
  * Therefore there is a slight delay between the function call and the actual trigger.
  */
-gboolean uca_phantom_communicate_trigger_ptframes(UcaPhantomCommunicate *self, guint ptframes, GError **error_loc)
-{
+gboolean uca_phantom_communicate_trigger_ptframes(UcaPhantomCommunicate *self, guint ptframes, GError **error_loc) {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
-    g_return_val_if_fail(self->control_state == CONNECTED, FALSE);
+    g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
 
     GError *sub_error = NULL;
     GError *phantom_error = NULL;
@@ -1960,7 +1913,7 @@ gboolean uca_phantom_communicate_trigger_ptframes(UcaPhantomCommunicate *self, g
 
 // static gboolean uca_phantom_communicate_notify (UcaPhantomCommunicate *self, GError **error_loc) {
 //     g_return_val_if_fail (error_loc == NULL || *error_loc == NULL, FALSE);
-//     g_return_val_if_fail (self->control_state == CONNECTED, FALSE);
+//     g_return_val_if_fail (self->control_connection_state == CONNECTED, FALSE);
 
 //     GError *sub_error = NULL;
 //     GError *phantom_error = NULL;
@@ -1986,8 +1939,7 @@ gboolean uca_phantom_communicate_trigger_ptframes(UcaPhantomCommunicate *self, g
 //     return TRUE;
 // }
 
-gboolean uca_phantom_communicate_get_mac_address(UcaPhantomCommunicate *self, GError **error_loc)
-{
+gboolean uca_phantom_communicate_get_mac_address(UcaPhantomCommunicate *self, GError **error_loc) {
     g_return_val_if_fail(UCA_IS_PHANTOM_COMMUNICATE(self), FALSE);
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
 
@@ -2075,42 +2027,25 @@ gboolean uca_phantom_communicate_get_mac_address(UcaPhantomCommunicate *self, GE
 
 gboolean uca_phantom_communicate_request_images(
     UcaPhantomCommunicate *self,
-    gint cine,
-    guint nb_images,
-    guint img_format,
-    guint ts_format,
-    GError **error_loc)
-{
+    CaptureSettings *settings,
+    GError **error_loc) {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
-    g_return_val_if_fail(self->control_state == CONNECTED, FALSE);
-    g_return_val_if_fail(self->local_state == ACQUIRING, FALSE);
+    g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
+    g_return_val_if_fail(self->local_acquisition_state == ACQUIRING, FALSE);
 
     GError *phantom_error = NULL;
     GError *sub_error = NULL;
-    PhantomReply reply = {
-        0,
-    };
     gchar *request_format = NULL;
     GValue val = G_VALUE_INIT;
     GValue val2 = G_VALUE_INIT;
     gboolean result = FALSE;
     gint cine_start_index = 0;
     gint cine_nb_recorded_images = 0;
-
-    // TODO: check img_format is in the good range
-
-    // Update CaptureSettings
-    self->settings.current_cine = cine;
-    self->settings.image_format = img_format;
-    self->settings.timestamp_format = ts_format;
+    gint cine = settings->current_cine;
+    gint nb_images = settings->nb_post_trigger_frames + settings->nb_pre_trigger_frames;
+    guint img_format = settings->image_format;
 
     if (cine >= 0) {
-        result = uca_phantom_communicate_set_settings(self, &self->settings, &sub_error);
-        if (result != TRUE && sub_error != NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES, "Failed to set capture settings:\n\t> %s\n", sub_error->message);
-            g_propagate_error(error_loc, phantom_error);
-            return FALSE;
-        }
         // Get first image index from phantom and nb images
         result = uca_phantom_communicate_get_variable(self, UNIT_CT_FIRSTFR, &val, &phantom_error);
         if (result != TRUE && phantom_error != NULL) {
@@ -2131,118 +2066,168 @@ gboolean uca_phantom_communicate_request_images(
         g_value_unset(&val2);
     }
 
-    gint start = 0;
+    gint start = 0, total = 0;
 
-    if (self->settings.nb_pre_trigger_frames > -cine_start_index && cine >= 0) {
+    if (cine_start_index < 0) {
+        if (-settings->nb_pre_trigger_frames < cine_start_index) {
+            start = cine_start_index;
+        }
+        else {
+            start = -settings->nb_pre_trigger_frames;
+        }
+    }
+    else {
         start = cine_start_index;
     }
-    else if (self->settings.nb_pre_trigger_frames < -cine_start_index && cine >= 0) {
-        g_print ("UH OH pre trigger frames: %d\n", self->settings.nb_pre_trigger_frames);
 
-        start = -self->settings.nb_pre_trigger_frames;
+    if (cine == -1) {
+        total = 1;
     }
-
-    gint total = self->settings.nb_post_trigger_frames + self->settings.nb_post_trigger_frames;
-    // if (total != nb_images) {
-    //     g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES, "Failed to get first image index:\n\t> %s\n", phantom_error->message);
-    //     g_propagate_error(error_loc, phantom_error);
-    //     return FALSE;
-    // }
-    g_print ("total: %d\n", total);
-
-    if (nb_images > cine_nb_recorded_images && cine >= 0) {
+    else if (nb_images > cine_nb_recorded_images) {
         total = cine_nb_recorded_images;
     }
-    else if (nb_images < cine_nb_recorded_images && cine >= 0) {
+    else {
         total = nb_images;
-    }
-    else if (cine == -1) {
-        total = 1;
     }
 
     g_print("cine_start_index: %d\n", cine_start_index);
     g_print("cine_nb_recorded_images: %d\n", cine_nb_recorded_images);
 
-    // Connect the datastreams
-    if (self->xenabled) {
-        // Get the mac address of the camera
+
+    // Make sure we have the mac address, should already be done though
+    if (self->xenabled && self->mac_address_str == NULL) {
         gboolean res = uca_phantom_communicate_get_mac_address(self, &sub_error);
         if (res != TRUE && sub_error != NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to get MAC address:\n\t> %s\n", sub_error->message);
+            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES, "Failed to get MAC address:\n\t> %s\n", sub_error->message);
             g_propagate_error(error_loc, phantom_error);
             g_clear_error(&sub_error);
             return FALSE;
         }
-
-        gchar *mac = g_strdup_printf("%02x%02x%02x%02x%02x%02x",
-                                     self->mac_address[0],
-                                     self->mac_address[1],
-                                     self->mac_address[2],
-                                     self->mac_address[3],
-                                     self->mac_address[4],
-                                     self->mac_address[5]);
-        if (mac == NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to allocate memory for MAC address");
+        
+        self->mac_address_str = g_strdup_printf ("%02x%02x%02x%02x%02x%02x",
+                                    self->mac_address[0],
+                                    self->mac_address[1],
+                                    self->mac_address[2],
+                                    self->mac_address[3],
+                                    self->mac_address[4],
+                                    self->mac_address[5]);
+        if (self->mac_address_str) {
+            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES, "Failed to allocate memory for MAC address");
             g_propagate_error(error_loc, phantom_error);
             return FALSE;
         }
+    }
 
-        // Setup the arguments for ximg command
-        // ximg {cine:<cine_number>, start:<first_frame>, cnt:<frame_count>, dest:<mac_address>, from:<image_source>}
-        request_format = g_strdup_printf("{cine:%d, start:%d, cnt:%d, fmt:%s, dest:%s, from:%d}", cine, start, total, ImageFormatSpecs[img_format].format_string, mac, 0);
-        g_print("img_args: %s\n", request_format);
-        g_free(mac);
-        if (request_format == NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to allocate memory for get_ximages command");
-            g_propagate_error(error_loc, phantom_error);
-            return FALSE;
+    // Ask images by blocks of MaxNumberImagesPerRequest (if nb_images > MaxNumberImagesPerRequest)
+    // so as to not overflow the buffer, and give time to libuca to pull the images incrementally
+    // Sort of cheated version of a real buffered image request. This method will use a lot of memory
+    // if the images are not pulled fast enough by libuca.
+    // Will do fine for now. 
+    // TODO: finish implementing a thread safe ring buffer
+    if (self->xenabled) {
+        gchar *additional = g_strdup_printf (", dest:%s, from:%d\n", self->mac_address_str, 0);
+        guint nb_sub_images = 0, nb_images_left = total;
+
+        while (nb_images_left > 0) {
+            // format: {cine:<cine_number>, start:<first_frame>, cnt:<frame_count>, fmt:<image_format>, dest:<mac_address>, from:<image_source>}
+            nb_sub_images = nb_images_left > MaxNumberImagesPerRequest[img_format] ? MaxNumberImagesPerRequest[img_format] : nb_images_left;
+            request_format = g_strdup_printf(self->request_image_string, cine, start, nb_sub_images, ImageFormatSpecs[img_format].format_string, additional);
+            if (request_format == NULL) {
+                g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES, "Failed to allocate memory for get_ximages command");
+                g_propagate_error(error_loc, phantom_error);
+                g_free (additional);
+                return FALSE;
+            }
+            start += nb_sub_images;
+            nb_images_left -= nb_sub_images;
+
+            // Request the datatransfer
+            PhantomReply reply = {0, };
+            gboolean res = uca_phantom_communicate_run_command(
+                self,
+                CMD_GET_XIMAGES,
+                &reply,
+                &sub_error,
+                request_format,
+                NULL);
+            g_free(request_format);
+            request_format = NULL;
+            g_free(reply.raw);
+            reply.raw = NULL;
+            if (res != TRUE && sub_error != NULL) {
+                g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES, "Failed to request images:\n\t> %s\n", sub_error->message);
+                g_propagate_error(error_loc, phantom_error);
+                g_clear_error(&sub_error);
+                g_free (additional);
+                return FALSE;
+            }
+
+            // Create internal request
+            InternalRequest *request = g_new0(InternalRequest, 1);
+            request->nb_images = nb_sub_images;
+            request->img_format = img_format;
+            request->end_request = FALSE;
+
+            // Push request to request queue
+            g_async_queue_push(self->request_queue, request);
         }
+        g_free (additional);
     }
     else {
         // Setup the arguments for image transfer on 1Gb ethernet
-        request_format = g_strdup_printf("{cine:%d, start:%d, cnt:%d, fmt:%s}", cine, start, total, ImageFormatSpecs[img_format].format_string);
-        if (request_format == NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to allocate memory for get_images command");
-            g_propagate_error(error_loc, phantom_error);
-            return FALSE;
+        gchar *additional = g_strdup_printf ("\n");
+        guint nb_sub_images = 0, nb_images_left = total;
+
+        while (nb_images_left > 0) {
+            // format: {cine:<cine_number>, start:<first_frame>, cnt:<frame_count>, fmt:<image_format>, dest:<mac_address>, from:<image_source>}
+            nb_sub_images = nb_images_left > MaxNumberImagesPerRequest[img_format] ? MaxNumberImagesPerRequest[img_format] : nb_images_left;
+            request_format = g_strdup_printf(self->request_image_string, cine, start, nb_sub_images, ImageFormatSpecs[img_format].format_string, additional);
+            if (request_format == NULL) {
+                g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES, "Failed to allocate memory for get_ximages command");
+                g_propagate_error(error_loc, phantom_error);
+                g_free (additional);
+                return FALSE;
+            }
+            start += nb_sub_images;
+            nb_images_left -= nb_sub_images;
+
+            // Request the datatransfer
+            PhantomReply reply = {0, };
+            gboolean res = uca_phantom_communicate_run_command(
+                self,
+                CMD_GET_IMAGES,
+                &reply,
+                &sub_error,
+                request_format,
+                NULL);
+            g_free(request_format);
+            request_format = NULL;
+            g_free(reply.raw);
+            reply.raw = NULL;
+            if (res != TRUE && sub_error != NULL) {
+                g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES, "Failed to request images:\n\t> %s\n", sub_error->message);
+                g_propagate_error(error_loc, phantom_error);
+                g_clear_error(&sub_error);
+                g_free (additional);
+                return FALSE;
+            }
+
+            // Create internal request
+            InternalRequest *request = g_new0(InternalRequest, 1);
+            request->nb_images = nb_sub_images;
+            request->img_format = img_format;
+            request->end_request = FALSE;
+
+            // Push request to request queue
+            g_async_queue_push(self->request_queue, request);
         }
-    }
-
-    // Request the datatransfer
-    guint command_flag = self->xenabled ? CMD_GET_XIMAGES : CMD_GET_IMAGES;
-    gboolean res = uca_phantom_communicate_run_command(
-        self,
-        command_flag,
-        &reply,
-        &sub_error,
-        request_format,
-        NULL);
-    if (res != TRUE && sub_error != NULL) {
-        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to get images:\n\t> %s\n", sub_error->message);
-        g_propagate_error(error_loc, phantom_error);
-        g_clear_error(&sub_error);
-        g_free(request_format);
-        return FALSE;
-    }
-    g_free(request_format);
-    request_format = NULL;
-    g_free(reply.raw);
-    reply.raw = NULL;
-
-    // Create internal request
-    InternalRequest *request = g_new0(InternalRequest, 1);
-    request->nb_images = total;
-    request->img_format = img_format;
-    request->end_request = FALSE;
-
-    // Push request to request queue
-    g_async_queue_push(self->request_queue, request);
+        g_free (additional);
+    }  
 
     return TRUE;
 }
 
-static void uca_phantom_communicate_free_request(InternalRequest *request)
-{
+static void uca_phantom_communicate_free_request(InternalRequest *request) {
     // TODO: check if CaptureSettings needs to be freed
     g_free(request);
 }
@@ -2254,7 +2239,7 @@ static void uca_phantom_communicate_free_request(InternalRequest *request)
 //  * @return gpointer
 //  */
 // static gpointer uca_phantom_communicate_accept_timestamps (UcaPhantomCommunicate *self, InternalRequest *request) {
-//     g_return_val_if_fail (self->control_state == CONNECTED, NULL);
+//     g_return_val_if_fail (self->control_connection_state == CONNECTED, NULL);
 
 //     GError *sub_error = NULL;
 //     gsize ts_size = 0;
@@ -2362,11 +2347,10 @@ static void uca_phantom_communicate_free_request(InternalRequest *request)
  *
  * @note This function uses a TCP connection to read images from the camera.
  */
-static gpointer uca_phantom_communicate_accept_img(gpointer data)
-{
+static gpointer uca_phantom_communicate_accept_img(gpointer data) {
     UcaPhantomCommunicate *self = UCA_PHANTOM_COMMUNICATE(data);
 
-    g_return_val_if_fail(self->control_state == CONNECTED, NULL);
+    g_return_val_if_fail(self->control_connection_state == CONNECTED, NULL);
 
     GError *error = NULL;
     GError *sub_error = NULL;
@@ -2498,10 +2482,9 @@ static gpointer uca_phantom_communicate_accept_img(gpointer data)
  * @param data
  * @return gpointer
  */
-static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
-{
+static gpointer uca_phantom_communicate_accept_ximg(gpointer data) {
     UcaPhantomCommunicate *self = UCA_PHANTOM_COMMUNICATE(data);
-    g_return_val_if_fail(self->control_state == CONNECTED, NULL);
+    g_return_val_if_fail(self->control_connection_state == CONNECTED, NULL);
 
     guint nb_pixels = 0;
     gsize packed_image_size = 0, packed_packet_size = 0;
@@ -2661,8 +2644,7 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
  * @param error_loc
  * @return gboolean
  */
-gboolean uca_phantom_communicate_unpack_image_p10(UcaPhantomCommunicate *self, CineData *cine_data, GError **error_loc)
-{
+gboolean uca_phantom_communicate_unpack_image_p10(UcaPhantomCommunicate *self, CineData *cine_data, GError **error_loc) {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(cine_data != NULL, FALSE);
 
@@ -2760,8 +2742,7 @@ gboolean uca_phantom_communicate_unpack_image_p10(UcaPhantomCommunicate *self, C
  * @param error_loc
  * @return gboolean
  */
-gboolean uca_phantom_communicate_unpack_image_p12l(UcaPhantomCommunicate *self, CineData *cine_data, GError **error_loc)
-{
+gboolean uca_phantom_communicate_unpack_image_p12l(UcaPhantomCommunicate *self, CineData *cine_data, GError **error_loc) {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(cine_data != NULL, FALSE);
 
@@ -2834,8 +2815,7 @@ gboolean uca_phantom_communicate_unpack_image_p12l(UcaPhantomCommunicate *self, 
  * TODO: May need to modify the data structure that holds the cine data!
  *
  */
-gpointer uca_phantom_communicate_unpack_ximg(gpointer data)
-{
+gpointer uca_phantom_communicate_unpack_ximg(gpointer data) {
     UcaPhantomCommunicate *self = UCA_PHANTOM_COMMUNICATE(data);
 
     GError *sub_error = NULL;
@@ -2846,8 +2826,7 @@ gpointer uca_phantom_communicate_unpack_ximg(gpointer data)
     g_print("Unpacking thread started\n");
 
     // Loop on CineData objects in the queue
-    while (TRUE)
-    {
+    while (TRUE) {
         // Get the next CineData object
         CineData *cine_data = g_async_queue_pop(self->packed_queue);
 
@@ -2934,41 +2913,40 @@ gpointer uca_phantom_communicate_unpack_ximg(gpointer data)
  *
  * dont hard code the port number
  */
-gboolean uca_phantom_communicate_start_readout(UcaPhantomCommunicate *self, GError **error_loc)
-{
+gboolean uca_phantom_communicate_start_readout(UcaPhantomCommunicate *self, GError **error_loc) {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
-    g_return_val_if_fail(self->local_state == IDLE, FALSE);
+    g_return_val_if_fail(self->local_acquisition_state == IDLE, FALSE);
 
     GError *sub_error = NULL;
     GError *phantom_error = NULL;
     gboolean result = FALSE;
     gboolean ts_result = FALSE;
-    // guint port = 7116;
 
-    // if (self->xenabled) {
-    //     result = uca_phantom_communicate_connect_xdatastream (self, &sub_error);
-    //     if (self->timestamping == TRUE) { // Get the images from 10gb and timestamps from 1gb
-    //         ts_result = uca_phantom_communicate_connect_datastream (self, port, &sub_error);
-
-    //         if (ts_result != TRUE && sub_error != NULL) {
-    //             g_set_error (&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to connect datastream:\n\t> %s\n", sub_error->message);
-    //             g_propagate_error (error_loc, phantom_error);
-    //             g_clear_error (&sub_error);
-    //             return FALSE;
-    //         }
-    //     }
-    // }
-    // else {
-    //     result = uca_phantom_communicate_connect_datastream (self, port, &sub_error);
-    // }
-
-    if (result != TRUE && sub_error != NULL) {
-        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to connect datastream:\n\t> %s\n", sub_error->message);
-        g_propagate_error(error_loc, phantom_error);
-        g_clear_error(&sub_error);
-        return FALSE;
-    }
     if (self->xenabled) {
+        if (self->mac_address_str == NULL) {
+            // Get the mac address of the camera
+            gboolean res = uca_phantom_communicate_get_mac_address(self, &sub_error);
+            if (res != TRUE && sub_error != NULL) {
+                g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to get MAC address:\n\t> %s\n", sub_error->message);
+                g_propagate_error(error_loc, phantom_error);
+                g_clear_error(&sub_error);
+                return FALSE;
+            }
+            
+            self->mac_address_str = g_strdup_printf("%02x%02x%02x%02x%02x%02x",
+                                        self->mac_address[0],
+                                        self->mac_address[1],
+                                        self->mac_address[2],
+                                        self->mac_address[3],
+                                        self->mac_address[4],
+                                        self->mac_address[5]);
+            if (self->mac_address_str) {
+                g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING, "Failed to allocate memory for MAC address");
+                g_propagate_error(error_loc, phantom_error);
+                return FALSE;
+            }
+        }
+
         g_print("Starting xdata receiver thread\n");
         self->data_receiver = g_thread_new("data_receiver", uca_phantom_communicate_accept_ximg, self);
         g_print("Starting xdata unpacker thread\n");
@@ -2980,7 +2958,7 @@ gboolean uca_phantom_communicate_start_readout(UcaPhantomCommunicate *self, GErr
         self->data_receiver = g_thread_new("data_receiver", uca_phantom_communicate_accept_img, self);
     }
 
-    self->local_state = ACQUIRING;
+    self->local_acquisition_state = ACQUIRING;
 
     return TRUE;
 }
@@ -2992,8 +2970,7 @@ gboolean uca_phantom_communicate_start_readout(UcaPhantomCommunicate *self, GErr
  * @param error_loc
  * @return gboolean
  */
-gboolean uca_phantom_communicate_grab_image(UcaPhantomCommunicate *self, gpointer data, GError **error_loc)
-{
+gboolean uca_phantom_communicate_grab_image(UcaPhantomCommunicate *self, gpointer data, GError **error_loc) {
     static CineData *cine_data = NULL;
     // static GError *sub_error = NULL;
     static GError *phantom_error = NULL;
@@ -3002,8 +2979,7 @@ gboolean uca_phantom_communicate_grab_image(UcaPhantomCommunicate *self, gpointe
 
     cine_data = g_async_queue_pop(self->unpacked_queue);
 
-    if (cine_data == NULL)
-    {
+    if (cine_data == NULL) {
         g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GRAB_IMAGE, "No image available.");
         g_propagate_error(error_loc, phantom_error);
         return FALSE;
@@ -3022,12 +2998,11 @@ gboolean uca_phantom_communicate_grab_image(UcaPhantomCommunicate *self, gpointe
     return TRUE;
 }
 
-gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate *self, GError **error_loc)
-{
+gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate *self, GError **error_loc) {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
-    g_return_val_if_fail(self->control_state == CONNECTED, FALSE);
-    g_return_val_if_fail(self->local_state == ACQUIRING, FALSE);
-    g_return_val_if_fail(self->phantom_state == ACQUIRING, FALSE);
+    g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
+    g_return_val_if_fail(self->local_acquisition_state == ACQUIRING, FALSE);
+    g_return_val_if_fail(self->phantom_acquisition_state == ACQUIRING, FALSE);
 
     GError *sub_error = NULL;
     GError *phantom_error = NULL;
@@ -3041,20 +3016,17 @@ gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate *self, GErro
     g_async_queue_push(self->request_queue, request);
 
     sub_error = g_thread_join(self->data_receiver);
-    if (sub_error != NULL)
-    {
+    if (sub_error != NULL) {
         g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_STOP_READOUT, "Failed to join data_receiver thread:\n\t> %s\n", sub_error->message);
         g_propagate_error(error_loc, phantom_error);
         g_clear_error(&sub_error);
         return FALSE;
     }
 
-    if (self->xenabled)
-    {
+    if (self->xenabled) {
         // Stop the data unpacker thread
         sub_error = g_thread_join(self->data_unpacker);
-        if (sub_error != NULL)
-        {
+        if (sub_error != NULL) {
             g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_STOP_READOUT, "Failed to join data_unpacker thread:\n\t> %s\n", sub_error->message);
             g_propagate_error(error_loc, phantom_error);
             g_clear_error(&sub_error);
@@ -3062,8 +3034,8 @@ gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate *self, GErro
         }
     }
 
-    self->phantom_state = IDLE;
-    self->local_state = IDLE;
+    self->phantom_acquisition_state = IDLE;
+    self->local_acquisition_state = IDLE;
     g_print("Readout stopped\n");
 
     return TRUE;
