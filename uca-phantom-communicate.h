@@ -398,7 +398,7 @@ gboolean uca_phantom_communicate_trigger (UcaPhantomCommunicate *self, GError **
  * @return TRUE if the request was successful, FALSE otherwise.
  */
 gboolean uca_phantom_communicate_request_images (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
-gboolean uca_phantom_communicate_request_images_buffered (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
+
 /**
  * @brief Grab an image from the program's image queue
  * 
