@@ -1,3 +1,6 @@
+#ifndef UCA_PHANTOM_COMMANDS_H
+#define UCA_PHANTOM_COMMANDS_H
+
 #include <gio/gio.h>
 #include <gmodule.h>
 #include <glib-object.h>
@@ -369,3 +372,5 @@ PhantomCommand Commands[] = {
     {"mmset", 3, CMD_SET_MULTI_MATRIX_AXIS},
     {NULL,}
 };
+
+#endif // COMMANDS_H

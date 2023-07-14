@@ -12,7 +12,7 @@
 
 test_network = executable(
     'test_unit_Variables', 
-    sources: ['test_unit_variables.c', '../uca-phantom-communicate.c'],
+    sources: ['test_unit_variables.c', '../uca-phantom-communicate.c', '../ringbuf.c'],
     dependencies: deps,
     # link_with: phantom,
     c_args: c_args,

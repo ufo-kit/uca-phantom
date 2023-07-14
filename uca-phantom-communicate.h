@@ -32,6 +32,7 @@ typedef enum {
     UCA_PHANTOM_COMMUNICATE_ERROR_SET_VARIABLE,
     UCA_PHANTOM_COMMUNICATE_ERROR_RUN_COMMAND,
     UCA_PHANTOM_COMMUNICATE_ERROR_NOTIFY,
+    UCA_PHANTOM_COMMUNICATE_ERROR_SET_NB_CINES,
     UCA_PHANTOM_COMMUNICATE_ERROR_GET_SETTINGS,
     UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS,
     UCA_PHANTOM_COMMUNICATE_ERROR_GET_RESOLUTION,
@@ -52,6 +53,16 @@ typedef enum {
     UCA_PHANTOM_COMMUNICATE_ERROR_MAYBE_CORRUPTED
 } UcaPhantomCommunicateError;
 
+/**
+ * @brief Enumeration of synchronization modes for Phantom camera image capture.
+ * 
+ * This enumeration defines the possible synchronization modes that can be used when capturing images with the Phantom camera.
+ * 
+ * SYNC_MODE_FREE_RUN: Free run synchronization mode.
+ * SYNC_MODE_FSYNC: Fsync synchronization mode.
+ * SYNC_MODE_IRIG: IRIG synchronization mode.
+ * SYNC_MODE_VIDEO_FRAME_RATE: Video frame rate synchronization mode.
+ */
 typedef enum {
     SYNC_MODE_FREE_RUN = 0,
     SYNC_MODE_FSYNC,
@@ -59,6 +70,17 @@ typedef enum {
     SYNC_MODE_VIDEO_FRAME_RATE,
 } SyncMode;
 
+/**
+ * @brief Enumeration of acquisition modes for Phantom camera image capture.
+ * 
+ * This enumeration defines the possible acquisition modes that can be used when capturing images with the Phantom camera.
+ * 
+ * ACQUISITION_MODE_STANDARD: Standard acquisition mode.
+ * ACQUISITION_MODE_STANDARD_BINNED: Standard acquisition mode with binning.
+ * ACQUISITION_MODE_HS: High-speed acquisition mode.
+ * ACQUISITION_MODE_HS_BINNED: High-speed acquisition mode with binning.
+ * ACQUISITION_MODE_BRIGHT_FIELD: Bright field acquisition mode.
+ */
 typedef enum {
     ACQUISITION_MODE_STANDARD = 0,
     ACQUISITION_MODE_STANDARD_BINNED = 2,
@@ -67,48 +89,84 @@ typedef enum {
     ACQUISITION_MODE_BRIGHT_FIELD
 } AcquisitionMode;
 
+/**
+ * @brief Enumeration of auto exposure modes for Phantom camera image capture.
+ * 
+ * This enumeration defines the possible auto exposure modes that can be used when capturing images with the Phantom camera.
+ * 
+ */
 typedef enum {
-    AUTO_EXP_MODE_OFF = 0,
-    AUTO_EXP_MODE_AVERAGE,
-    AUTO_EXP_MODE_SPOT,
-    AUTO_EXP_MODE_CENTER
+    AUTO_EXP_MODE_OFF = 0,      /**< Auto exposure is turned off. */
+    AUTO_EXP_MODE_AVERAGE,      /**< Auto exposure is based on the average brightness of the image. */
+    AUTO_EXP_MODE_SPOT,         /**< Auto exposure is based on a spot meter reading. */
+    AUTO_EXP_MODE_CENTER        /**< Auto exposure is based on the center of the image. */
 } AutoExpMode;
 
+/**
+ * @brief The bit depth of the image format.
+ * 
+ * This field specifies the bit depth of the image (i.e. image format). 
+ * For example, if the image format is 8-bit, this field will be set to 8.
+ * 
+ */
 typedef enum {
-    IMG_8,
-    IMG_8R,
-    IMG_P16,
-    IMG_P16R,
-    IMG_P10,
-    IMG_P12L
+    IMG_8, // 8 bits per pixel, FPN and PRNU corrected, linear, raw
+    IMG_8R, // 8 bits per pixel, uncorrected, linear, raw
+    IMG_P16, // 16 bits per pixel, FPN and PRNU corrected, linear, raw, little-endian. The range of values is 0-65535.
+    IMG_P16R, // Same as P16 but uncorrected
+    IMG_P10, // 10 bits per pixel packed into 32-bit big-endian words, FPN and PRNU corrected, non-linear, raw.
+    IMG_P12L // 12 bits per pixel packed into 32-bit big-endian words, FPN and PRNU corrected, linear, raw.
 } ImageFormat;
 
+/**
+ * @brief Enumeration of timestamp formats for Phantom camera image capture.
+ * 
+ * This enumeration defines the possible timestamp formats that can be requested when capturing images with the Phantom camera.
+ * 
+ */
 typedef enum {
-    TS_SHORT,
-    TS_SHORT32,
-    TS_LONG,
-    TS_LONG32,
-    TS_NONE // No timestamp is requested
+    TS_SHORT,   /**< Short timestamp format. */
+    TS_SHORT32, /**< 32-bit short timestamp format. */
+    TS_LONG,    /**< Long timestamp format. */
+    TS_LONG32,  /**< 32-bit long timestamp format. */
+    TS_NONE     /**< No timestamp is requested. */
 } TimestampFormat;
 
-typedef struct {
-    gchar *format_string;
-    guint bit_depth;
-    gfloat byte_depth;
-} ImageFormatSpec;
+/**
+ * @brief Enumeration of IP source flags for the TCP connection.
+ * 
+ * This enumeration defines the possible IP source flags that can be used to choose the IP source for the TCP connection
+ * in the `connect_datastream` function.
+ * 
+ * USE_ENV: Use the IP address specified in the environment variable.
+ * USE_CLASS: Use the IP address specified in the class.
+ * USE_BCAST: Use the broadcast IP address.
+ * N_IP_FLAGS: The number of IP source flags.
+ */
+typedef enum {
+    USE_ENV,
+    USE_CLASS,
+    USE_BCAST,
+    N_IP_FLAGS
+} IP_SOURCE_FLAGS;
 
-typedef struct {
-    gchar *format_string;
-    guint bit_depth;
-    gfloat byte_depth;
-} TimestampSpec;
-
+/**
+ * @brief Struct containing capture settings for the Phantom camera.
+ * 
+ * This struct contains various properties related to capturing images with the Phantom camera, 
+ * including sensor pixel width and height, bit depth, trigger source and type, frames per second, 
+ * exposure time, region of interest (ROI), focal length, aperture, EDR exposure time, shutter offset, 
+ * auto exposure mode and compensation, number of pre- and post-trigger frames, current cine number, 
+ * sync mode, acquisition mode, image format, and timestamp format.
+ * 
+ * The list of properties is not exhaustive, and is subject to change.
+ */
 typedef struct{
     // base properties
     guint16 sensor_pixel_width, sensor_pixel_height, sensor_bit_depth;
     UcaCameraTriggerSource trigger_source;
     UcaCameraTriggerType trigger_type;
-    gfloat frames_per_second;
+    gdouble frames_per_second;
     gdouble exposure_time;
     gint roi_pixel_x, roi_pixel_y, roi_pixel_width, roi_pixel_height;
     guint roi_width_multiplier, roi_height_multiplier;
@@ -127,40 +185,255 @@ typedef struct{
     TimestampFormat timestamp_format;
 } CaptureSettings;
 
+typedef struct {
+    gchar* format_string;
+    guint bit_depth;
+    gfloat byte_depth;
+} ImageFormatSpec;
+
+typedef struct
+{
+    gchar* format_string;
+    gsize byte_size;
+} TimestampSpec;
+
 extern const ImageFormatSpec ImageFormatSpecs[];
 extern const TimestampSpec TimestampSpecs[];
 
-/*
- * Public methods
-*/
+/**
+ * @brief Creates a new UcaPhantomCommunicate object.
+ * 
+ * This function creates a new UcaPhantomCommunicate object.
+ * 
+ * @return UcaPhantomCommunicate* A pointer to the newly created UcaPhantomCommunicate object.
+ */
 UcaPhantomCommunicate *uca_phantom_communicate_new (void);
+
+/**
+ * @brief Connects to the TCP phantom control stream and returns a boolean indicating success or failure.
+ * 
+ * You need to connect the controlstream before you can send commands to the phantom.
+ *
+ * @param self A pointer to the UcaPhantomCommunicate object.
+ * @param error_loc A pointer to a GError object that will be set if an error occurs.
+ * @return gboolean Returns TRUE if the connection was successful, FALSE otherwise.
+ *
+ * @note The caller is responsible for freeing the GError object if it is set.
+ */
 gboolean uca_phantom_communicate_connect_controlstream (UcaPhantomCommunicate *self, GError **error_loc);
+
+/**
+ * @brief Opens TCP data connection with the Phantom camera.
+ *
+ * This function uses the port `self->data_port` to open a TCP connection with the Phantom camera.
+ * This connection only takes timestamps and images of bitdeph 8 or 16.
+ *
+ * @param self The UcaPhantomCommunicate object.
+ * @param error_loc A pointer to a GError pointer to store any errors that occur.
+ * @return TRUE if the socket was opened successfully, FALSE otherwise.
+ */
 gboolean uca_phantom_communicate_connect_datastream(UcaPhantomCommunicate *self, GError **error_loc);
+
+/**
+ * @brief Opens a socket that accepts raw ethernet data frames from the Phantom.
+ *
+ * This function uses libpcap to capture ethernet frames from the NIC called `xnetcard`.
+ *
+ * @param self The UcaPhantomCommunicate object.
+ * @param error_loc A pointer to a GError pointer to store any errors that occur.
+ * @return TRUE if the socket was opened successfully, FALSE otherwise.
+ */
 gboolean uca_phantom_communicate_connect_xdatastream (UcaPhantomCommunicate *self, GError **error_loc);
-gboolean uca_phantom_communicate_run_command (UcaPhantomCommunicate *self, guint command_flag, PhantomReply *reply, GError **error_loc, ...);
+
+/**
+ * @brief Send a command to the phantom and get the reply
+ *
+ * @paragraph This function sends a command to the phantom and gets the reply.
+ * The command is specified by the command_flag. The reply is stored in the caller-owned reply struct.
+ * If the reply is NULL, a local one will be created.
+ *
+ * @param self
+ * @param command_flag
+ * @param command_arg
+ * @param reply (optional)
+ * @param error_loc
+ * @return gboolean
+ *
+ */
+gboolean uca_phantom_communicate_run_command(UcaPhantomCommunicate *self, guint command_flag, gchar* command_arg, PhantomReply *reply, GError **error_loc);
+
+/**
+ * @brief Disconnects the data stream from the phantom.
+ *
+ * This function closes the input data stream and sets the data connection state to DISCONNECTED.
+ *
+ * @param self The UcaPhantomCommunicate object.
+ * @param error_loc A pointer to a GError pointer to store any errors that occur.
+ * @return TRUE if the data stream was disconnected successfully, FALSE otherwise.
+ */
+gboolean uca_phantom_communicate_disconnect_datastream(UcaPhantomCommunicate *self, GError **error_loc);
+
+/**
+ * @brief Disconnects the xdata stream from the phantom.
+ *
+ * This function closes the pcap handle and sets the xdata connection state to DISCONNECTED.
+ *
+ * @param self The UcaPhantomCommunicate object.
+ * @param error_loc A pointer to a GError pointer to store any errors that occur.
+ * @return TRUE if the xdata stream was disconnected successfully, FALSE otherwise.
+ */
+gboolean uca_phantom_communicate_disconnect_xdatastream(UcaPhantomCommunicate *self, GError **error_loc);
+
+/**
+ * @brief Get the value of a variable from the phantom
+ *
+ * @paragraph This function will get the value of a unit variable from the phantom using the uca_phantom_communicate_run_command function.
+ *
+ * @param self
+ * @param variable_flag
+ * @param return_value
+ * @param error_loc
+ * @return gboolean
+ */
 gboolean uca_phantom_communicate_get_variable (UcaPhantomCommunicate *self, guint variable_flag, GValue *return_value, GError **error);
+
+/**
+ * @brief Set the value of a variable on the phantom
+ *
+ * @param self
+ * @param variable_flag
+ * @param value
+ * @param error_loc
+ * @return gboolean
+ */
 gboolean uca_phantom_communicate_set_variable (UcaPhantomCommunicate *self, guint variable_flag, const char *set_value, GError **error_loc);
-void uca_phantom_communicate_print_capture_settings (UcaPhantomCommunicate *self);
-gboolean uca_phantom_communicate_get_settings (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
+
+/**
+ * @brief Helpher function to set the number of cines.
+ *
+ * This function sets the number of cines in the Phantom camera using set_variable function.
+ *
+ * @param self A pointer to the UcaPhantomCommunicate object.
+ * @param nb_cines The number of cines to set.
+ * @param error_loc A pointer to a GError object to store any errors that occur.
+ *
+ * @return TRUE if the number of cines was set successfully, FALSE otherwise.
+ * 
+ * TODO: make sure the size of each cine is big enough to hold the images.
+ */
+gboolean uca_phantom_communicate_set_nb_cines (UcaPhantomCommunicate *self, guint nb_cines, GError **error_loc);
+
+/**
+ * @brief Sets the main capture settings of the Phantom camera.
+ *
+ * This function sets a few crucial settings for the Phantom camera, such as the sensor resolution, EDR exposure, shutter off, auto exposure mode, auto exposure compensation, and number of post trigger frames.
+ *
+ * @param self The UCA Phantom camera instance.
+ * @param ext_settings The external settings to be set.
+ * @param error_loc The location to store any errors that occur.
+ *
+ * @return TRUE if the settings were successfully set, FALSE otherwise.
+ */
 gboolean uca_phantom_communicate_set_settings (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
+
+/**
+ * @brief Starts the readout process for the UcaPhantomCommunicate object
+ * 
+ * @details Starts a new thread to accept data from the camera (and unpack it if data is transmitted over 10Gb). 
+ * If timestamping is enabled, it also starts a new thread to read timestamps. The function returns TRUE if the 
+ * readout was successfully started, FALSE otherwise.
+ * 
+ * @param self Pointer to the UcaPhantomCommunicate object
+ * @param error_loc Pointer to a GError object to store any errors that occur
+ * @return gboolean TRUE if the readout was successfully started, FALSE otherwise
+ */
 gboolean uca_phantom_communicate_start_readout(UcaPhantomCommunicate *self, GError **error_loc);
+
+/**
+ * @brief Stop readout function
+ *
+ * This function stops (waits for) all the threads that were started by uca_phantom_communicate_start_readout.
+ * 
+ * @param self Pointer to the UcaPhantomCommunicate object
+ * @param error_loc Pointer to a GError object to store any errors that occur
+ * @return gboolean TRUE if the readout was successfully stopped, FALSE otherwise
+ */
 gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate *self, GError **error_loc);
+
+/**
+ * @brief Arms the phantom for acquisition in a cine partition.
+ *
+ * Once the phantom is armed, it will start recording in the cine partition at the rate set by the 
+ * SyncMode flags. 
+ *
+ * @param self The UcaPhantomCommunicate object
+ * @param cine The cine partition to record in
+ * @param error_loc A GError object to store the error in
+ * @return TRUE if the arm was successful, FALSE otherwise
+ */
 gboolean uca_phantom_communicate_arm (UcaPhantomCommunicate *self, guint cine, GError **error_loc);
+gboolean uca_phantom_communicate_disarm (UcaPhantomCommunicate* self, GError** error_loc);
+
+/**
+ * @brief Trigger the phantom's internal cine RAM partition.
+ * 
+ * This will keep the frames stored in the cine RAM up until the trigger, and continue to store `post-frames` after the trigger.
+ * The total number of frames in the cine partition is therefore `pre-frames + post-frames`.
+ *
+ * @param self The UcaPhantomCommunicate object
+ * @param error_loc A GError object to store the error in
+ * @return TRUE if the trigger was successful, FALSE otherwise
+ */
 gboolean uca_phantom_communicate_trigger (UcaPhantomCommunicate *self, GError **error_loc);
-gboolean uca_phantom_communicate_trigger_ptframes (UcaPhantomCommunicate *self, guint ptframes, GError **error_loc);
+
+/**
+ * @brief Send a request for images to the Phantom camera and push an internal request to receive images in the program.
+ *
+ * This function requests images from the Phantom camera and pushes them to the request queue for processing.
+ * The function supports two modes of operation: one for 10Gb ethernet and one for 1Gb ethernet.
+ *
+ * @param self The UcaPhantomCommunicate object.
+ * @param settings The CaptureSettings object. Definition can be found in the UcaPhantomCommunicate header.
+ * @param error_loc A pointer to a GError object to store any errors that occur.
+ * @return TRUE if the request was successful, FALSE otherwise.
+ */
 gboolean uca_phantom_communicate_request_images (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
+gboolean uca_phantom_communicate_request_images_buffered (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
+/**
+ * @brief Grab an image from the program's image queue
+ * 
+ * @details Copys the image data allocated in the internal image queue to the provided pointer.
+ * This functions supposes that the provided pointer is large enough to hold the image data.
+ * 
+ * @note This function will block until an image is available in the queue
+ *
+ * @param self Pointer to the UcaPhantomCommunicate object
+ * @param error_loc Pointer to a GError object to store any errors that occur
+ * @return gboolean TRUE if the readout was successfully stopped, FALSE otherwise
+ */
 gboolean uca_phantom_communicate_grab_image (UcaPhantomCommunicate *self, gpointer data, GError **error_loc);
 
+/**
+ * @brief Grab a buffered image from the program's ring buffer
+ * 
+ * @details Copy a single image from the ring buffer to the provided pointer.
+ * 
+ * @note This function will block until an image is available in the ring buffer
+ *
+ * @param self Pointer to the UcaPhantomCommunicate object
+ * @param error_loc Pointer to a GError object to store any errors that occur
+ * @return gboolean TRUE if the readout was successfully stopped, FALSE otherwise
+ */
+gboolean uca_phantom_communicate_grab_buffered_image (UcaPhantomCommunicate* self, gpointer data, GError** error_loc);
 
-gboolean uca_phantom_communicate_get_mac_address (UcaPhantomCommunicate *self, GError **error_loc);
-
-typedef enum _IP_SOURCE_FLAGS {
-    USE_ENV,
-    USE_CLASS,
-    USE_BCAST,
-    N_IP_FLAGS
-} IP_SOURCE_FLAGS;
-
+/**
+ * @brief The flags that represent phantom unit variables.
+ *
+ * The flags are used to identify the different types of variables that can be accessed or modified
+ * in a Phantom unit. They are used in conjunction with the phantom set and get functions. 
+ *
+ * @see uca-phantom-commands.h and uca-phantom-variables.h for more information.
+ */
 enum PhantomUnitIds {
     UNIT_INFO_SENSOR,
     UNIT_INFO_SNSVERSION,

@@ -69,6 +69,7 @@ enum {
     PROP_XNETCARD,
     PROP_XENABLED,
     PROP_LIVE_IMAGES,
+    PROP_NB_RECORDINGS,
     N_PHANTOM_PROPERTIES
 };
 
@@ -87,12 +88,14 @@ const gfloat temp_min = 5.0, temp_max = 50.0; // Celsius
 struct _UcaPhantomCameraPrivate {
     GError *construct_error;
     GCancellable *accept;
+    gboolean constructed;
 
     // Base class properties + Phantom specific properties
     gchar *name;
     gfloat sensor_width, sensor_height;
     guint max_sensor_resolution_width, max_sensor_resolution_height;
     guint expdead, xinc, yinc;
+    guint nb_recordings; // nb cines
     gboolean has_streaming, has_camram_recording;
     gboolean live_images;
     CaptureSettings settings; // Groups all the main writeable properties
@@ -102,6 +105,8 @@ struct _UcaPhantomCameraPrivate {
     gboolean xenabled;
     gboolean xconnected, connected;
 
+    // Hack for tracking the last cine used
+    gboolean started_recording;
 
     UcaPhantomCommunicate *communicator;
 };
@@ -117,6 +122,13 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
 
     GError *internal_error = NULL;
     UcaPhantomCameraPrivate *priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
+
+    g_object_set (priv->communicator, "buffering", priv->live_images, NULL);
+    if (priv->settings.timestamp_format == TS_NONE) {
+        g_object_set (priv->communicator, "timestamping", FALSE, NULL);
+    } else {
+        g_object_set (priv->communicator, "timestamping", TRUE, NULL);
+    }
 
     g_print ("Starting readout\n");
     // Launch the readout using the communicator
@@ -153,7 +165,6 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
                                     GError **error) {
     g_return_if_fail (error == NULL || *error == NULL);
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
-    static guint prev_cine = 0;
     g_print ("Starting recording\n");
 
     GError *internal_error = NULL;
@@ -173,32 +184,42 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
         priv->xconnected = TRUE;
     } 
 
-    if ((priv->settings.timestamp_format != TS_NONE || !priv->xenabled) && !priv->connected) {
+    if ((priv->settings.timestamp_format != TS_NONE || !priv->xenabled)) {
         result = uca_phantom_communicate_connect_datastream (priv->communicator, &internal_error);
 
         if (result != TRUE && internal_error != NULL) {
             g_propagate_error (error, internal_error);
             return;
         }
-        priv->connected = TRUE;
     }
-
-    prev_cine = priv->settings.current_cine;
 
     if (!priv->live_images) {
         priv->settings.current_cine += 1;
+        // Arm the camera
+        result = uca_phantom_communicate_arm (priv->communicator, priv->settings.current_cine, &internal_error);
+        if (result != TRUE && internal_error != NULL) {
+            g_propagate_error (error, internal_error);
+            return;
+        }
+
+        priv->started_recording = TRUE;
+
+        gdouble time_to_record = priv->settings.nb_pre_trigger_frames / (gdouble)priv->settings.frames_per_second;
+        g_print ("Time to record : %lf\n", time_to_record);
+        usleep (time_to_record * 1000000);
+    }
+    else {
+        // Arm the camera
+        result = uca_phantom_communicate_arm (priv->communicator, -1, &internal_error);
+        if (result != TRUE && internal_error != NULL) {
+            g_propagate_error (error, internal_error);
+            return;
+        }
+
+        priv->started_recording = TRUE;
     }
 
-    // Arm the camera
-    result = uca_phantom_communicate_arm (priv->communicator, priv->settings.current_cine, &internal_error);
-    if (result != TRUE && internal_error != NULL) {
-        g_propagate_error (error, internal_error);
-        return;
-    }
-
-    gdouble time_to_record = priv->settings.nb_pre_trigger_frames / (gdouble)priv->settings.frames_per_second;
-    g_print ("Time to record : %lf\n", time_to_record);
-    usleep (time_to_record * 1000000);
+    g_print ("Current cine : %d\n", priv->settings.current_cine);
 }
 
 static void
@@ -209,9 +230,11 @@ uca_phantom_camera_stop_recording (UcaCamera *camera,
 
     g_print ("Stoping recording\n");
 
-    /*
-        Nothing to do, everything is handled automatically by the class destructor
-    */
+    GError *internal_error = NULL;
+
+    if (!uca_phantom_communicate_disarm (UCA_PHANTOM_CAMERA_GET_PRIVATE (camera)->communicator, &internal_error)) {
+        return;
+    }
 }
 
 /**
@@ -227,6 +250,23 @@ uca_phantom_camera_trigger (UcaCamera *camera,
 
     GError *internal_error = NULL;
     UcaPhantomCameraPrivate *priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
+
+    // Stupid hack: cant call recording multiple times because libuca forbids it.
+    // So we need to update the cine in which the data is being recorded
+    // in the trigger function
+    if (!priv->live_images && priv->started_recording && priv->settings.current_cine > 1) {
+        // Arm the camera
+        gboolean result = uca_phantom_communicate_arm (priv->communicator, priv->settings.current_cine, &internal_error);
+        if (result != TRUE && internal_error != NULL) {
+            g_propagate_error (error, internal_error);
+            return;
+        }
+        gdouble time_to_record = priv->settings.nb_pre_trigger_frames / (gdouble)priv->settings.frames_per_second;
+        g_print ("Time to record : %lf\n", time_to_record);
+        usleep (time_to_record * 1000000);
+    }
+
+    g_print ("Current cine : %d\n", priv->settings.current_cine);    
 
     gboolean res = uca_phantom_communicate_set_settings (priv->communicator, &priv->settings, &internal_error);
     if (res != TRUE && internal_error != NULL) {
@@ -246,7 +286,7 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     // and wait an extra 100ms to be sure :D 
     gdouble time_to_record = priv->settings.nb_post_trigger_frames / (gdouble)priv->settings.frames_per_second;
     g_print ("Time to record : %lf\n", time_to_record);
-    usleep (time_to_record * 1000000 + 100000);
+    g_usleep (time_to_record * G_USEC_PER_SEC + 100000);
 
     g_print ("img_format : %s\n", ImageFormatSpecs[priv->settings.image_format].format_string);
 
@@ -261,6 +301,8 @@ uca_phantom_camera_trigger (UcaCamera *camera,
         g_print ("Error : %s\n", internal_error->message);
         return;
     }
+
+    priv->settings.current_cine += 1;
 }
 
 static void
@@ -291,20 +333,20 @@ uca_phantom_camera_grab (UcaCamera *camera,
     GError *internal_error = NULL;
 
     if (priv->live_images) {
-        if (!uca_phantom_communicate_request_images (
-                priv->communicator, 
-                &(priv->settings),
-                &internal_error)) {
+        if (!uca_phantom_communicate_grab_buffered_image (priv->communicator, data, &internal_error)) {
+            g_propagate_error (error, internal_error);
+            return FALSE;
+        }
+    }
+    else {
+        if (!uca_phantom_communicate_grab_image (priv->communicator, data, &internal_error)) {
             g_propagate_error (error, internal_error);
             return FALSE;
         }
     }
 
     // Grab single image!
-    if (!uca_phantom_communicate_grab_image (priv->communicator, data, &internal_error)) {
-        g_propagate_error (error, internal_error);
-        return FALSE;
-    }
+    
 
     return TRUE;
 }
@@ -318,7 +360,6 @@ uca_phantom_camera_set_property (GObject *object,
                                  const GValue *value,
                                  GParamSpec *pspec) {
     UcaPhantomCameraPrivate *priv;
-    g_print ("Setting property %d\n", property_id);
 
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (object);
     UcaPhantomCommunicate *communicator = priv->communicator;
@@ -354,10 +395,9 @@ uca_phantom_camera_set_property (GObject *object,
             priv->settings.trigger_type = g_value_get_uint (value);
             break;
         case PROP_EXPOSURE_TIME:
-            priv->settings.exposure_time = g_value_get_uint (value);
+            priv->settings.exposure_time = g_value_get_double (value);
             break;
         case PROP_FRAMES_PER_SECOND:
-            g_print ("Setting FPS to %f\n", g_value_get_double (value));
             priv->settings.frames_per_second = g_value_get_double (value);
             break;
         case PROP_ROI_X:
@@ -404,11 +444,9 @@ uca_phantom_camera_set_property (GObject *object,
             priv->settings.aexpcomp = g_value_get_float (value);
             break;
         case PROP_NB_POST_TRIGGER_FRAMES:
-            g_print ("Setting nb_post_trigger_frames to %d\n", g_value_get_uint (value));
             priv->settings.nb_post_trigger_frames = g_value_get_uint (value);
             break;
         case PROP_NB_PRE_TRIGGER_FRAMES:
-            g_print ("Setting nb_pre_trigger_frames to %d\n", g_value_get_uint (value));
             priv->settings.nb_pre_trigger_frames = g_value_get_uint (value);
             break;
         case PROP_CURRENT_CINE:
@@ -427,21 +465,19 @@ uca_phantom_camera_set_property (GObject *object,
             priv->settings.timestamp_format = g_value_get_uint (value);
             break;
         case PROP_XNETCARD:
-            g_print ("Setting xnetcard to %s\n", g_value_get_string (value));
             g_free (priv->xnetcard);
             priv->xnetcard = g_strdup (g_value_get_string (value));
-            g_object_set (priv->communicator, "xnetcard", priv->xnetcard, NULL);
             break;
         case PROP_XENABLED:
             priv->xenabled = g_value_get_boolean (value);
-            g_object_set (priv->communicator, "xenabled", priv->xenabled, NULL);
             break;
         case PROP_LIVE_IMAGES:
             priv->live_images = g_value_get_boolean (value);
             if (priv->live_images) 
                 priv->settings.current_cine = -1;
-            else
-                priv->settings.current_cine = 1;
+            break;
+        case PROP_NB_RECORDINGS:
+            priv->nb_recordings = g_value_get_uint (value);
             break;
         default:
             // Warn if the property is not defined in this class
@@ -450,11 +486,15 @@ uca_phantom_camera_set_property (GObject *object,
     }
 
     // Send the settings to the phantom
-    gboolean res = uca_phantom_communicate_set_settings (priv->communicator, &(priv->settings), &internal_error);
-    if (!res || internal_error != NULL) {
-        g_warning ("Failed to set capture settings: %s", internal_error->message);
-        g_error_free (internal_error);
+    if (priv->constructed) {
+        if (!uca_phantom_communicate_set_nb_cines (priv->communicator, priv->nb_recordings, &internal_error)) {
+            g_message ("Error setting nb_cines: %s", internal_error->message);
+            g_error_free (internal_error);
+        }
     }
+    else {
+    }
+    
 }
 
 /**
@@ -466,7 +506,6 @@ uca_phantom_camera_get_property (GObject *object,
                                  GValue *value,
                                  GParamSpec *pspec) {
     UcaPhantomCameraPrivate *priv;
-    g_print ("Getting property %d\n", property_id);
 
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (object);
 
@@ -500,12 +539,10 @@ uca_phantom_camera_get_property (GObject *object,
             g_value_set_uint (value, priv->settings.trigger_type);
             break;
         case PROP_EXPOSURE_TIME:
-            g_value_set_uint (value, priv->settings.exposure_time);
+            g_value_set_double (value, priv->settings.exposure_time);
             break;
         case PROP_FRAMES_PER_SECOND:
-            g_print ("Getting FPS to %f\n", priv->settings.frames_per_second);
             g_value_set_double (value, priv->settings.frames_per_second);
-
             break;
         case PROP_ROI_X:
             g_value_set_int (value, priv->settings.roi_pixel_x);
@@ -580,6 +617,9 @@ uca_phantom_camera_get_property (GObject *object,
         case PROP_LIVE_IMAGES:
             g_value_set_uint (value, priv->live_images);
             break;
+        case PROP_NB_RECORDINGS:
+            g_value_set_uint (value, priv->nb_recordings);
+            break;
         default:
             // Warn if the property is not defined in this class
             G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -590,19 +630,23 @@ static void
 uca_phantom_camera_dispose (GObject *object) {
     UcaPhantomCameraPrivate *priv;
 
-    g_print ("Disposing phantom camera\n") ;
-
-    // g_free (priv->name);
-
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (object);
 
     G_OBJECT_CLASS (uca_phantom_camera_parent_class)->dispose (object);
+
+    if (priv->xnetcard) {
+        g_free (priv->xnetcard);
+        priv->xnetcard = NULL;
+    }
+    if (priv->name) {
+        g_free (priv->name);
+        priv->name = NULL;
+    }
 }
 
 static void
 uca_phantom_camera_finalize (GObject *object) {
     UcaPhantomCameraPrivate *priv;
-    g_print ("Finalizing phantom camera\n") ;
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (object);
 
 
@@ -612,7 +656,21 @@ uca_phantom_camera_finalize (GObject *object) {
     if (priv->communicator) {
         g_object_unref (priv->communicator);
         priv->communicator = NULL;
-    }
+    }    
+}
+
+static void
+uca_phantom_camera_constructed (GObject *object) {
+    UcaPhantomCamera *camera;
+    UcaPhantomCameraPrivate *priv;
+    GError *error = NULL;
+
+    camera = UCA_PHANTOM_CAMERA (object);
+    priv = camera->priv;
+
+    priv->constructed = TRUE;
+
+    G_OBJECT_CLASS (uca_phantom_camera_parent_class)->constructed (object);
 }
 
 static gboolean
@@ -624,8 +682,6 @@ ufo_net_camera_initable_init (GInitable *initable,
     GError *internal_error = NULL;
 
     g_return_val_if_fail (UCA_IS_PHANTOM_CAMERA (initable), FALSE);
-
-    g_print ("Initializing phantom camera (INITABLE)\n") ;
 
     if (cancellable != NULL) {
         g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
@@ -646,11 +702,10 @@ ufo_net_camera_initable_init (GInitable *initable,
     // Create a phantom communicator object
     priv->communicator = uca_phantom_communicate_new ();
 
-    g_print ("Setting communicator properties\n") ;
-
     g_object_set (priv->communicator,
                     "xnetcard", priv->xnetcard,
                     "xenabled", priv->xenabled,
+                    "timestamping", TRUE,
                     NULL);
 
     // Connect the control streamm to the camera
@@ -661,7 +716,6 @@ ufo_net_camera_initable_init (GInitable *initable,
     else {
         priv->connected = TRUE;
     }
-
 
     GValue value = G_VALUE_INIT;
     if (!uca_phantom_communicate_get_variable (priv->communicator, UNIT_INFO_XMAX, &value, &internal_error)) {
@@ -706,36 +760,11 @@ ufo_net_camera_initable_init (GInitable *initable,
     priv->sensor_height = sensor_height;
     priv->has_streaming = FALSE;
     priv->has_camram_recording = FALSE;
-    priv->settings = (CaptureSettings){
-        .sync_mode = SYNC_MODE_VIDEO_FRAME_RATE,
-        .acquisition_mode = ACQUISITION_MODE_HS_BINNED,
-        .image_format = IMG_P12L,
-        .timestamp_format = TS_NONE,
-        .sensor_pixel_width = sensor_pixel_width,
-        .sensor_pixel_height = sensor_pixel_height,
-        .sensor_bit_depth = ImageFormatSpecs[IMG_P12L].bit_depth,
-        .trigger_source = UCA_CAMERA_TRIGGER_SOURCE_SOFTWARE,
-        .trigger_type = UCA_CAMERA_TRIGGER_TYPE_EDGE,
-        .frames_per_second = 100.0,
-        .exposure_time = 459,
-        .roi_pixel_x = 0,
-        .roi_pixel_y = 0,
-        .roi_pixel_width = priv->max_sensor_resolution_width,
-        .roi_pixel_height = priv->max_sensor_resolution_height,
-        .roi_width_multiplier = priv->xinc ,
-        .roi_height_multiplier = priv->yinc ,
-        .focal_length = 0.0,
-        .aperture = 0.0,
-        .edr_exp = 459,
-        .shutter_off = 1,
-        .aexpmode = AUTO_EXP_MODE_AVERAGE,
-        .aexpcomp = 0.0,
-        .nb_post_trigger_frames = 0,
-        .nb_pre_trigger_frames = 0,
-        .current_cine = 1,
-    };
 
-    g_print ("Phantom camera initialized\n") ;
+    priv->settings.sensor_pixel_width = sensor_pixel_width;
+    priv->settings.sensor_pixel_height = sensor_pixel_height;
+    priv->settings.roi_pixel_width = priv->max_sensor_resolution_width;
+    priv->settings.roi_pixel_height = priv->max_sensor_resolution_height;
 
     return TRUE;
 }
@@ -752,11 +781,9 @@ static void
 uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {    
     GObjectClass *oclass = G_OBJECT_CLASS (klass);
     UcaCameraClass *camera_class = UCA_CAMERA_CLASS (klass);
-
-    g_print ("Initializing phantom camera class\n") ;
-
     oclass->set_property = uca_phantom_camera_set_property;
     oclass->get_property = uca_phantom_camera_get_property;
+    oclass->constructed = uca_phantom_camera_constructed;
     oclass->dispose = uca_phantom_camera_dispose;
     oclass->finalize = uca_phantom_camera_finalize;
 
@@ -771,29 +798,29 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
 
     // Add the phantom specific unit variables as properties
     uca_phantom_camera_properties[PROP_FOCAL_LENGTH] =
-        g_param_spec_double ("focal-length",
+        g_param_spec_float ("focal-length",
                              "Focal length",
                              "Focal length",
-                             0, G_MAXDOUBLE, 0,
+                             0, G_MAXFLOAT, 0,
                              G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT);
     uca_phantom_camera_properties[PROP_APERTURE] =
-        g_param_spec_double ("aperture",
+        g_param_spec_float ("aperture",
                              "Aperture",
                              "Aperture",
-                             0, G_MAXDOUBLE, 0,
+                             0, G_MAXFLOAT, 0,
                              G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT);
                              
     uca_phantom_camera_properties[PROP_EDR_EXP] =
-        g_param_spec_double ("edrexp",
+        g_param_spec_uint ("edrexp",
                              "EDR exposure time",
                              "EDR exposure time",
-                             0, G_MAXDOUBLE, 0,
+                             0, G_MAXUINT, 0,
                              G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT);
     uca_phantom_camera_properties[PROP_SHUTTER_OFF] =
-        g_param_spec_boolean ("shutteroff",
+        g_param_spec_uint ("shutteroff",
                               "Shutter off",
                               "Shutter off",
-                              FALSE,
+                              0, 1, 0,
                               G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT);
     uca_phantom_camera_properties[PROP_AEXPMODE] =
         g_param_spec_uint ("aexpmode",
@@ -803,10 +830,10 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
                             G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT);
 
     uca_phantom_camera_properties[PROP_AEXPCOMP] =
-        g_param_spec_double ("aexpcomp",
+        g_param_spec_float ("aexpcomp",
                             "Auto exposure compensation",
                             "Auto exposure compensation",
-                            0, G_MAXDOUBLE, 0,
+                            0, G_MAXFLOAT, 0,
                             G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT);
     uca_phantom_camera_properties[PROP_NB_POST_TRIGGER_FRAMES] =
         g_param_spec_uint ("postframes",
@@ -824,7 +851,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
         g_param_spec_uint ("cine",
                            "Current cine number",
                            "Current cine number",
-                           0, G_MAXUINT, 1,
+                           0, G_MAXUINT, 0,
                            G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT);
     uca_phantom_camera_properties[PROP_SYNC_MODE] =
         g_param_spec_uint ("syncmode",
@@ -858,7 +885,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
         g_param_spec_string ("xnetcard",
                              "10 Gb NIC",
                              "10 Gb NIC",
-                             NULL,
+                             "ens21f0",
                              G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT);
     uca_phantom_camera_properties[PROP_XENABLED] =
         g_param_spec_boolean ("xenabled",
@@ -872,6 +899,12 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
                            "Grab images from live cine",
                            "rab images from live cine",
                            FALSE,
+                           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT);
+    uca_phantom_camera_properties[PROP_NB_RECORDINGS] =
+        g_param_spec_uint ("nb-recordings",
+                           "Number of recordings",
+                           "Number of recordings",
+                           0, G_MAXUINT, 1,
                            G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT);
 
     // Implement the base class properties
@@ -894,8 +927,31 @@ uca_phantom_camera_init (UcaPhantomCamera *self) {
     UcaPhantomCameraPrivate *priv;
     self->priv = priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (self);
 
-    g_print ("Initializing phantom camera instance\n") ;
-
+    priv->settings = (CaptureSettings){
+        .sync_mode = SYNC_MODE_VIDEO_FRAME_RATE,
+        .acquisition_mode = ACQUISITION_MODE_HS_BINNED,
+        .image_format = IMG_P12L,
+        .timestamp_format = TS_NONE,
+        .sensor_bit_depth = ImageFormatSpecs[IMG_P12L].bit_depth,
+        .trigger_source = UCA_CAMERA_TRIGGER_SOURCE_SOFTWARE,
+        .trigger_type = UCA_CAMERA_TRIGGER_TYPE_EDGE,
+        .frames_per_second = 100.0,
+        .exposure_time = 459,
+        .roi_pixel_x = 0,
+        .roi_pixel_y = 0,
+        .roi_width_multiplier = priv->xinc ,
+        .roi_height_multiplier = priv->yinc ,
+        .focal_length = 0.0,
+        .aperture = 0.0,
+        .edr_exp = 459,
+        .shutter_off = 1,
+        .aexpmode = AUTO_EXP_MODE_AVERAGE,
+        .aexpcomp = 0.0,
+        .nb_post_trigger_frames = 0,
+        .nb_pre_trigger_frames = 0,
+        .current_cine = 0,
+    };
+    priv->started_recording = FALSE;
 }
 
 G_MODULE_EXPORT GType
@@ -904,7 +960,6 @@ camera_plugin_get_type (void) {
 }
 
 UcaPhantomCamera *uca_phantom_camera_new (void) {
-    g_print ("Creating phantom camera instance\n") ;
     return UCA_PHANTOM_CAMERA (
         g_object_new (
             UCA_TYPE_PHANTOM_CAMERA, NULL));
