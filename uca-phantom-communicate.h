@@ -347,7 +347,7 @@ gboolean uca_phantom_communicate_set_settings (UcaPhantomCommunicate *self, Capt
  * @param error_loc Pointer to a GError object to store any errors that occur
  * @return gboolean TRUE if the readout was successfully started, FALSE otherwise
  */
-gboolean uca_phantom_communicate_start_readout(UcaPhantomCommunicate *self, GError **error_loc);
+gboolean uca_phantom_communicate_start_readout (UcaPhantomCommunicate* self, gboolean buffering, CaptureSettings *settings, GError **error_loc);
 
 /**
  * @brief Stop readout function
@@ -371,7 +371,7 @@ gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate *self, GErro
  * @param error_loc A GError object to store the error in
  * @return TRUE if the arm was successful, FALSE otherwise
  */
-gboolean uca_phantom_communicate_arm (UcaPhantomCommunicate *self, guint cine, GError **error_loc);
+gboolean uca_phantom_communicate_arm (UcaPhantomCommunicate *self, gint cine, GError **error_loc);
 gboolean uca_phantom_communicate_disarm (UcaPhantomCommunicate* self, GError** error_loc);
 
 /**

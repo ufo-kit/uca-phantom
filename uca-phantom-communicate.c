@@ -30,7 +30,7 @@
 #include "uca-phantom-commands.h"
 #include "ringbuf.h"
 
-// Note: if you wish to mess everything up, please change the following macros
+// Note: if you wish to screw everything up, please tweak the following macros
 #define ETHERNET_HEADER_SIZE 32 // 16 bytes for L1 ethernet header, 16 bytes for custom header
 #define MAX_KERNEL_BUF_SIZE 2147483647 // 2GBytes = 2^31 - 1 Bytes
 #define MAX_HEAP_BUF_SIZE MAX_KERNEL_BUF_SIZE
@@ -38,7 +38,8 @@
 #define MAX_SENSOR_PIXEL_WIDTH 2048 // Maximum sensor pixel width
 #define MAX_SENSOR_PIXEL_HEIGHT 1952 // Maximum sensor pixel height
 
-#define MAX_NB_IMAGES_BUFFERING 50
+#define MAX_NB_IMAGES_BUFFERING 40
+
 /**
  * TODO:
  * - Verify the requested data size is smaller than the available space in the
@@ -60,8 +61,6 @@ enum {
     PROP_XENABLED,
     PROP_CONTROL_PORT,
     PROP_PHANTOM_IPSOURCE,
-    PROP_TIMESTAMPING,
-    PROP_BUFFERING,
     N_PROPERTIES
 } UcaPhantomCommunicateProperties;
 
@@ -196,7 +195,6 @@ typedef union {
  *
  */
 typedef struct _CineData {
-    CaptureSettings* Settings;
     ImageFormat ImgFormat;
     TimestampFormat TsFormat;
 
@@ -263,7 +261,7 @@ static GParamSpec* uca_phantom_communicate_properties[N_PROPERTIES] = {
 struct _UcaPhantomCommunicate {
     GObject parent_object;
 
-    gboolean xenabled, timestamping, buffering;
+    gboolean xenabled;
     gchar *phantom_ip, *phantom_xip;
     gchar *netcard_ip, *netcard_xip;
     gchar *netcard, *xnetcard;
@@ -277,7 +275,7 @@ struct _UcaPhantomCommunicate {
     ConnectionState xdata_connection_state;
     AcquisitionState local_acquisition_state;
     AcquisitionState phantom_acquisition_state;
-    AcquisitionState buffer_state; // Currently buffering images or not ?
+    AcquisitionState buffer_state;
 
     // camera setup variables
     CaptureSettings settings;
@@ -300,17 +298,16 @@ struct _UcaPhantomCommunicate {
     GThread* data_unpacker;
     GThread* ts_receiver;
     GPtrArray* unpacked_images;
-    GPtrArray* capture_settings;
     guint buffer_index_counter; // used to keep track of the buffer index of the
                                 // unpacked_images
     GAsyncQueue* packed_queue;
     GAsyncQueue* unpacked_queue;
+    GAsyncQueue* request_queue;
     GAsyncQueue* ts_queue;
     GAsyncQueue* ts_request_queue;
-    GAsyncQueue* request_queue;
 
     // Live buffering
-    ringbuf_t ring_buffer;
+    ringbuf_t *ring_buffer;
     GThread* buffering_thread;
     GThread* buffer_request_thread;
 };
@@ -356,12 +353,6 @@ static void uca_phantom_communicate_class_init(UcaPhantomCommunicateClass* class
         "phantom_ipsource", "Set the IP source using IP flags", "Possible flags: USE_ENV, USE_CLASS, USE_DISCOVER.", 0,
         N_IP_FLAGS, USE_CLASS, G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
 
-    uca_phantom_communicate_properties[PROP_TIMESTAMPING] = g_param_spec_boolean(
-        "timestamping", "Enable timestamping", "Enable timestamping", FALSE, G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
-
-    uca_phantom_communicate_properties[PROP_BUFFERING] = g_param_spec_boolean(
-        "buffering", "Enable buffering", "Enable buffering of the data in a ring buffer", FALSE, G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
-
     g_object_class_install_properties(gobject_class, N_PROPERTIES, uca_phantom_communicate_properties);
 }
 
@@ -374,7 +365,6 @@ static void uca_phantom_communicate_init(UcaPhantomCommunicate* instance)
     instance->netcard_ip = NULL;
     instance->netcard_xip = NULL;
     instance->xenabled = TRUE;
-    instance->timestamping = FALSE;
     instance->mac_address_str = NULL;
     instance->request_image_string = g_strdup("{cine:%d, start:%d, cnt:%d, fmt:%s %s}");
     instance->data_port = 7116;
@@ -386,6 +376,7 @@ static void uca_phantom_communicate_init(UcaPhantomCommunicate* instance)
     instance->xdata_connection_state = DISCONNECTED;
     instance->local_acquisition_state = IDLE;
     instance->phantom_acquisition_state = IDLE;
+    instance->buffer_state = IDLE;
 
     // create a new control connection
     instance->control_client = g_socket_client_new();
@@ -400,7 +391,6 @@ static void uca_phantom_communicate_init(UcaPhantomCommunicate* instance)
     instance->output_datastream = NULL;
 
     instance->unpacked_images = g_ptr_array_new_with_free_func(g_free);
-    instance->capture_settings = g_ptr_array_new_with_free_func(g_free);
     instance->data_receiver = NULL;
     instance->data_unpacker = NULL;
     instance->unpacked_queue = g_async_queue_new();
@@ -408,38 +398,6 @@ static void uca_phantom_communicate_init(UcaPhantomCommunicate* instance)
     instance->ts_request_queue = g_async_queue_new();
     instance->ts_queue = g_async_queue_new();
 
-    instance->buffering = FALSE;
-    instance->buffer_state = ACQUIRING;
-
-    // Camera setup variables
-    instance->settings = (CaptureSettings) {
-        .sync_mode = SYNC_MODE_VIDEO_FRAME_RATE,
-        .acquisition_mode = ACQUISITION_MODE_STANDARD,
-        .image_format = IMG_P10,
-        .timestamp_format = TS_NONE,
-        .sensor_pixel_width = 0,
-        .sensor_pixel_height = 0,
-        .sensor_bit_depth = ImageFormatSpecs[IMG_P12L].bit_depth,
-        .trigger_source = UCA_CAMERA_TRIGGER_SOURCE_SOFTWARE,
-        .trigger_type = UCA_CAMERA_TRIGGER_TYPE_EDGE,
-        .frames_per_second = 1000.0,
-        .exposure_time = 0.00009,
-        .edr_exp = 0.00009,
-        .roi_pixel_x = 0,
-        .roi_pixel_y = 0,
-        .roi_pixel_width = 2048,
-        .roi_pixel_height = 1952,
-        .roi_width_multiplier = 1,
-        .roi_height_multiplier = 1,
-        .focal_length = 0.0,
-        .aperture = 0.0,
-        .shutter_off = 1,
-        .aexpmode = AUTO_EXP_MODE_AVERAGE,
-        .aexpcomp = 0.0,
-        .nb_post_trigger_frames = 0,
-        .nb_pre_trigger_frames = 1,
-        .current_cine = 1,
-    };
 }
 
 static void uca_phantom_communicate_constructed(GObject* object)
@@ -479,7 +437,6 @@ static void uca_phantom_communicate_dispose(GObject* object)
 
     // Empty the unpacked_images and the settings arrays
     g_ptr_array_free(instance->unpacked_images, TRUE);
-    g_ptr_array_free(instance->capture_settings, TRUE);
 
     // Empty the queues, even though they should be empty
     while (instance->packed_queue && g_async_queue_length(instance->packed_queue) > 0) {
@@ -498,22 +455,20 @@ static void uca_phantom_communicate_dispose(GObject* object)
         g_error_free(error);
     }
 
-    if (instance->timestamping || !instance->xenabled) {
-        // Empty the timestamp queue
-        while (instance->ts_queue && g_async_queue_length(instance->ts_queue) > 0) {
-            TimestampData* ts_data = g_async_queue_try_pop(instance->ts_queue);
-            g_free(ts_data);
-        }
-        // Empty the timestamp request queue
-        while (instance->ts_request_queue && g_async_queue_length(instance->ts_request_queue) > 0) {
-            TsRequest* ts_request = g_async_queue_try_pop(instance->ts_request_queue);
-            g_free(ts_request);
-        }
-        // TODO: check this function
-        if (instance->data_connection && !g_io_stream_close(G_IO_STREAM(instance->data_connection), NULL, &error)) {
-            g_warning("Failed to close stream: %s", error->message);
-            g_error_free(error);
-        }
+    // Empty the timestamp queue
+    while (instance->ts_queue && g_async_queue_length(instance->ts_queue) > 0) {
+        TimestampData* ts_data = g_async_queue_try_pop(instance->ts_queue);
+        g_free(ts_data);
+    }
+    // Empty the timestamp request queue
+    while (instance->ts_request_queue && g_async_queue_length(instance->ts_request_queue) > 0) {
+        TsRequest* ts_request = g_async_queue_try_pop(instance->ts_request_queue);
+        g_free(ts_request);
+    }
+    // TODO: check this function
+    if (instance->data_connection && !g_io_stream_close(G_IO_STREAM(instance->data_connection), NULL, &error)) {
+        g_warning("Failed to close stream: %s", error->message);
+        g_error_free(error);
     }
 
     G_OBJECT_CLASS(uca_phantom_communicate_parent_class)->dispose(object);
@@ -606,14 +561,6 @@ static void uca_phantom_communicate_set_ip_source(UcaPhantomCommunicate* self, g
 {
     self->phantom_ipsource = property;
 }
-static void uca_phantom_communicate_set_timestamping(UcaPhantomCommunicate* self, gboolean property)
-{
-    self->timestamping = property;
-}
-static void uca_phantom_communicate_set_buffering (UcaPhantomCommunicate* self, gboolean property)
-{
-    self->buffering = property;
-}
 
 static gchar* uca_phantom_communicate_get_phantom_ip(UcaPhantomCommunicate* self)
 {
@@ -651,14 +598,6 @@ static guint uca_phantom_communicate_get_ip_source(UcaPhantomCommunicate* self)
 {
     return self->phantom_ipsource;
 }
-static gboolean uca_phantom_communicate_get_timestamping(UcaPhantomCommunicate* self)
-{
-    return self->timestamping;
-}
-static gboolean uca_phantom_communicate_get_buffering(UcaPhantomCommunicate* self)
-{
-    return self->buffering;
-}
 
 static void uca_phantom_communicate_set_property(GObject* object, guint property_id, const GValue* value,
     GParamSpec* pspec)
@@ -692,12 +631,6 @@ static void uca_phantom_communicate_set_property(GObject* object, guint property
         break;
     case PROP_PHANTOM_IPSOURCE:
         uca_phantom_communicate_set_ip_source(self, g_value_get_uint(value));
-        break;
-    case PROP_TIMESTAMPING:
-        uca_phantom_communicate_set_timestamping(self, g_value_get_boolean(value));
-        break;
-    case PROP_BUFFERING:
-        uca_phantom_communicate_set_buffering(self, g_value_get_boolean(value));
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
@@ -736,12 +669,6 @@ static void uca_phantom_communicate_get_property(GObject* object, guint property
         break;
     case PROP_PHANTOM_IPSOURCE:
         g_value_set_uint(value, uca_phantom_communicate_get_ip_source(self));
-        break;
-    case PROP_TIMESTAMPING:
-        g_value_set_boolean(value, uca_phantom_communicate_get_timestamping(self));
-        break;
-    case PROP_BUFFERING:
-        g_value_set_boolean(value, uca_phantom_communicate_get_buffering(self));
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
@@ -1381,26 +1308,6 @@ static gboolean uca_phantom_communicate_get_resolution(UcaPhantomCommunicate* se
     return TRUE;
 }
 
-guint uca_phantom_communicate_get_pixel_width(UcaPhantomCommunicate* self)
-{
-    g_return_val_if_fail(self->control_connection_state == CONNECTED, 0);
-    return self->settings.sensor_pixel_width;
-}
-guint uca_phantom_communicate_get_pixel_height(UcaPhantomCommunicate* self)
-{
-    g_return_val_if_fail(self->control_connection_state == CONNECTED, 0);
-    return self->settings.sensor_pixel_height;
-}
-
-/**
- * Print the current capture settings
- */
-void uca_phantom_communicate_print_settings(UcaPhantomCommunicate* self)
-{
-    g_return_if_fail(self != NULL);
-    g_return_if_fail(self->control_connection_state == CONNECTED);
-}
-
 /**
  * @brief Helpher function to set the number of cines.
  *
@@ -1432,245 +1339,10 @@ gboolean uca_phantom_communicate_set_nb_cines(UcaPhantomCommunicate* self, guint
     return TRUE;
 }
 
-gboolean uca_phantom_communicate_set_settings(UcaPhantomCommunicate* self, CaptureSettings* ext_settings,
-    GError** error_loc)
-{
-    g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
-    static gboolean first_call = TRUE;
-
-    GError* sub_error = NULL;
-    GError* phantom_error = NULL;
-    gboolean res;
-
-    if (ext_settings->trigger_source != self->settings.trigger_source || first_call) {
-        self->settings.trigger_source = ext_settings->trigger_source;
-        // TODO: Set trigger source
-    }
-    if (ext_settings->trigger_type != self->settings.trigger_type || first_call) {
-        self->settings.trigger_type = ext_settings->trigger_type;
-        // TODO: Set trigger type
-    }
-    if (ext_settings->acquisition_mode != self->settings.acquisition_mode || first_call) {
-        self->settings.acquisition_mode = ext_settings->acquisition_mode;
-        // TODO: Set acquisition mode
-    }
-
-    if (ext_settings->image_format != self->settings.image_format || first_call) {
-        self->settings.image_format = ext_settings->image_format;
-        self->settings.sensor_bit_depth = ext_settings->sensor_bit_depth; // is set when requesting the images
-    }
-
-    if (ext_settings->focal_length != self->settings.focal_length || first_call) {
-        g_message("Focal cannot be set by software\n"); // Focal length can only be
-                                                        // set manually
-    }
-    if (ext_settings->nb_pre_trigger_frames != self->settings.nb_pre_trigger_frames || first_call) {
-        self->settings.nb_pre_trigger_frames = ext_settings->nb_pre_trigger_frames; // is set when requesting the images
-    }
-    if (ext_settings->current_cine != self->settings.current_cine || first_call) {
-        self->settings.current_cine = ext_settings->current_cine; // is set when requesting the images
-    }
-
-    if (ext_settings->timestamp_format != self->settings.timestamp_format || first_call) {
-        self->settings.timestamp_format = ext_settings->timestamp_format;
-        if (self->settings.timestamp_format != TS_NONE) {
-            self->timestamping = TRUE;
-        } else {
-            self->timestamping = FALSE;
-        }
-        res = uca_phantom_communicate_set_variable(
-            self, UNIT_CAM_TSFORMAT, TimestampSpecs[self->settings.timestamp_format].format_string, &sub_error);
-        if (res != TRUE && sub_error != NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS,
-                "Failed to set timestamp format to %d:\n\t> %s\n", ext_settings->timestamp_format,
-                sub_error->message);
-            g_propagate_error(error_loc, phantom_error);
-            g_clear_error(&sub_error);
-            return FALSE;
-        }
-    }
-
-    if (ext_settings->sync_mode != self->settings.sync_mode || first_call) {
-        self->settings.sync_mode = ext_settings->sync_mode;
-        gchar* sync_mode = g_strdup_printf("%d", ext_settings->sync_mode);
-        res = uca_phantom_communicate_set_variable(self, UNIT_CAM_SYNCIMG, sync_mode, &sub_error);
-        g_free(sync_mode);
-        if (res != TRUE && sub_error != NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS,
-                "Failed to set sync mode to %d:\n\t> %s\n", ext_settings->sync_mode, sub_error->message);
-            g_propagate_error(error_loc, phantom_error);
-            g_error_free(sub_error);
-            return FALSE;
-        }
-    }
-
-    if (ext_settings->frames_per_second != self->settings.frames_per_second || first_call) {
-        self->settings.frames_per_second = ext_settings->frames_per_second;
-        gchar* fps = g_strdup_printf("%f", ext_settings->frames_per_second);
-        res = uca_phantom_communicate_set_variable(self, UNIT_DEFC_RATE, fps, &sub_error);
-        g_free(fps);
-        if (res != TRUE && sub_error != NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS,
-                "Failed to set frames per second to %f:\n\t> %s\n", ext_settings->frames_per_second,
-                sub_error->message);
-            g_propagate_error(error_loc, phantom_error);
-            g_clear_error(&sub_error);
-            return FALSE;
-        }
-    }
-    if (ext_settings->exposure_time != self->settings.exposure_time || first_call) {
-        self->settings.exposure_time = ext_settings->exposure_time;
-        gchar* exposure = g_strdup_printf("%f", ext_settings->exposure_time);
-        res = uca_phantom_communicate_set_variable(self, UNIT_DEFC_EXP, exposure, &sub_error);
-        g_free(exposure);
-        if (res != TRUE && sub_error != NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS,
-                "Failed to set exposure time to %f:\n\t> %s\n", ext_settings->exposure_time,
-                sub_error->message);
-            g_propagate_error(error_loc, phantom_error);
-            g_clear_error(&sub_error);
-            return FALSE;
-        }
-    }
-    if (ext_settings->roi_pixel_x != self->settings.roi_pixel_x || first_call) {
-        self->settings.roi_pixel_x = ext_settings->roi_pixel_x;
-        gchar* roi = g_strdup_printf("%d", ext_settings->roi_pixel_x);
-        res = uca_phantom_communicate_set_variable(self, UNIT_DEFC_META_OX, roi, &sub_error);
-        g_free(roi);
-        if (res != TRUE && sub_error != NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS,
-                "Failed to set ROI to %dx%d:\n\t> %s\n", ext_settings->roi_pixel_x, ext_settings->roi_pixel_y,
-                sub_error->message);
-            g_propagate_error(error_loc, phantom_error);
-            g_clear_error(&sub_error);
-            return FALSE;
-        }
-    }
-    if (ext_settings->roi_pixel_y != self->settings.roi_pixel_y || first_call) {
-        self->settings.roi_pixel_y = ext_settings->roi_pixel_y;
-        gchar* roi = g_strdup_printf("%d", ext_settings->roi_pixel_y);
-        res = uca_phantom_communicate_set_variable(self, UNIT_DEFC_META_OY, roi, &sub_error);
-        g_free(roi);
-        if (res != TRUE && sub_error != NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS,
-                "Failed to set ROI to %dx%d:\n\t> %s\n", ext_settings->roi_pixel_x, ext_settings->roi_pixel_y,
-                sub_error->message);
-            g_propagate_error(error_loc, phantom_error);
-            g_clear_error(&sub_error);
-            return FALSE;
-        }
-    }
-    if ((ext_settings->roi_pixel_width != self->settings.roi_pixel_width || ext_settings->roi_pixel_height != self->settings.roi_pixel_height) || first_call) {
-        self->settings.roi_pixel_height = ext_settings->roi_pixel_height;
-        self->settings.roi_pixel_width = ext_settings->roi_pixel_width;
-        gchar* resolution = g_strdup_printf("%dx%d", ext_settings->roi_pixel_width, ext_settings->roi_pixel_height);
-        res = uca_phantom_communicate_set_variable(self, UNIT_DEFC_RES, resolution, &sub_error);
-        g_free(resolution);
-        if (res != TRUE && sub_error != NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS,
-                "Failed to set sensor resolution %dx%d:\n\t> %s\n", ext_settings->sensor_pixel_width,
-                ext_settings->sensor_pixel_height, sub_error->message);
-            g_propagate_error(error_loc, phantom_error);
-            g_clear_error(&sub_error);
-            return FALSE;
-        }
-    }
-    if (ext_settings->aperture != self->settings.aperture || first_call) {
-        g_message("Aperture cannot be set by software\n"); // Focal length can only
-                                                           // be set manually
-
-        // PhantomReply reply;
-        // self->settings.aperture = ext_settings->aperture;
-        // gchar *aperture = g_strdup_printf("%f", ext_settings->aperture);
-        // res = uca_phantom_communicate_run_command(self, CMD_SET_LENS_APERTURE,
-        // &reply, &sub_error, aperture, NULL); g_free(aperture); g_free(reply.raw);
-        // if (res != TRUE && sub_error != NULL) {
-        //     g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR,
-        //     UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS, "Failed to set aperture
-        //     to %f:\n\t> %s\n", ext_settings->aperture, sub_error->message);
-        //     g_propagate_error(error_loc, phantom_error);
-        //     g_clear_error(&sub_error);
-        // }
-    }
-    if (ext_settings->edr_exp != self->settings.edr_exp || first_call) {
-        self->settings.edr_exp = ext_settings->edr_exp;
-        gchar* edr_exp = g_strdup_printf("%d", ext_settings->edr_exp);
-        res = uca_phantom_communicate_set_variable(self, UNIT_DEFC_EDREXP, edr_exp, &sub_error);
-        g_free(edr_exp);
-        if (res != TRUE && sub_error != NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS,
-                "Failed to set EDR exposure to %d:\n\t> %s\n", ext_settings->edr_exp, sub_error->message);
-            g_propagate_error(error_loc, phantom_error);
-            g_clear_error(&sub_error);
-            return FALSE;
-        }
-    }
-    if (ext_settings->shutter_off != self->settings.shutter_off || first_call) {
-        self->settings.shutter_off = ext_settings->shutter_off;
-        gchar* shutter_off = g_strdup_printf("%d", ext_settings->shutter_off);
-        res = uca_phantom_communicate_set_variable(self, UNIT_DEFC_SHOFF, shutter_off, &sub_error);
-        g_free(shutter_off);
-        if (res != TRUE && sub_error != NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS,
-                "Failed to set shutter off to %d:\n\t> %s\n", ext_settings->shutter_off, sub_error->message);
-            g_propagate_error(error_loc, phantom_error);
-            g_clear_error(&sub_error);
-            return FALSE;
-        }
-    }
-    if (ext_settings->aexpmode != self->settings.aexpmode || first_call) {
-        self->settings.aexpmode = ext_settings->aexpmode;
-        gchar* aexpmode = g_strdup_printf("%d", ext_settings->aexpmode);
-        res = uca_phantom_communicate_set_variable(self, UNIT_DEFC_AEXPMODE, aexpmode, &sub_error);
-        g_free(aexpmode);
-        if (res != TRUE && sub_error != NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS,
-                "Failed to set auto exposure mode to %d:\n\t> %s\n", ext_settings->aexpmode,
-                sub_error->message);
-            g_propagate_error(error_loc, phantom_error);
-            g_clear_error(&sub_error);
-            return FALSE;
-        }
-    }
-    if (ext_settings->aexpcomp != self->settings.aexpcomp || first_call) {
-        self->settings.aexpcomp = ext_settings->aexpcomp;
-        gchar* aexpcomp = g_strdup_printf("%f", ext_settings->aexpcomp);
-        res = uca_phantom_communicate_set_variable(self, UNIT_DEFC_AEXPCOMP, aexpcomp, &sub_error);
-        g_free(aexpcomp);
-        if (res != TRUE && sub_error != NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS,
-                "Failed to set auto exposure compensation to %f:\n\t> %s\n", ext_settings->aexpcomp,
-                sub_error->message);
-            g_propagate_error(error_loc, phantom_error);
-            g_clear_error(&sub_error);
-            return FALSE;
-        }
-    }
-    if (ext_settings->nb_post_trigger_frames != self->settings.nb_post_trigger_frames || first_call) {
-        self->settings.nb_post_trigger_frames = ext_settings->nb_post_trigger_frames;
-        gchar* nb_post_trigger_frames = g_strdup_printf("%d", ext_settings->nb_post_trigger_frames);
-        res = uca_phantom_communicate_set_variable(self, UNIT_DEFC_PTFRAMES, nb_post_trigger_frames, &sub_error);
-        g_free(nb_post_trigger_frames);
-        if (res != TRUE && sub_error != NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS,
-                "Failed to set number of post trigger frames to %d:\n\t> %s\n",
-                ext_settings->nb_post_trigger_frames, sub_error->message);
-            g_propagate_error(error_loc, phantom_error);
-            g_clear_error(&sub_error);
-            return FALSE;
-        }
-    }
-
-    g_debug("Settings updated\n");
-    first_call = FALSE;
-
-    return TRUE;
-}
-
 gboolean uca_phantom_communicate_connect_datastream(UcaPhantomCommunicate* self, GError** error_loc)
 {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
-
+    g_return_val_if_fail(self->data_connection_state != CONNECTED, TRUE);
     g_warning("uca_phantom_communicate_connect_datastream: connecting!\n");
 
     GError* sub_error = NULL;
@@ -1926,6 +1598,7 @@ gpointer uca_phantom_communicate_request_buffered_images (gpointer data) {
     UcaPhantomCommunicate *self = UCA_PHANTOM_COMMUNICATE(data);
     GError *error = NULL;
     GError *sub_error = NULL;
+    gboolean res = FALSE;
 
     gchar *request_format = NULL, *additional = NULL;
 
@@ -1949,44 +1622,24 @@ gpointer uca_phantom_communicate_request_buffered_images (gpointer data) {
         }
     }
 
-    guint command_flag = 0;
-
-    if (self->xenabled) {
-
-        additional = g_strdup_printf(", dest:%s, from:%d", self->mac_address_str, 0);
-        request_format = g_strdup_printf (
-            self->request_image_string, cine, start, count, ImageFormatSpecs[img_format].format_string, additional);
-
-        if (request_format == NULL) {
-            g_set_error(&error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES,
-                "Failed to allocate memory for get_ximages command");
-            g_free(additional);
-            return error;
-        }
-
-        command_flag = CMD_GET_XIMAGES;
+    // Setup the arguments for image transfer on 1Gb ethernet
+    additional = self->xenabled ? g_strdup_printf(", dest:%s, from:%d", self->mac_address_str, 0) : g_strdup("");
+    request_format = g_strdup_printf(self->request_image_string, cine, start, count,
+        ImageFormatSpecs[img_format].format_string, additional);
+    if (request_format == NULL) {
+        g_set_error(&error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES,
+            "Failed to allocate memory for get_ximages command");
+        g_free(additional);
+        return error;
     }
-    else {
-        // Setup the arguments for image transfer on 1Gb ethernet
-        additional = g_strdup_printf("\n");
-        request_format = g_strdup_printf(self->request_image_string, cine, start, count,
-            ImageFormatSpecs[img_format].format_string, additional);
-        if (request_format == NULL) {
-            g_set_error(&error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES,
-                "Failed to allocate memory for get_ximages command");
-            g_free(additional);
-            return error;
-        }
-        command_flag = CMD_GET_IMAGES;
-    }
-
     guint current_buffer_index = 0;
+    guint command = self->xenabled ? CMD_GET_XIMAGES : CMD_GET_IMAGES;
+
+    g_print ("Request: %s\n", request_format);
 
     do {
         // Request the datatransfer
-        gboolean res = uca_phantom_communicate_run_command(self, command_flag, request_format, NULL, &sub_error);
-        g_free(request_format);
-        g_free(additional);
+        res = uca_phantom_communicate_run_command(self, command, request_format, NULL, &sub_error);
 
         if (res != TRUE && sub_error != NULL) {
             g_free(additional);
@@ -1999,19 +1652,23 @@ gpointer uca_phantom_communicate_request_buffered_images (gpointer data) {
         request->nb_images = count;
         request->img_format = img_format;
         request->buffer_index = current_buffer_index++;
-        request->end_request = self->buffer_state == ACQUIRING ? FALSE : TRUE;
+        request->end_request = FALSE;
         
         // Push request to request queue
         g_async_queue_push(self->request_queue, request);
-
+        g_usleep (G_USEC_PER_SEC);
         
-    } while (self->buffer_state == IDLE || self->buffer_state != ACQUIRING);
+    } while (self->buffer_state == ACQUIRING);
+
+    g_free(request_format);
+    g_free(additional);
+
+    g_print ("out of while...\n");
 
     return NULL;
 }
 
-gboolean uca_phantom_communicate_arm(UcaPhantomCommunicate* self, guint cine, GError** error_loc)
-{
+gboolean uca_phantom_communicate_arm(UcaPhantomCommunicate* self, gint cine, GError** error_loc) {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
 
@@ -2019,26 +1676,24 @@ gboolean uca_phantom_communicate_arm(UcaPhantomCommunicate* self, guint cine, GE
     GError* phantom_error = NULL;
     gchar* cine_str;
     gboolean res;
-    PhantomReply reply;
 
     // Set the capture settings
     cine_str = g_strdup_printf("%d", cine);
-    res = uca_phantom_communicate_run_command(self, CMD_START_RECORDING_IN_A_CINE, cine_str, &reply, &sub_error);
+    res = uca_phantom_communicate_run_command(self, CMD_START_RECORDING_IN_A_CINE, cine_str, NULL, &sub_error);
     g_free(cine_str);
+
     if (res != TRUE && sub_error != NULL) {
         g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING,
             "Failed to arm:\n\t> %s\n", sub_error->message);
         g_propagate_error(error_loc, phantom_error);
         g_clear_error(&sub_error);
-        g_free(reply.raw);
         return FALSE;
     }
 
     self->phantom_acquisition_state = ACQUIRING;
 
-    if (self->buffering)
+    if (cine == -1)
         self->buffer_request_thread = g_thread_new("buffer_request_thread", (GThreadFunc)uca_phantom_communicate_request_buffered_images, self);
-    g_free(reply.raw);
 
     return TRUE;
 }
@@ -2047,8 +1702,8 @@ gboolean uca_phantom_communicate_disarm(UcaPhantomCommunicate* self, GError** er
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
     
-    if (self->buffering) {
-        self->phantom_acquisition_state = IDLE;
+    if (self->buffer_state == ACQUIRING) {
+        self->buffer_state = IDLE;
         g_thread_join(self->buffer_request_thread);
     }
 
@@ -2111,12 +1766,14 @@ gboolean uca_phantom_communicate_trigger(UcaPhantomCommunicate* self, GError** e
 
 
 
-gboolean uca_phantom_communicate_request_images(UcaPhantomCommunicate* self, CaptureSettings* settings,
+gboolean uca_phantom_communicate_request_images(UcaPhantomCommunicate* self, CaptureSettings *settings,
     GError** error_loc)
 {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
     g_return_val_if_fail(self->local_acquisition_state == ACQUIRING, FALSE);
+
+    self->settings = *settings;
 
     GError* phantom_error = NULL;
     GError* sub_error = NULL;
@@ -2126,11 +1783,9 @@ gboolean uca_phantom_communicate_request_images(UcaPhantomCommunicate* self, Cap
     gboolean result = FALSE;
     gint cine_start_index = 0;
     gint cine_nb_recorded_images = 0;
-    gint cine = settings->current_cine;
-    gint nb_images = settings->nb_post_trigger_frames + settings->nb_pre_trigger_frames;
-    guint img_format = settings->image_format;
-
-    
+    gint cine = self->settings.current_cine;
+    gint nb_images = self->settings.nb_post_trigger_frames + self->settings.nb_pre_trigger_frames;
+    guint img_format = self->settings.image_format;  
 
     if (cine >= 0) {
         // Get first image index from phantom and nb images
@@ -2158,12 +1813,12 @@ gboolean uca_phantom_communicate_request_images(UcaPhantomCommunicate* self, Cap
     gint start = 0, total = 0;
 
     if (cine_start_index < 0) {
-        if (settings->nb_pre_trigger_frames < -cine_start_index) {
-            start = -settings->nb_pre_trigger_frames;
-            g_print("first -> start: %d, pre_trigger_frames: %d\n", start, -settings->nb_pre_trigger_frames);
+        if (self->settings.nb_pre_trigger_frames < -cine_start_index) {
+            start = -self->settings.nb_pre_trigger_frames;
+            g_print("first -> start: %d, pre_trigger_frames: %d\n", start, -self->settings.nb_pre_trigger_frames);
         } else {
             start = cine_start_index;
-            g_print("second -> start: %d, pre_trigger_frames: %d\n", start, -settings->nb_pre_trigger_frames);
+            g_print("second -> start: %d, pre_trigger_frames: %d\n", start, -self->settings.nb_pre_trigger_frames);
         }
     } else {
         start = cine_start_index;
@@ -2180,7 +1835,7 @@ gboolean uca_phantom_communicate_request_images(UcaPhantomCommunicate* self, Cap
 
     g_print("cine_start_index: %d\n", cine_start_index);
     g_print("start: %d\n", start);
-    g_print("settings->nb_pre_trigger_frames: %d\n", settings->nb_pre_trigger_frames);
+    g_print("nb_images: %d\n", nb_images);
     g_print("cine_nb_recorded_images: %d\n", cine_nb_recorded_images);
 
     // Make sure we have the mac address, should already be done though
@@ -2221,8 +1876,7 @@ gboolean uca_phantom_communicate_request_images(UcaPhantomCommunicate* self, Cap
             // format: {cine:<cine_number>, start:<first_frame>, cnt:<frame_count>,
             // fmt:<image_format>, dest:<mac_address>, from:<image_source>}
             nb_sub_images = nb_images_left > MaxNumberImagesPerRequest[img_format]
-                ? MaxNumberImagesPerRequest[img_format]
-                : nb_images_left;
+                ? MaxNumberImagesPerRequest[img_format] : nb_images_left;
             request_format = g_strdup_printf(self->request_image_string, cine, start, nb_sub_images,
                 ImageFormatSpecs[img_format].format_string, additional);
             if (request_format == NULL) {
@@ -2260,6 +1914,8 @@ gboolean uca_phantom_communicate_request_images(UcaPhantomCommunicate* self, Cap
 
             // Push request to request queue
             g_async_queue_push(self->request_queue, request);
+
+            g_print ("Request pushed!\n");
         }
         g_free(additional);
     } else {
@@ -2310,7 +1966,7 @@ gboolean uca_phantom_communicate_request_images(UcaPhantomCommunicate* self, Cap
         g_free(additional);
     }
 
-    if (self->timestamping || settings->timestamp_format != TS_NONE) {
+    if (self->settings.timestamp_format != TS_NONE) {
         // Request the timestamps:
         // format: time {cine:<cine_number>, start:<first_frame>,
         // cnt:<stamp_count>[, from:<image_source>]}
@@ -2424,17 +2080,12 @@ static gpointer uca_phantom_communicate_accept_img(gpointer data)
         // Append to the self->unpacked_images array
         g_ptr_array_add(self->unpacked_images, image_buffer);
 
-        // Append a copy of the current capture settings
-        CaptureSettings* csettings = g_memdup(&self->settings, sizeof(CaptureSettings));
-        g_ptr_array_add(self->capture_settings, csettings);
-
         gpointer output_buffer = image_buffer;
 
         // Create a CineData struct for each image in the image buffer
         for (guint i = 0; i < request->nb_images; i++) {
             // Create a new CineData struct
             CineData* cine_data = g_new0(CineData, 1);
-            cine_data->Settings = csettings;
 
             cine_data->NbImages = 1;
             cine_data->NbPixelsPerImage = nb_pixels;
@@ -2488,11 +2139,12 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
 
     struct pcap_pkthdr* pkt_header = NULL;
 
-    // use g_socket_receive_from in a loop to receive the data from the socket
     while (TRUE) {
         bytes_read = 0;
         // Wait for a request to be available
         request = g_async_queue_pop(self->request_queue);
+
+        g_print ("Request received\n");
 
         if (request == NULL) {
             return NULL;
@@ -2508,7 +2160,7 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
             // Add the data to the queue
             g_async_queue_push(self->packed_queue, cine_data);
 
-            if (self->timestamping) {
+            if (self->settings.timestamp_format != TS_NONE) {
                 // Create timestamp request
                 TsRequest* ts_request = g_new0(TsRequest, 1);
                 ts_request->end_request = TRUE;
@@ -2580,7 +2232,6 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
 
         // Create a new CineData struct
         CineData* cine_data = g_new0(CineData, 1);
-        cine_data->Settings = g_memdup(&self->settings, sizeof(CaptureSettings));
         cine_data->ImgFormat = request->img_format;
 
         cine_data->NbImages = request->nb_images;
@@ -2596,7 +2247,7 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
         // Add the data to the queue
         g_async_queue_push(self->packed_queue, cine_data);
 
-        if (self->timestamping) {
+        if (self->settings.timestamp_format != TS_NONE) {
             // Create timestamp request
             TsRequest* ts_request = g_new0(TsRequest, 1);
             ts_request->start = request->start;
@@ -2607,6 +2258,8 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
             // Push request to request queue
             g_async_queue_push(self->ts_request_queue, ts_request);
         }
+
+        g_print ("Request processed\n");
 
         // Free the request
         uca_phantom_communicate_free_request(request);
@@ -2840,9 +2493,6 @@ static gpointer uca_phantom_communicate_unpack_ximg(gpointer data)
         // Append to the self->unpacked_images array
         g_ptr_array_add(self->unpacked_images, cine_data->UnpackedImages);
 
-        // Append a copy of the current capture settings
-        g_ptr_array_add(self->capture_settings, cine_data->Settings);
-
         // Create a CineData struct for each image in the image buffer
         // CineData *new_cine_data = g_new0 (CineData, cine_data->nb_images);
         gpointer image_buffer_offset = cine_data->UnpackedImages;
@@ -2850,7 +2500,6 @@ static gpointer uca_phantom_communicate_unpack_ximg(gpointer data)
         for (guint i = 0; i < cine_data->NbImages; i++) {
             // Get a pointer to the current CineData struct in the array
             CineData* new_cine_data = g_new0(CineData, 1);
-            new_cine_data->Settings = cine_data->Settings;
 
             new_cine_data->NbImages = 1;
             new_cine_data->NbPixelsPerImage = cine_data->NbPixelsPerImage;
@@ -2962,48 +2611,234 @@ static gpointer uca_phantom_communicate_accept_timestamps(gpointer data)
     return NULL;
 }
 
-gpointer uca_phantom_communicate_buffer_images (gpointer data) {
+gpointer uca_phantom_communicate_buffer_ximg_8 (gpointer data) {
+    g_return_val_if_fail (UCA_IS_PHANTOM_COMMUNICATE (data), NULL);
+    
     UcaPhantomCommunicate *self = UCA_PHANTOM_COMMUNICATE (data);
-    static guint prev_buffer_index = 0;
+
+    GError *sub_error = NULL;
 
     gpointer result = NULL;
-    CineData *cine_data;
+    guint nb_pixels = 0, image_size = 0;
+    gsize bytes_read = 0, read_all = 0, packet_size = 0;
+    guint8 *image_buffer = NULL;
+    const guint8* pkt_data = NULL;
+
 
     g_print ("Buffering thread started\n");
 
-    // Loop on CineData objects in the queue
-    // TODO: Remake so that whe dont loop over the queue, but over the buffer index
-    // Then we can just copy eveything at once... 
+    ImageRequest* request = NULL;
+    struct pcap_pkthdr* pkt_header = NULL;
+
     while (TRUE) {
-        // Get the next CineData object
-        cine_data = g_async_queue_pop (self->unpacked_queue);
+        // Wait for a request to be available
+        request = g_async_queue_pop (self->request_queue);
 
-        if (cine_data->UnpackedImages == NULL && cine_data->RawImages == NULL) {
-            g_print ("Buffering thread: exiting because cine_data NULL\n");
-            // // Push the CineData object to the queue anyways, to exit the other threads
-            // g_async_queue_push (self->unpacked_queue, cine_data);
-            g_free (cine_data);
-            break;
+        g_print ("Request received\n");
+
+        if (request == NULL) {
+            return NULL;
+        }
+        if (request->end_request == TRUE) {
+            uca_phantom_communicate_free_request(request);
+            return NULL;
         }
 
-        // Write the image data to the ring buffer
-        result = ringbuf_memcpy_into (self->ring_buffer, cine_data->UnpackedImages, cine_data->SizePerImageUnpacked);
+        // Calculate the size of the image buffer
+        nb_pixels = self->settings.roi_pixel_width * self->settings.roi_pixel_height;
+        image_size = nb_pixels; // the packed image size
+        packet_size = image_size * request->nb_images; // the packed image packet size
 
-        // Free the actual image data
-        // If we arrive in a new buffer, free the previous one
-        if (cine_data->buffer_index != prev_buffer_index) {
-            g_debug("Freeing buffer %d\n", prev_buffer_index);
-            g_free(g_ptr_array_remove_index(self->unpacked_images, prev_buffer_index));
-            prev_buffer_index = cine_data->buffer_index;
+        g_print ("Requesting %ld bytes\n", packet_size);
+        g_print ("Requesting %ld images\n", request->nb_images);
+        g_print ("Requesting %d pixels\n", nb_pixels);
+
+        // Read the image data from the data stream
+        // read_all = g_input_stream_read_all(self->input_datastream, image_buffer, packet_size, &bytes_read, NULL,
+        //     &sub_error);
+        gssize bytes_read = 0;
+        gsize to_read = 0;
+        gssize remaining_bytes = packet_size;
+
+        while (TRUE) {
+            if (remaining_bytes <= 0) {
+                break; // All bytes of the image frame have been read
+            }
+
+            read_all = pcap_next_ex(self->handle, &pkt_header, &pkt_data);
+
+            if (read_all == 0) {
+                g_debug("Beeing read from live capture\n");
+            } else if (read_all == -1) {
+                g_debug("Error occurred\n");
+                gchar* error = pcap_geterr(self->handle);
+
+                g_debug("Error: %s\n", error);
+            } else if (read_all == -2) {
+                g_debug("Being read from savefile\n");
+            }
+
+            // Check if the packet size exceeds the remaining space in the buffer
+            if (pkt_header->len - ETHERNET_HEADER_SIZE > remaining_bytes) {
+                to_read = remaining_bytes;
+            } else {
+                to_read = pkt_header->len - ETHERNET_HEADER_SIZE;
+            }
+
+            // // Copy the data to the image buffer
+            // memcpy(buffer_pointer, pkt_data + ETHERNET_HEADER_SIZE, to_read);
+
+            // Copy eveything to the ring buffer
+            result = ringbuf_memcpy_into (self->ring_buffer, pkt_data + ETHERNET_HEADER_SIZE, to_read);
+            if (result == NULL) {
+                g_print ("Error in the ring buffer...\n");
+                continue;
+            }
+
+            remaining_bytes -= to_read;
         }
 
-        // Free the cine data
-        g_free (cine_data);
+        bytes_read = packet_size - remaining_bytes;
 
-        if (result == NULL) {
-            g_print ("Error in the ring buffer...\n");
-            continue;
+        if (bytes_read != packet_size) {
+            g_debug("Failed to read all bytes of image frame from datastream. Read %ld "
+                    "bytes, expected %ld bytes. Buffer will be padded.\n",
+                bytes_read, packet_size);
         }        
+
+        // Free the request
+        uca_phantom_communicate_free_request(request);
+    }
+
+        
+}
+
+gpointer uca_phantom_communicate_buffer_img_8 (gpointer data) {
+    g_return_val_if_fail (UCA_IS_PHANTOM_COMMUNICATE (data), NULL);
+
+    UcaPhantomCommunicate *self = UCA_PHANTOM_COMMUNICATE (data);
+
+    // g_return_val_if_fail ((self->settings.image_format == IMG_8) || (self->settings.image_format == IMG_8R), NULL);
+
+    static guint prev_buffer_index = 0;
+
+    GError *sub_error = NULL;
+
+    gpointer result = NULL;
+    guint nb_pixels = 0, image_size = 0;
+    gsize bytes_read = 0, read_all = 0, packet_size = 0;
+    // guint8 *frame_buffer = g_malloc0 (1600 * sizeof (guint8));
+
+    g_print ("Buffering thread started\n");
+
+    self->input_datastream = g_io_stream_get_input_stream(G_IO_STREAM(self->data_connection));
+
+    ImageRequest* request = NULL;
+
+    while (TRUE) {
+        // Wait for a request to be available
+        request = g_async_queue_pop (self->request_queue);
+
+        g_print ("Request received\n");
+
+        if (request == NULL) {
+            return NULL;
+        }
+        if (request->end_request == TRUE) {
+            uca_phantom_communicate_free_request(request);
+            return NULL;
+        }
+
+        // Calculate the size of the image buffer
+        nb_pixels = self->settings.roi_pixel_width * self->settings.roi_pixel_height;
+        image_size = nb_pixels; // the packed image size
+        packet_size = image_size * request->nb_images; // the packed image packet size
+        g_print ("Requesting %ld bytes\n", packet_size);
+        g_print ("Requesting %ld images\n", request->nb_images);
+        g_print ("Requesting %d pixels\n", nb_pixels);
+
+        guint8 *image_buffer = g_malloc0 (packet_size);
+        guint8 *buffer_pointer = image_buffer;
+        
+
+        for (int img_i = 0; img_i < request->nb_images; img_i++) {
+
+            gssize bytes_read = 0, remaining_bytes = image_size, to_read = 0;
+            buffer_pointer = image_buffer;
+
+            while (remaining_bytes > 0) {
+                bytes_read = g_input_stream_read (self->input_datastream, buffer_pointer, remaining_bytes, NULL, &sub_error);
+                if (bytes_read < 0) {
+                    g_print ("Error reading image frame from datastream\n");
+                    g_free(image_buffer);
+                    return sub_error;
+                }
+                else if (bytes_read == 0) {
+                    g_print ("End of stream reached\n");
+                    g_free(image_buffer);
+                    return NULL;
+                }
+                
+                buffer_pointer += bytes_read;
+                remaining_bytes -= bytes_read;
+            }
+
+            if (remaining_bytes != 0) {
+                g_print ("Failed to read all bytes of image frame from datastream. expected %d bytes.\n",image_size);
+            }
+
+            result = ringbuf_memcpy_into (self->ring_buffer, image_buffer, image_size);
+            if (result == NULL) {
+                g_print ("Error in the ring buffer...\n");
+                continue;
+            }
+
+            // // Print 10 first bytes of the image buffer
+            // for (guint i = 0; i < 10; i++) {
+            //     g_print("%d ", image_buffer[i]);
+            // }
+            // g_print("\n");
+
+        }
+
+        // while (remaining_bytes > 0) {
+        //     bytes_read = g_input_stream_read (self->input_datastream, frame_buffer, 1600, NULL, &sub_error);
+        //     if (bytes_read < 0) {
+        //         g_print ("Error reading image frame from datastream\n");
+        //         g_free(frame_buffer);
+        //         return sub_error;
+        //     }
+        //     else if (bytes_read == 0) {
+        //         g_print ("End of stream reached\n");
+        //         g_free(frame_buffer);
+        //         return NULL;
+        //     }
+
+        //     if (bytes_read > remaining_bytes)
+        //         to_read = remaining_bytes;
+        //     else
+        //         to_read = bytes_read;
+
+        //     // Copy eveything to the ring buffer
+        //     result = ringbuf_memcpy_into (self->ring_buffer, frame_buffer, to_read);
+        //     if (result == NULL) {
+        //         g_print ("Error in the ring buffer...\n");
+        //         continue;
+        //     }
+            
+        //     remaining_bytes -= to_read;
+        // }
+
+        // if (read_all != TRUE && sub_error != NULL) {
+        //     g_free(frame_buffer);
+        //     return sub_error;
+        // }
+        // else if (remaining_bytes != 0) {
+        //     g_print("Failed to read all bytes of image frame from datastream.\n");
+        // }
+
+        // Free the request
+        uca_phantom_communicate_free_request(request);
     }
 
     g_print ("Buffering thread finished\n");
@@ -3011,14 +2846,41 @@ gpointer uca_phantom_communicate_buffer_images (gpointer data) {
     return NULL;
 }
 
-gboolean uca_phantom_communicate_start_readout(UcaPhantomCommunicate* self, GError** error_loc)
-{
+gboolean uca_phantom_communicate_start_readout (
+    UcaPhantomCommunicate* self, gboolean buffering, CaptureSettings *settings, GError **error_loc) {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(self->local_acquisition_state == IDLE, FALSE);
 
     GError* sub_error = NULL;
     GError* phantom_error = NULL;
     gboolean res = FALSE;
+
+    self->settings = *settings;
+
+    if (self->local_acquisition_state = IDLE)
+        self->local_acquisition_state = ACQUIRING;
+
+    if (settings->timestamp_format != TS_NONE) {
+        // Start new thread to read timestamps
+        g_print("Starting timestamp thread\n");
+        self->ts_receiver = g_thread_new("ts_receiver", uca_phantom_communicate_accept_timestamps, self);
+    }
+
+    if (buffering) {
+        gsize image_size = self->settings.roi_pixel_width * self->settings.roi_pixel_height;
+        self->ring_buffer = ringbuf_new (1, MAX_NB_IMAGES_BUFFERING * image_size);
+
+        // Start new thread to buffer images
+        if (self->xenabled){
+            self->buffering_thread = g_thread_new("buffering_thread", uca_phantom_communicate_buffer_ximg_8, self);
+        }
+        else
+            self->buffering_thread = g_thread_new("buffering_thread", uca_phantom_communicate_buffer_img_8, self);
+
+        self->buffer_state = ACQUIRING;
+
+        return TRUE;
+    }
 
     if (self->xenabled) {
         if (self->mac_address_str == NULL) {
@@ -3049,21 +2911,7 @@ gboolean uca_phantom_communicate_start_readout(UcaPhantomCommunicate* self, GErr
         // Start new thread to read data
         self->data_receiver = g_thread_new("data_receiver", uca_phantom_communicate_accept_img, self);
     }
-
-    if (self->timestamping) {
-        // Start new thread to read timestamps
-        g_print("Starting timestamp thread\n");
-        self->ts_receiver = g_thread_new("ts_receiver", uca_phantom_communicate_accept_timestamps, self);
-    }
-
-    if (self->buffering) {
-        // Start new thread to buffer images
-        g_print("Starting buffering thread\n");
-        self->buffering_thread = g_thread_new("buffering_thread", uca_phantom_communicate_buffer_images, self);
-    }
-
-    self->local_acquisition_state = ACQUIRING;
-
+    
     return TRUE;
 }
 
@@ -3073,7 +2921,6 @@ gboolean uca_phantom_communicate_grab_image(UcaPhantomCommunicate* self, gpointe
     // static GError *sub_error = NULL;
     static GError* phantom_error = NULL;
     static guint prev_buffer_index = 0;
-
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
 
     cine_data = g_async_queue_pop(self->unpacked_queue);
@@ -3108,13 +2955,30 @@ gboolean uca_phantom_communicate_grab_image(UcaPhantomCommunicate* self, gpointe
 gboolean uca_phantom_communicate_grab_buffered_image (UcaPhantomCommunicate* self, gpointer data, GError** error_loc)
 {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
+    static guint64 prev_time = 0;
 
     // CAUTION : no verification is done on the size of the output buffer...
     // This is dangerous as it as it puts the user in charge of allocating the
     // right amount of memory with the good bit depth.
     // TODO : Mqybe consider GBytes for the output buffer ?
-    gsize image_size = self->settings.roi_pixel_width * self->settings.roi_pixel_height * self->settings.sensor_bit_depth / 8;
-    ringbuf_memcpy_from (self->ring_buffer, data, image_size);
+    gsize image_size = self->settings.roi_pixel_width * self->settings.roi_pixel_height;
+
+    guint8 *data_buffer = data;
+    ringbuf_memcpy_from (data_buffer, self->ring_buffer, image_size);
+
+    guint64 new_time = g_get_monotonic_time();
+    guint64 time_diff = new_time - prev_time;
+
+    // Print the nb of images per second
+    // For every `time_diff` microseconds, we have 1 image
+    g_print ("Images per second : %f\n", (gdouble) G_USEC_PER_SEC / time_diff );
+
+    // // Print 10 first bytes of the image buffer
+    // for (guint i = 0; i < 10; i++) {
+    //     g_print("%d ", data_buffer[i]);
+    // }
+    // g_print("\n");
+    prev_time = new_time;
 
     return TRUE;
 }
@@ -3124,7 +2988,7 @@ gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate* self, GErro
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
     g_return_val_if_fail(self->local_acquisition_state == ACQUIRING, FALSE);
-    g_return_val_if_fail(self->phantom_acquisition_state == ACQUIRING, FALSE);
+    g_return_val_if_fail(self->phantom_acquisition_state == ACQUIRING || self->buffer_state == ACQUIRING, FALSE);
 
     GError* sub_error = NULL;
     GError* phantom_error = NULL;
@@ -3137,6 +3001,7 @@ gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate* self, GErro
 
     g_async_queue_push(self->request_queue, request);
 
+    g_print ("Stopping data_receiver thread\n");
     sub_error = g_thread_join(self->data_receiver);
     if (sub_error != NULL) {
         g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_STOP_READOUT,
@@ -3146,6 +3011,7 @@ gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate* self, GErro
         return FALSE;
     }
 
+    g_print ("Stopping data_unpacker thread\n");
     if (self->xenabled) {
         // Stop the data unpacker thread
         sub_error = g_thread_join(self->data_unpacker);
@@ -3158,8 +3024,10 @@ gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate* self, GErro
         }
     }
 
-    if (self->buffering) {
+    g_print ("Stopping buffering thread\n");
+    if (self->buffer_state == ACQUIRING) {
         // Stop the buffering thread
+        g_print ("Stopping buffering thread\n");
         sub_error = g_thread_join(self->buffering_thread);
         if (sub_error != NULL) {
             g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_STOP_READOUT,
@@ -3168,6 +3036,7 @@ gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate* self, GErro
             g_clear_error(&sub_error);
             return FALSE;
         }
+        self->buffer_state = IDLE;
     }
 
     self->phantom_acquisition_state = IDLE;

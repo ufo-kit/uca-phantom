@@ -20,7 +20,7 @@
 
 #include <glib-object.h>
 #include <uca/uca-camera.h>
-
+#include "uca-phantom-communicate.h"
 
 G_BEGIN_DECLS
 
