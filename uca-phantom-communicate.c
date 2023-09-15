@@ -44,7 +44,6 @@
  * TODO:
  * - Verify the requested data size is smaller than the available space in the
  * camera cine
- * - timestamps
  * - signals ?
  * - Checkout the memread nonsense, external pins and whatnot
  * - Implement cancelable functions

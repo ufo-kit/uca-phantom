@@ -185,6 +185,14 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
     gboolean result = FALSE;
     gdouble time_to_record = 0.0;
 
+    // Start readout automatically
+    uca_phantom_camera_start_readout (camera, &internal_error);
+    if (internal_error != NULL) {
+        g_propagate_error (error, internal_error);
+        return;
+    }
+    
+
     if (priv->live_images) {
         priv->settings.current_cine = -1;
         time_to_record = 0.001 * G_USEC_PER_SEC;
@@ -198,6 +206,9 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
 
         // Fill in the camera buffer with enough pre trigger frames 
         g_usleep (time_to_record);
+    }
+    else {
+        priv->settings.current_cine = 0;
     }
 
     if (!priv->recording)
