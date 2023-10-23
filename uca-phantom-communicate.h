@@ -424,7 +424,7 @@ gboolean uca_phantom_communicate_grab_image (UcaPhantomCommunicate *self, gpoint
  * @param error_loc Pointer to a GError object to store any errors that occur
  * @return gboolean TRUE if the readout was successfully stopped, FALSE otherwise
  */
-gboolean uca_phantom_communicate_grab_buffered_image (UcaPhantomCommunicate* self, gpointer data, GError** error_loc);
+gboolean uca_phantom_communicate_grab_live_image (UcaPhantomCommunicate* self, gpointer data, GError** error_loc);
 
 /**
  * @brief The flags that represent phantom unit variables.

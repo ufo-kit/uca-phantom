@@ -194,7 +194,7 @@ Unit variables[] = {
     /*
     Name Type Acces c#.state flag list r/o c#.frcount uint r/o c#.firstfr int r/o c#.lastfr int r/o c#.format int r/o c#.in int r/o c#.out int r/o
     */
-    {"c%d.state",  G_TYPE_INT,     G_PARAM_READABLE,  UNIT_CT_STATE,    TRUE},
+    {"c%d.state",  PHANTOM_TYPE_FLAGS,     G_PARAM_READABLE,  UNIT_CT_STATE,    TRUE},
     {"c%d.frcount",    G_TYPE_UINT,    G_PARAM_READABLE,  UNIT_CT_FRCOUNT,  TRUE},
     {"c%d.firstfr",    G_TYPE_INT,     G_PARAM_READABLE,  UNIT_CT_FIRSTFR,  TRUE},
     {"c%d.lastfr", G_TYPE_INT,     G_PARAM_READABLE,  UNIT_CT_LASTFR,   TRUE},

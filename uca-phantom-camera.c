@@ -117,7 +117,7 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
 
     gboolean result = FALSE;
 
-    if ((priv->settings.timestamp_format != TS_NONE || !priv->xenabled) && !priv->data_connected) {
+    if ((priv->settings.timestamp_format != TS_NONE || priv->live_images) && !priv->data_connected) {
         result = uca_phantom_communicate_connect_datastream (priv->communicator, &internal_error);
 
         if (result != TRUE && internal_error != NULL) {
@@ -183,7 +183,6 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
     UcaPhantomCameraPrivate *priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
     gboolean result = FALSE;
-    gdouble time_to_record = 0.0;
 
     // Start readout automatically
     uca_phantom_camera_start_readout (camera, &internal_error);
@@ -193,26 +192,12 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
     }
     
 
-    if (priv->live_images) {
-        priv->settings.current_cine = -1;
-        time_to_record = 0.001 * G_USEC_PER_SEC;
-
-        // Arm the camera
-        result = uca_phantom_communicate_arm (priv->communicator, priv->settings.current_cine, &internal_error);
-        if (result != TRUE && internal_error != NULL) {
-            g_propagate_error (error, internal_error);
-            return;
-        }
-
-        // Fill in the camera buffer with enough pre trigger frames 
-        g_usleep (time_to_record);
-    }
-    else {
-        priv->settings.current_cine = 0;
-    }
+    // Fill in the camera buffer with enough pre trigger frames 
+    g_usleep (0.001 * G_USEC_PER_SEC);
+    priv->settings.current_cine = 1;
 
     if (!priv->recording)
-        priv->recording = TRUE;
+        priv->recording = TRUE;    
 
     g_print ("Current cine : %d\n", priv->settings.current_cine);
 }
@@ -254,11 +239,10 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     gdouble time_to_record = 0;
     gboolean res = FALSE;
 
-
+    // print the current cine
+    g_print ("Current cine : %d\n", priv->settings.current_cine);
 
     time_to_record = priv->settings.nb_pre_trigger_frames / (gdouble)priv->settings.frames_per_second;
-
-    priv->settings.current_cine += 1;
 
     // Arm the camera
     res = uca_phantom_communicate_arm (priv->communicator, priv->settings.current_cine, &internal_error);
@@ -267,8 +251,32 @@ uca_phantom_camera_trigger (UcaCamera *camera,
         return;
     }
 
-    // Fill in the camera buffer with enough pre trigger frames 
+    // Wait and let the camera fill in the buffer with enough pre trigger frames 
     g_usleep (time_to_record * G_USEC_PER_SEC);
+
+    gboolean ready_to_trigger = FALSE;
+    GValue flags = G_VALUE_INIT;
+    const gchar *flags_str = NULL;
+    gchar *found = NULL;
+
+    while (!ready_to_trigger) {
+        res = uca_phantom_communicate_get_variable (priv->communicator, UNIT_CT_STATE, &flags, &internal_error);
+        if (res != TRUE && internal_error != NULL) {
+            g_propagate_error (error, internal_error);
+            return;
+        }
+        flags_str = g_value_get_string (&flags);
+        if (flags_str == NULL) {
+            g_warning ("Failed to get flags string");
+            continue;
+        }
+        found = g_strrstr (flags_str, "ABL");
+        if (found != NULL) {
+            ready_to_trigger = TRUE;
+        }
+        g_value_unset (&flags);
+    }
+    found = NULL;
 
     // Trigger the camera using the communicator
     res = uca_phantom_communicate_trigger (priv->communicator, &internal_error);
@@ -278,14 +286,31 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     }
     
     // check if the cine is flagged READY !
-    // todo : use notify command
-    // Current method: estimate the time needed to record ptframes
-    // and wait an extra 100ms to be sure :D 
+    // Same thing, estimate the time to record the post trigger frames
     time_to_record = priv->settings.nb_post_trigger_frames / (gdouble)priv->settings.frames_per_second;
-    g_print ("Time to record : %lf\n", time_to_record);
-    g_usleep (time_to_record * G_USEC_PER_SEC + 100000);
+    g_usleep (time_to_record * G_USEC_PER_SEC);
 
-    g_print ("img_format : %s\n", ImageFormatSpecs[priv->settings.image_format].format_string);
+    gboolean ready_to_request = FALSE;
+    GValue flags2 = G_VALUE_INIT;
+
+    while (!ready_to_request) {
+        res = uca_phantom_communicate_get_variable (priv->communicator, UNIT_CT_STATE, &flags2, &internal_error);
+        if (res != TRUE && internal_error != NULL) {
+            g_propagate_error (error, internal_error);
+            return;
+        }
+        flags_str = g_value_get_string (&flags2);
+        if (flags_str == NULL) {
+            g_warning ("Failed to get flags string");
+            continue;
+        }
+        found = g_strrstr (flags_str, "STR");
+        if (found != NULL) {
+            ready_to_request = TRUE;
+        }
+        
+        g_value_unset (&flags2);
+    }
 
     res = !uca_phantom_communicate_request_images (
             priv->communicator, 
@@ -295,7 +320,8 @@ uca_phantom_camera_trigger (UcaCamera *camera,
         g_propagate_error (error, internal_error);
         return;
     }
-    
+
+    priv->settings.current_cine += 1;    
 }
 
 static void
@@ -326,7 +352,7 @@ uca_phantom_camera_grab (UcaCamera *camera,
     GError *internal_error = NULL;
 
     if (priv->live_images) {
-        if (!uca_phantom_communicate_grab_buffered_image (priv->communicator, data, &internal_error)) {
+        if (!uca_phantom_communicate_grab_live_image (priv->communicator, data, &internal_error)) {
             g_propagate_error (error, internal_error);
             return FALSE;
         }
@@ -336,6 +362,26 @@ uca_phantom_camera_grab (UcaCamera *camera,
             g_propagate_error (error, internal_error);
             return FALSE;
         }
+    }
+
+    return TRUE;
+}
+
+/**
+ *
+ */
+static gboolean
+uca_phantom_camera_grab_live (UcaCamera *camera,
+                         gpointer data,
+                         GError **error) {
+    UcaPhantomCameraPrivate *priv;
+    priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
+
+    GError *internal_error = NULL;
+
+    if (!uca_phantom_communicate_grab_live_image (priv->communicator, data, &internal_error)) {
+        g_propagate_error (error, internal_error);
+        return FALSE;
     }
 
     return TRUE;
@@ -512,13 +558,13 @@ uca_phantom_camera_set_property (GObject *object,
                 g_object_set (priv->communicator, "xnetcard", priv->xnetcard, NULL);
             break;
         case PROP_XENABLED:
+            g_print ("XENABLED\n");
             priv->xenabled = g_value_get_boolean (value);
             if (priv->communicator != NULL)
                 g_object_set (priv->communicator, "xenabled", priv->xenabled, NULL);
             break;
         case PROP_LIVE_IMAGES:
             priv->live_images = g_value_get_boolean (value);
-            priv->settings.current_cine = -1;
             break;
         case PROP_NB_RECORDINGS:
             priv->nb_recordings = g_value_get_uint (value);
@@ -788,6 +834,13 @@ ufo_net_camera_initable_init (GInitable *initable,
     priv->yinc = g_value_get_uint (&value);
     g_value_unset (&value);
 
+    if (priv->live_images) {
+        if (!uca_phantom_communicate_arm (priv->communicator, -1, &internal_error)) {
+            g_propagate_error (error, internal_error);
+            return FALSE;
+        }
+    }
+
 
     // Init base class properties
     priv->name = g_strdup ("Phantom Camera");
@@ -828,6 +881,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
     camera_class->stop_readout = uca_phantom_camera_stop_readout;
     camera_class->write = uca_phantom_camera_write;
     camera_class->grab = uca_phantom_camera_grab;
+    camera_class->grab_live = uca_phantom_camera_grab_live;
     camera_class->trigger = uca_phantom_camera_trigger;
 
 
