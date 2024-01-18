@@ -130,7 +130,6 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
 
     // Connect to the datastream(s)
     if (priv->xenabled && !priv->x_data_connected) {
-        g_print ("Connecting to xdatastream\n");
         result = uca_phantom_communicate_connect_xdatastream (priv->communicator, &internal_error);
 
         if (result != TRUE && internal_error != NULL) {
@@ -140,7 +139,6 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
         priv->x_data_connected = TRUE;
     } 
 
-    g_print ("Starting readout\n");
     // Launch the readout using the communicator
     result = uca_phantom_communicate_start_readout (priv->communicator, priv->live_images, &(priv->settings), &internal_error);
     if (result != TRUE && internal_error != NULL) {
@@ -154,8 +152,6 @@ uca_phantom_camera_stop_readout (UcaCamera *camera,
                                  GError **error) {
     g_return_if_fail (error == NULL || *error == NULL);
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
-
-    g_print ("Stopping readout\n");
 
     GError *internal_error = NULL;
     UcaPhantomCameraPrivate *priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
@@ -177,7 +173,6 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
                                     GError **error) {
     g_return_if_fail (error == NULL || *error == NULL);
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
-    g_print ("Starting recording\n");
 
     GError *internal_error = NULL;
     UcaPhantomCameraPrivate *priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
@@ -189,17 +184,14 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
     if (internal_error != NULL) {
         g_propagate_error (error, internal_error);
         return;
-    }
-    
+    }    
 
     // Fill in the camera buffer with enough pre trigger frames 
     g_usleep (0.001 * G_USEC_PER_SEC);
     priv->settings.current_cine = 1;
 
     if (!priv->recording)
-        priv->recording = TRUE;    
-
-    g_print ("Current cine : %d\n", priv->settings.current_cine);
+        priv->recording = TRUE;
 }
 
 static void
@@ -207,8 +199,6 @@ uca_phantom_camera_stop_recording (UcaCamera *camera,
                                    GError **error) {
     g_return_if_fail (error == NULL || *error == NULL);
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
-
-    g_print ("Stoping recording\n");
 
     UcaPhantomCameraPrivate *priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
@@ -219,9 +209,14 @@ uca_phantom_camera_stop_recording (UcaCamera *camera,
         g_propagate_error (error, internal_error);
         return;
     }
-
+    
     priv->recording = FALSE;
 
+    uca_phantom_camera_stop_readout (camera, &internal_error);
+    if (internal_error != NULL) {
+        g_propagate_error (error, internal_error);
+        return;
+    }
 }
 
 /**
@@ -240,7 +235,7 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     gboolean res = FALSE;
 
     // print the current cine
-    g_print ("Current cine : %d\n", priv->settings.current_cine);
+    // g_print ("Saving in cine: %d\n", priv->settings.current_cine);
 
     time_to_record = priv->settings.nb_pre_trigger_frames / (gdouble)priv->settings.frames_per_second;
 
@@ -358,10 +353,12 @@ uca_phantom_camera_grab (UcaCamera *camera,
         }
     }
     else {
+        g_print ("Grabbing image %d\n", priv->settings.current_cine);
         if (!uca_phantom_communicate_grab_image (priv->communicator, data, &internal_error)) {
             g_propagate_error (error, internal_error);
             return FALSE;
         }
+        g_print ("Done grabbing image %d\n", priv->settings.current_cine);
     }
 
     return TRUE;
@@ -399,8 +396,6 @@ uca_phantom_camera_set_property (GObject *object,
 
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (object);
     UcaPhantomCommunicate *communicator = priv->communicator;
-
-    g_print ("property %s\n", g_param_spec_get_name (pspec));
 
     GError *internal_error = NULL;
     gboolean res = TRUE;
@@ -540,7 +535,6 @@ uca_phantom_camera_set_property (GObject *object,
             break;
         case PROP_IMAGE_FORMAT:
             priv->settings.image_format = g_value_get_uint (value);
-            g_print ("Image format: %d\n", priv->settings.image_format);
             // Requested when triggered
             break;
         case PROP_TIMESTAMP_FORMAT:
@@ -558,7 +552,6 @@ uca_phantom_camera_set_property (GObject *object,
                 g_object_set (priv->communicator, "xnetcard", priv->xnetcard, NULL);
             break;
         case PROP_XENABLED:
-            g_print ("XENABLED\n");
             priv->xenabled = g_value_get_boolean (value);
             if (priv->communicator != NULL)
                 g_object_set (priv->communicator, "xenabled", priv->xenabled, NULL);
@@ -881,7 +874,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
     camera_class->stop_readout = uca_phantom_camera_stop_readout;
     camera_class->write = uca_phantom_camera_write;
     camera_class->grab = uca_phantom_camera_grab;
-    camera_class->grab_live = uca_phantom_camera_grab_live;
+    // camera_class->grab_live = uca_phantom_camera_grab_live;
     camera_class->trigger = uca_phantom_camera_trigger;
 
 
@@ -1019,7 +1012,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self) {
         .trigger_source = UCA_CAMERA_TRIGGER_SOURCE_SOFTWARE,
         .trigger_type = UCA_CAMERA_TRIGGER_TYPE_EDGE,
         .frames_per_second = 100.0,
-        .exposure_time = 459,
+        .exposure_time = 0.001,
         .roi_pixel_x = 0,
         .roi_pixel_y = 0,
         .roi_width_multiplier = priv->xinc ,
@@ -1027,12 +1020,12 @@ uca_phantom_camera_init (UcaPhantomCamera *self) {
         .focal_length = 0.0,
         .aperture = 0.0,
         .edr_exp = 459,
-        .shutter_off = 1,
+        .shutter_off = FALSE,
         .aexpmode = AUTO_EXP_MODE_AVERAGE,
         .aexpcomp = 0.0,
-        .nb_post_trigger_frames = 0,
-        .nb_pre_trigger_frames = 0,
-        .current_cine = 0,
+        .nb_post_trigger_frames = 3000,
+        .nb_pre_trigger_frames = 1,
+        .current_cine = 1,
     };
     priv->recording = FALSE;
     priv->live_images = FALSE;

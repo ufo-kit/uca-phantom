@@ -476,6 +476,11 @@ static void uca_phantom_communicate_dispose(GObject* object)
         g_error_free(error);
     }
 
+    // Free the live ring buffer
+    if (instance->live_ring_buffer != NULL) {
+        ringbuf_free(instance->live_ring_buffer);
+    }
+
     G_OBJECT_CLASS(uca_phantom_communicate_parent_class)->dispose(object);
 }
 
@@ -1349,7 +1354,7 @@ gboolean uca_phantom_communicate_connect_datastream(UcaPhantomCommunicate* self,
 {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(self->data_connection_state != CONNECTED, TRUE);
-    g_warning("uca_phantom_communicate_connect_datastream: connecting!\n");
+    g_info ("Connecting to the datastream!\n");
 
     GError* sub_error = NULL;
     GError* phantom_error = NULL;
@@ -1618,7 +1623,7 @@ gpointer uca_phantom_communicate_request_live_images (gpointer data) {
     // Setup the arguments for image transfer on 1Gb ethernet
     additional = g_strdup("");
     request_format = g_strdup_printf(self->request_image_string, cine, start, count,
-        ImageFormatSpecs[IMG_8].format_string, additional);
+        ImageFormatSpecs[IMG_P16].format_string, additional);
     if (request_format == NULL) {
         g_set_error(&error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES,
             "Failed to allocate memory for get_ximages command");
@@ -1704,11 +1709,9 @@ gboolean uca_phantom_communicate_arm(UcaPhantomCommunicate* self, gint cine, GEr
 gboolean uca_phantom_communicate_disarm(UcaPhantomCommunicate* self, GError** error_loc) {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
+    g_return_val_if_fail(self->phantom_acquisition_state == ACQUIRING, FALSE);
     
-    if (self->live_image_buffer_state == ACQUIRING) {
-        self->live_image_buffer_state = IDLE;
-        g_thread_join(self->live_images_requester);
-    }
+    self->phantom_acquisition_state = IDLE;
 
     return TRUE;
 }
@@ -1884,7 +1887,7 @@ gboolean uca_phantom_communicate_request_images(UcaPhantomCommunicate* self, Cap
             // Push request to request queue
             g_async_queue_push(self->request_queue, request);
 
-            g_debug ("Request pushed!\n");
+            // g_print ("Request pushed!\n");
         }
         g_free(additional);
     } else {
@@ -2248,8 +2251,6 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
 static gboolean uca_phantom_communicate_unpack_image_p10(UcaPhantomCommunicate* self, CineData* cine_data,
     GError** error_loc)
 {
-    static number_of_calls = 0;
-    number_of_calls++;
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(cine_data != NULL, FALSE);
 
@@ -2322,22 +2323,17 @@ static gboolean uca_phantom_communicate_unpack_image_p10(UcaPhantomCommunicate* 
         }
     }
 
-    g_print ("Number of calls: %d\n", number_of_calls);
-
     if (output_index != cine_data->NbPixelsPerImage) {
         g_warning("P10 -> Pixel index is not equal to the number of pixels. Expected %ld, got %ld\n",
             expected_size, output_index);
     }
-
-    // Calculate the time 
-    gint64 start_time = g_get_monotonic_time ();
+    
     // copy into the ring buffer
-    ringbuf_memcpy_into (self->unpacked_ring_buffer, unpacked_buffer, output_size);
-
-    g_print ("Time after cpy: %f\n", (gdouble) (g_get_monotonic_time () - start_time) / 1000000);
-
-    g_free (cine_data->RawImages);
+    ringbuf_push (self->unpacked_ring_buffer, unpacked_buffer, output_size);
     g_free (unpacked_buffer);
+
+    // cine_data->UnpackedImages = unpacked_buffer;
+    g_free (cine_data->RawImages);
 
     return TRUE;
 }
@@ -2419,11 +2415,15 @@ static gboolean uca_phantom_communicate_unpack_image_p12l(UcaPhantomCommunicate*
         g_warning("Error while unpacking image");
     }
 
-    // copy into the ring buffer
-    ringbuf_memcpy_into (self->unpacked_ring_buffer, unpacked_buffer, output_size);
 
-    g_free (cine_data->RawImages);
+    // copy into the ring buffer
+    ringbuf_push (self->unpacked_ring_buffer, unpacked_buffer, output_size);
+
+    // free the unpacked buffer
     g_free (unpacked_buffer);
+
+    // cine_data->UnpackedImages = unpacked_buffer;
+    g_free (cine_data->RawImages);
 
     return TRUE;
 }
@@ -2444,9 +2444,13 @@ static gpointer uca_phantom_communicate_unpack_ximg(gpointer data)
     GError* sub_error = NULL;
     GError* phantom_error = NULL;
 
-    gsize image_size = self->settings.roi_pixel_width * self->settings.roi_pixel_height;
+    gsize image_res = self->settings.roi_pixel_width * self->settings.roi_pixel_height * 2;
+    guint nb_images = self->settings.nb_pre_trigger_frames + self->settings.nb_post_trigger_frames > 100 ? self->settings.nb_pre_trigger_frames + self->settings.nb_post_trigger_frames : 100;
 
-    self->unpacked_ring_buffer = ringbuf_new (2, image_size * MaxNumberImagesPerRequest[IMG_P16]);
+    if (self->unpacked_ring_buffer != NULL) {
+        ringbuf_free (self->unpacked_ring_buffer);
+    }
+    self->unpacked_ring_buffer = ringbuf_new (image_res * nb_images, TRUE, NULL);
 
     // Loop on CineData objects in the queue
     while (TRUE) {
@@ -2672,7 +2676,7 @@ gpointer uca_phantom_communicate_buffer_ximg_8 (gpointer data) {
             // memcpy(buffer_pointer, pkt_data + ETHERNET_HEADER_SIZE, to_read);
 
             // Copy eveything to the ring buffer
-            result = ringbuf_memcpy_into (self->live_ring_buffer, pkt_data + ETHERNET_HEADER_SIZE, to_read);
+            result = ringbuf_push (self->live_ring_buffer, pkt_data + ETHERNET_HEADER_SIZE, to_read);
             if (result == NULL) {
                 g_print ("Error in the ring buffer...\n");
                 continue;
@@ -2711,13 +2715,14 @@ gpointer uca_phantom_communicate_receive_live_images (gpointer data) {
     guint nb_pixels = 0, image_size = 0;
     gsize bytes_read = 0, read_all = 0, packet_size = 0;
 
-    g_debug ("Buffering thread started\n");
+    const gsize byte_depth = sizeof(guint16);
+
+    // g_print ("Buffering thread started, byte dethp %d\n", byte_depth);
 
     self->input_datastream = g_io_stream_get_input_stream(G_IO_STREAM(self->data_connection));
 
     ImageRequest* request = NULL;
-    guint8 *image_buffer = NULL;
-    guint8 *buffer_pointer = NULL;
+    guint16 *image_buffer = NULL, *buffer_pointer = NULL;
 
     while (TRUE) {
         // Wait for a request to be available
@@ -2733,11 +2738,8 @@ gpointer uca_phantom_communicate_receive_live_images (gpointer data) {
 
         // Calculate the size of the image buffer
         nb_pixels = self->settings.roi_pixel_width * self->settings.roi_pixel_height;
-        image_size = nb_pixels; // the packed image size
+        image_size = nb_pixels * byte_depth; // the packed image size
         packet_size = image_size * request->nb_images; // the packed image packet size
-
-        g_print ("Requesting %ld packet_size\n", packet_size);
-        g_print ("Prev packet size: %d\n", prev_packet_size);
         
         // if (prev_packet_size =! packet_size){
         //     g_print ("Allocating memory for image buffer\n");
@@ -2759,7 +2761,7 @@ gpointer uca_phantom_communicate_receive_live_images (gpointer data) {
             while (remaining_bytes > 0) {
                 bytes_read = g_input_stream_read (self->input_datastream, buffer_pointer, remaining_bytes, NULL, &sub_error);
                 if (bytes_read < 0) {
-                    g_print ("Error reading image frame from datastream\n");
+                    g_print ("Error reading image frame from datastream: \n");
                     g_free(image_buffer);
                     return sub_error;
                 }
@@ -2769,7 +2771,7 @@ gpointer uca_phantom_communicate_receive_live_images (gpointer data) {
                     return NULL;
                 }
                 
-                buffer_pointer += bytes_read;
+                buffer_pointer += bytes_read / sizeof(guint16);
                 remaining_bytes -= bytes_read;
             }
 
@@ -2777,17 +2779,11 @@ gpointer uca_phantom_communicate_receive_live_images (gpointer data) {
                 g_print ("Failed to read all bytes of image frame from datastream. expected %d bytes.\n",image_size);
             }
 
-            result = ringbuf_memcpy_into (self->live_ring_buffer, image_buffer, image_size);
+            result = ringbuf_push (self->live_ring_buffer, image_buffer, image_size);
             if (result == NULL) {
                 g_print ("Error in the ring buffer...\n");
                 continue;
             }
-
-            // // Print 10 first bytes of the image buffer
-            // for (guint i = 0; i < 10; i++) {
-            //     g_print("%d ", image_buffer[i]);
-            // }
-            // g_print("\n");
 
         }
 
@@ -2814,8 +2810,13 @@ gboolean uca_phantom_communicate_start_readout (
 
     self->settings = *settings;
 
-    if (self->local_acquisition_state == IDLE)
+
+    if (self->local_acquisition_state == IDLE){
         self->local_acquisition_state = ACQUIRING;
+
+        // This should not be here. Libuca is why
+        self->phantom_acquisition_state = ACQUIRING;
+    }
 
     if (settings->timestamp_format != TS_NONE) {
         // Start new thread to read timestamps
@@ -2825,10 +2826,15 @@ gboolean uca_phantom_communicate_start_readout (
 
     if (live_images) {
 
-        g_print ("Setting up ring buffer\n");
+        // g_print ("Setting up ring buffer\n");
 
         gsize image_size = self->settings.roi_pixel_width * self->settings.roi_pixel_height;
-        self->live_ring_buffer = ringbuf_new (1, MAX_NB_IMAGES_BUFFERING * image_size);
+        if (self->live_ring_buffer == NULL)
+            self->live_ring_buffer = ringbuf_new (MAX_NB_IMAGES_BUFFERING * image_size, TRUE, NULL);
+        else {
+            ringbuf_reset (self->live_ring_buffer);
+        }
+        
 
         // // Start new thread to buffer images
         // if (self->xenabled){
@@ -2865,7 +2871,7 @@ gboolean uca_phantom_communicate_start_readout (
             }
         }
 
-        g_print ("Starting threads\n");
+        // g_print ("Starting threads\n");
 
         self->data_receiver = g_thread_new("data_receiver", uca_phantom_communicate_accept_ximg, self);
         self->data_unpacker = g_thread_new("data_unpacker", uca_phantom_communicate_unpack_ximg, self);
@@ -2886,17 +2892,60 @@ gboolean uca_phantom_communicate_grab_image(UcaPhantomCommunicate* self, gpointe
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
 
     gsize image_size = self->settings.roi_pixel_width * self->settings.roi_pixel_height * sizeof(guint16);
-
     // copy the image data to the output buffer
     // CAUTION : no verification is done on the size of the output buffer...
     // This is dangerous as it as it puts the user in charge of allocating the
     // right amount of memory with the good bit depth.
     // TODO : Mqybe consider GBytes for the output buffer ?
     guint16 *data_buffer = data;
-    ringbuf_memcpy_from (data_buffer, self->unpacked_ring_buffer, image_size);
+    ringbuf_pop (data_buffer, self->unpacked_ring_buffer, image_size);
 
     return TRUE;
 }
+
+// gboolean uca_phantom_communicate_grab_image(UcaPhantomCommunicate* self, gpointer data, GError** error_loc)
+// {
+//     static CineData* cine_data = NULL;
+//     // static GError *sub_error = NULL;
+//     static GError* phantom_error = NULL;
+//     static guint prev_buffer_index = 0;
+//     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
+
+//     cine_data = g_async_queue_pop(self->unpacked_queue);
+
+//     if (cine_data == NULL) {
+//         g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GRAB_IMAGE,
+//             "No image available.");
+//         g_propagate_error(error_loc, phantom_error);
+//         return FALSE;
+//     }
+
+//     // g_print ("Buffer index: %d\n", cine_data->buffer_index);
+
+//     // time the memcpy
+//     // guint64 start = g_get_monotonic_time();
+
+//     // copy the image data to the output buffer
+//     // CAUTION : no verification is done on the size of the output buffer...
+//     // This is dangerous as it as it puts the user in charge of allocating the
+//     // right amount of memory with the good bit depth.
+//     // TODO : Mqybe consider GBytes for the output buffer ?
+//     memcpy(data, cine_data->UnpackedImages, cine_data->SizePerImageUnpacked);
+
+//     // g_print ("Time to copy image: %ld\n", (g_get_monotonic_time() - start) / (G_USEC_PER_SEC / 1000) );
+
+//     // If we arrive in a new buffer, free the previous one
+//     if (cine_data->buffer_index != prev_buffer_index) {
+//         g_print("Freeing buffer %d\n", prev_buffer_index);
+//         g_free(g_ptr_array_remove_index(self->unpacked_images, prev_buffer_index));
+//         prev_buffer_index = cine_data->buffer_index;
+//     }
+
+//     // Free the CineData object
+//     g_free(cine_data);
+
+//     return TRUE;
+// }
 
 gboolean uca_phantom_communicate_grab_live_image (UcaPhantomCommunicate* self, gpointer data, GError** error_loc)
 {
@@ -2909,10 +2958,10 @@ gboolean uca_phantom_communicate_grab_live_image (UcaPhantomCommunicate* self, g
     // This is dangerous as it as it puts the user in charge of allocating the
     // right amount of memory with the good bit depth.
     // TODO : Mqybe consider GBytes for the output buffer ?
-    gsize image_size = self->settings.roi_pixel_width * self->settings.roi_pixel_height;
+    gsize image_size = self->settings.roi_pixel_width * self->settings.roi_pixel_height * sizeof(guint16);
 
-    guint8 *data_buffer = data;
-    ringbuf_memcpy_from (data_buffer, self->live_ring_buffer, image_size);
+    guint16 *data_buffer = data;
+    ringbuf_pop (data_buffer, self->live_ring_buffer, image_size);
 
     // // Print 10 first bytes of the image buffer
     // for (guint i = 0; i < 10; i++) {
@@ -2927,7 +2976,6 @@ gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate* self, GErro
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
     g_return_val_if_fail(self->local_acquisition_state == ACQUIRING, FALSE);
-    g_return_val_if_fail(self->phantom_acquisition_state == ACQUIRING || self->live_image_buffer_state == ACQUIRING, FALSE);
 
     GError* sub_error = NULL;
     GError* phantom_error = NULL;
