@@ -139,9 +139,8 @@ void ringbuf_free (ringbuf_t *rb) {
     g_cond_clear(&rb->writeable);
 }
 
-gsize ringbuf_bytes_free (ringbuf_t *rb) {
+static gsize ringbuf_bytes_free_unlocked (ringbuf_t *rb) {
     gsize free = 0;
-
     if (rb->tail <= rb->head) {
         free = rb->buffer_size - (rb->head - rb->tail);
     }
@@ -151,8 +150,20 @@ gsize ringbuf_bytes_free (ringbuf_t *rb) {
     return free;
 }
 
+gsize ringbuf_bytes_free (ringbuf_t *rb) {
+    gsize free = 0;
+    g_mutex_lock(&rb->mutex);
+    free = ringbuf_bytes_free_unlocked(rb);
+    g_mutex_unlock(&rb->mutex);
+    return free;
+}
+
+static gsize ringbuf_bytes_used_unlocked (ringbuf_t *rb) {
+    return rb->buffer_size - ringbuf_bytes_free_unlocked(rb);
+}
+
 gsize ringbuf_bytes_used (ringbuf_t *rb) {
-    return 0;
+    return rb->buffer_size - ringbuf_bytes_free(rb);
 }
 
 gboolean ringbuf_is_full (ringbuf_t *rb) {
@@ -186,7 +197,7 @@ gpointer ringbuf_push(ringbuf_t *dst, gconstpointer src, gsize size) {
     // Wait for space to become available
     g_mutex_lock(&dst->mutex);
     if (dst->block_on_full) {
-        while (ringbuf_bytes_free(dst) < size) {
+        while (ringbuf_bytes_free_unlocked(dst) < size) {
             g_cond_wait(&dst->writeable, &dst->mutex);
         }
     }
@@ -206,7 +217,7 @@ gpointer ringbuf_pop (gpointer dst, ringbuf_t *src, gsize size) {
     
     // Wait for data to become available
     g_mutex_lock(&src->mutex);
-    while (src->tail == src->head) {
+    while (ringbuf_bytes_used_unlocked(src) < size) {
         g_cond_wait (&src->readable, &src->mutex);
     }
 
@@ -254,4 +265,37 @@ gpointer ringbuf_timed_pop (gpointer dst, ringbuf_t *src, gsize size, guint64 ti
     
 
     return tail;
+}
+
+gboolean ringbuf_direct_copy (ringbuf_t *src, ringbuf_t *dst, gsize size) {
+    g_mutex_lock(&src->mutex);
+    g_mutex_lock(&dst->mutex);
+
+    // Wait for data to become available in src
+    while (src->tail == src->head) {
+        g_cond_wait (&src->readable, &src->mutex);
+    }
+
+    // Wait for space to become available in dst
+    if (dst->block_on_full) {
+        while (ringbuf_bytes_free(dst) < size) {
+            g_cond_wait(&dst->writeable, &dst->mutex);
+        }
+    }
+
+    memcpy (dst->buf + dst->head, src->buf + src->tail, size);
+    dst->head += size;
+    src->tail += size;
+
+    if(src->tail >= src->buffer_size) {
+        src->head -= src->buffer_size;
+        src->tail -= src->buffer_size;
+    }
+
+    g_cond_signal (&dst->readable);
+    g_cond_signal (&src->writeable);
+    g_mutex_unlock(&dst->mutex);
+    g_mutex_unlock(&src->mutex);
+
+    return TRUE;
 }

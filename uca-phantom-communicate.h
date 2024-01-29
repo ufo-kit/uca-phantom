@@ -426,6 +426,12 @@ gboolean uca_phantom_communicate_grab_image (UcaPhantomCommunicate *self, gpoint
  */
 gboolean uca_phantom_communicate_grab_live_image (UcaPhantomCommunicate* self, gpointer data, GError** error_loc);
 
+
+CaptureSettings *uca_phantom_communicate_get_capture_settings(UcaPhantomCommunicate* self, GError** error_loc);
+
+gpointer pf_ring_stats_printer (gpointer data);
+gpointer pcap_stats_printer (gpointer data);
+
 /**
  * @brief The flags that represent phantom unit variables.
  *

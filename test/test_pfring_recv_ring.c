@@ -239,19 +239,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Start stats thread
-    GThread *stats = g_thread_new ("stats_thread", stats_thread, NULL);
-
-    // Request the images from the camera
-    for (i = 10; i < max_nb_images; i+=10) {
-        g_print ("Requesting image %d\n", i);
-        result = uca_phantom_communicate_request_images (communicator, cine, i, IMG_P12L, TS_NONE, &error);
-        if (!result && error != NULL) {
-            g_print ("Yo there was an error: %s\n", error->message);
-            g_error_free (error);
-            g_object_unref (communicator);
-            return FALSE;
-        }
-    }
+    GThread *stats = g_thread_new ("stats_thread", stats_thread, NULL);z
 
     // join the stats thread
     g_thread_join (stats);

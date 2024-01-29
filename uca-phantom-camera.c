@@ -353,12 +353,12 @@ uca_phantom_camera_grab (UcaCamera *camera,
         }
     }
     else {
-        g_print ("Grabbing image %d\n", priv->settings.current_cine);
+        
         if (!uca_phantom_communicate_grab_image (priv->communicator, data, &internal_error)) {
             g_propagate_error (error, internal_error);
             return FALSE;
         }
-        g_print ("Done grabbing image %d\n", priv->settings.current_cine);
+        
     }
 
     return TRUE;
@@ -589,7 +589,6 @@ uca_phantom_camera_get_property (GObject *object,
 
     GError *internal_error = NULL;
 
-
     switch (property_id) {
         // Use all properties defined in base_overrideables
         case PROP_NAME:
@@ -756,6 +755,8 @@ ufo_net_camera_initable_init (GInitable *initable,
     UcaPhantomCameraPrivate *priv;
     GError *internal_error = NULL;
 
+    g_print ("Phantom camera initialized\n");
+
     g_return_val_if_fail (UCA_IS_PHANTOM_CAMERA (initable), FALSE);
 
     if (cancellable != NULL) {
@@ -847,12 +848,99 @@ ufo_net_camera_initable_init (GInitable *initable,
     priv->settings.roi_pixel_width = priv->max_sensor_resolution_width;
     priv->settings.roi_pixel_height = priv->max_sensor_resolution_height;
 
+
     return TRUE;
 }
 
 static void
 uca_phantom_camera_initable_iface_init (GInitableIface *iface) {
     iface->init = ufo_net_camera_initable_init;
+}
+
+gboolean uca_phantom_camera_setup (UcaPhantomCamera *camera, GError **error) {
+    UcaPhantomCameraPrivate *priv;
+
+    GError *internal_error = NULL;
+
+    g_print ("Phantom camera initialized\n");
+
+    priv = camera->priv;
+
+    // Create a phantom communicator object
+    priv->communicator = uca_phantom_communicate_new ();
+
+    g_object_set (priv->communicator,
+                    "xnetcard", priv->xnetcard,
+                    "xenabled", priv->xenabled,
+                    NULL);
+
+    // Connect the control streamm to the camera
+    if (!uca_phantom_communicate_connect_controlstream(priv->communicator, &internal_error)) {
+        g_propagate_error (error, internal_error);
+        return FALSE;
+    }
+    else {
+        priv->control_connected = TRUE;
+    }
+
+    GValue value = G_VALUE_INIT;
+    if (!uca_phantom_communicate_get_variable (priv->communicator, UNIT_INFO_XMAX, &value, &internal_error)) {
+        g_propagate_error (error, internal_error);
+        return FALSE;
+    }
+    priv->max_sensor_resolution_width = g_value_get_uint (&value);
+    g_value_unset (&value);
+
+    if (!uca_phantom_communicate_get_variable (priv->communicator, UNIT_INFO_YMAX, &value, &internal_error)) {
+        g_propagate_error (error, internal_error);
+        return FALSE;
+    }
+    priv->max_sensor_resolution_height = g_value_get_uint (&value);
+    g_value_unset (&value);
+
+    if (!uca_phantom_communicate_get_variable (priv->communicator, UNIT_INFO_EXPDEAD, &value, &internal_error)) {
+        g_propagate_error (error, internal_error);
+        return FALSE;
+    }
+    priv->expdead = g_value_get_uint (&value);
+    g_value_unset (&value);
+
+    if (!uca_phantom_communicate_get_variable (priv->communicator, UNIT_INFO_XINC, &value, &internal_error)) {
+        g_propagate_error (error, internal_error);
+        return FALSE;
+    }
+    priv->xinc = g_value_get_uint (&value);
+    g_value_unset (&value);
+
+    if (!uca_phantom_communicate_get_variable (priv->communicator, UNIT_INFO_YINC, &value, &internal_error)) {
+        g_propagate_error (error, internal_error);
+        return FALSE;
+    }
+    priv->yinc = g_value_get_uint (&value);
+    g_value_unset (&value);
+
+    if (priv->live_images) {
+        if (!uca_phantom_communicate_arm (priv->communicator, -1, &internal_error)) {
+            g_propagate_error (error, internal_error);
+            return FALSE;
+        }
+    }
+
+
+    // Init base class properties
+    priv->name = g_strdup ("Phantom Camera");
+    priv->sensor_width = sensor_width;
+    priv->sensor_height = sensor_height;
+    priv->has_streaming = FALSE;
+    priv->has_camram_recording = FALSE;
+
+    priv->settings.sensor_pixel_width = sensor_pixel_width;
+    priv->settings.sensor_pixel_height = sensor_pixel_height;
+    priv->settings.roi_pixel_width = priv->max_sensor_resolution_width;
+    priv->settings.roi_pixel_height = priv->max_sensor_resolution_height;
+
+
+    return TRUE;
 }
 
 /**
@@ -998,8 +1086,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
  *
  */
 static void
-uca_phantom_camera_init (UcaPhantomCamera *self) {
-    
+uca_phantom_camera_init (UcaPhantomCamera *self) {    
     UcaPhantomCameraPrivate *priv;
     self->priv = priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (self);
 
@@ -1036,6 +1123,20 @@ uca_phantom_camera_init (UcaPhantomCamera *self) {
 G_MODULE_EXPORT GType
 camera_plugin_get_type (void) {
     return UCA_TYPE_PHANTOM_CAMERA;
+}
+
+UcaPhantomCommunicate *uca_phantom_camera_get_communicator (UcaPhantomCamera *camera) {
+    g_return_val_if_fail (UCA_IS_PHANTOM_CAMERA (camera), NULL);
+    UcaPhantomCameraPrivate *priv;
+    priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
+    return priv->communicator;
+}
+
+CaptureSettings *uca_phantom_camera_get_settings (UcaPhantomCamera *camera) {
+    g_return_val_if_fail (UCA_IS_PHANTOM_CAMERA (camera), NULL);
+    UcaPhantomCameraPrivate *priv;
+    priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
+    return &(priv->settings);
 }
 
 UcaPhantomCamera *uca_phantom_camera_new (void) {

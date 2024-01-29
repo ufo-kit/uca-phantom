@@ -72,7 +72,10 @@ struct _UcaPhantomCameraClass {
 
 GType uca_phantom_camera_get_type(void);
 
+gboolean uca_phantom_camera_setup (UcaPhantomCamera *camera, GError **error);
 UcaPhantomCamera *uca_phantom_camera_new(void);
+UcaPhantomCommunicate *uca_phantom_camera_get_communicator (UcaPhantomCamera *camera);
+CaptureSettings *uca_phantom_camera_get_settings (UcaPhantomCamera *camera);
 
 G_END_DECLS
 
