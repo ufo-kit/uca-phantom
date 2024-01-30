@@ -128,6 +128,7 @@ gpointer ringbuf_push(ringbuf_t *dst, gconstpointer src, gsize size);
  */
 gpointer ringbuf_pop (gpointer dst, ringbuf_t *src, gsize size);
 gpointer ringbuf_timed_pop (gpointer dst, ringbuf_t *src, gsize size, guint64 timeout);
+gboolean ringbuf_direct_copy (ringbuf_t *src, ringbuf_t *dst, gsize size);
 
 // /*
 //  * This convenience function calls write(2) on the file descriptor fd,

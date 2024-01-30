@@ -353,12 +353,12 @@ uca_phantom_camera_grab (UcaCamera *camera,
         }
     }
     else {
-        g_print ("Grabbing image %d\n", priv->settings.current_cine);
+        // g_print ("Grabbing image %d\n", priv->settings.current_cine);
         if (!uca_phantom_communicate_grab_image (priv->communicator, data, &internal_error)) {
             g_propagate_error (error, internal_error);
             return FALSE;
         }
-        g_print ("Done grabbing image %d\n", priv->settings.current_cine);
+        // g_print ("Done grabbing image %d\n", priv->settings.current_cine);
     }
 
     return TRUE;
