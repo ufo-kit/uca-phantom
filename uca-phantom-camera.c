@@ -90,6 +90,7 @@ struct _UcaPhantomCameraPrivate {
     guint nb_recordings; // nb cines
     gboolean has_streaming, has_camram_recording;
     gboolean live_images;
+    gsize internal_memory_size; // in MBytes
     CaptureSettings settings; // Groups all the main writeable properties
 
     // Network properties
@@ -316,7 +317,8 @@ uca_phantom_camera_trigger (UcaCamera *camera,
         return;
     }
 
-    priv->settings.current_cine += 1;    
+    priv->settings.current_cine += 1;
+    priv->settings.current_cine %= priv->nb_recordings;
 }
 
 static void
@@ -827,13 +829,19 @@ ufo_net_camera_initable_init (GInitable *initable,
     priv->yinc = g_value_get_uint (&value);
     g_value_unset (&value);
 
+    if (!uca_phantom_communicate_get_variable (priv->communicator, UNIT_INFO_CINEMEM, &value, &internal_error)) {
+        g_propagate_error (error, internal_error);
+        return FALSE;
+    }
+    priv->internal_memory_size = g_value_get_uint (&value);
+    g_value_unset (&value);
+
     if (priv->live_images) {
         if (!uca_phantom_communicate_arm (priv->communicator, -1, &internal_error)) {
             g_propagate_error (error, internal_error);
             return FALSE;
         }
-    }
-
+    }    
 
     // Init base class properties
     priv->name = g_strdup ("Phantom Camera");
@@ -980,7 +988,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
         g_param_spec_uint ("nb-recordings",
                            "Number of recordings",
                            "Number of recordings",
-                           0, G_MAXUINT, 1,
+                           0, G_MAXUINT, 16,
                            G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
     // Implement the base class properties
