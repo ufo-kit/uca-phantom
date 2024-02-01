@@ -60,7 +60,7 @@ void attempt_get_variable(UcaPhantomCommunicate *communicator, guint variable_fl
         g_print ("Houston theres a problem: %s", error->message);
     }
     else {
-        // print_gvalue (variable_flag, &val);
+        print_gvalue (variable_flag, &val);
     }
 
     g_value_unset (&val);
@@ -102,11 +102,8 @@ gboolean main() {
     GError *error = NULL;
     gboolean result;
 
-    UcaPhantomCommunicate *communicator = g_object_new (UCA_TYPE_PHANTOM_COMMUNICATE, 
-        "phantom_ipsource", USE_CLASS,
-        "xenabled", TRUE,
-        "xnetcard", "enp5s0f1",
-        "timestamping", FALSE,
+    UcaPhantomCommunicate *communicator = g_object_new (UCA_TYPE_PHANTOM_COMMUNICATE,
+        "xenabled", FALSE,
         NULL);
    
     gboolean connected = uca_phantom_communicate_connect_controlstream(communicator, &error);
@@ -117,8 +114,8 @@ gboolean main() {
         return FALSE;
     }
 
-    // attempt_get_variable (communicator, UNIT_INFO_CINEMEM);
-    // attempt_get_variable (communicator, UNIT_INFO_MEMSZ);
+    attempt_get_variable (communicator, UNIT_INFO_CINEMEM);
+    attempt_get_variable (communicator, UNIT_INFO_MEMSZ);
 
 
     // attempt_get_variable (communicator, UNIT_CT_FRCOUNT);

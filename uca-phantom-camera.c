@@ -100,6 +100,7 @@ struct _UcaPhantomCameraPrivate {
 
     // Hack for tracking the last cine used
     gboolean recording;
+    guint max_number_cines;
 
     UcaPhantomCommunicate *communicator;
 };

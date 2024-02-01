@@ -30,6 +30,10 @@
 #include "uca-phantom-commands.h"
 #include "ringbuf.h"
 
+#include <pfring.h>
+#include <pfring_zc.h>
+#include <pfring_mod_sysdig.h>
+
 // Note: if you wish to screw everything up, please tweak the following macros
 #define ETHERNET_HEADER_SIZE 32 // 16 bytes for L1 ethernet header, 16 bytes for custom header
 #define MAX_KERNEL_BUF_SIZE 2147483647 // 2GBytes = 2^31 - 1 Bytes
@@ -67,6 +71,13 @@ enum {
  * TODO: Add documentation
  * @{
  */
+enum NetworkLibrary {
+    LIB_PCAP,
+    LIB_PFRING_ZC,
+    LIB_PFRING,
+    LIB_SOCKET
+};
+
 enum TerminatePhantomDiscover {
     ALL,
     REGEX,
@@ -274,6 +285,7 @@ struct _UcaPhantomCommunicate {
     guint8 mac_address[6];
     gchar *mac_address_str, *request_image_string;
     guint phantom_ipsource;
+    guint netlib;
 
     ConnectionState control_connection_state;
     ConnectionState data_connection_state;
@@ -299,7 +311,14 @@ struct _UcaPhantomCommunicate {
     GOutputStream* output_datastream;
 
     // Data stream connection variables (10 GbE)
+    // libpcap
     pcap_t* handle;
+    // libpfring (vanilla)
+    pfring* pfring_handle;
+    // libpfring (ZC)
+    pfring_zc_queue *pfring_zc_zq;
+    pfring_zc_buffer_pool *pfring_zc_zp;
+    pfring_zc_pkt_buff *pfring_zc_buffer;
     ringbuf_t *packed_ring_buffer;
     ringbuf_t *unpacked_ring_buffer;
     GThread* data_receiver;
@@ -383,6 +402,7 @@ static void uca_phantom_communicate_init(UcaPhantomCommunicate* instance)
     instance->data_port = 7116;
     instance->control_port = 7115;
     instance->discovery_port = 7380;
+    instance->netlib = LIB_PFRING;
 
     instance->control_connection_state = DISCONNECTED;
     instance->data_connection_state = DISCONNECTED;
@@ -1460,14 +1480,10 @@ gboolean uca_phantom_communicate_connect_datastream(UcaPhantomCommunicate* self,
     return TRUE;
 }
 
-gboolean uca_phantom_communicate_connect_xdatastream(UcaPhantomCommunicate* self, GError** error_loc)
-{
-    g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
-
-    GError* phantom_error = NULL;
-
+gboolean uca_phantom_communicate_setup_libpcap (UcaPhantomCommunicate* self, GError** error_loc) {
     char errbuf[PCAP_ERRBUF_SIZE];
     struct bpf_program fp;
+    GError* phantom_error = NULL;
 
     // Use libpcap to capture ethernet frames from the NIC called "self->xnetcard"
 
@@ -1479,7 +1495,7 @@ gboolean uca_phantom_communicate_connect_xdatastream(UcaPhantomCommunicate* self
         g_propagate_error(error_loc, phantom_error);
         return FALSE;
     }
-    g_debug("Opening device %s for packet capture\n", self->xnetcard);
+    g_print ("Opening device %s for packet capture\n", self->xnetcard);
 
     // Set the capture options
     pcap_set_snaplen(self->handle, 65535);
@@ -1521,6 +1537,140 @@ gboolean uca_phantom_communicate_connect_xdatastream(UcaPhantomCommunicate* self
         return FALSE;
     }
     pcap_freecode(&fp);
+}
+
+static gboolean uca_phantom_communicate_setup_pfring (UcaPhantomCommunicate* self, GError** error_loc) {
+    GError* phantom_error = NULL;
+
+    const char *filter = "ether proto 0x88b7";
+    guint default_snaplen = 1536;
+    g_print ("Opening device %s for packet capture\n", self->xnetcard);
+    self->pfring_handle = pfring_open(self->xnetcard, default_snaplen, PF_RING_REENTRANT);
+    if (self->pfring_handle == NULL) {
+        g_print ("pfring_open error [%s]\n", strerror(errno));
+        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_XDATASTREAM,
+            "pfring_open error [%s]\n", strerror(errno));
+        g_propagate_error(error_loc, phantom_error);
+        return FALSE;
+    }
+    g_print ("pfring_open ok\n");
+
+    if (pfring_set_direction(self->pfring_handle, rx_only_direction) != 0) {
+        g_print ("pfring_set_direction error\n");
+        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_XDATASTREAM,
+            "pfring_set_direction error\n");
+        g_propagate_error(error_loc, phantom_error);
+        pfring_close(self->pfring_handle);
+        return FALSE;
+    }
+
+    if (pfring_set_socket_mode(self->pfring_handle, recv_only_mode) != 0) {
+        g_print ("pfring_set_socket_mode error\n");
+        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_XDATASTREAM,
+            "pfring_set_socket_mode error\n");
+        g_propagate_error(error_loc, phantom_error);
+        pfring_close(self->pfring_handle);
+        return FALSE;
+    }
+
+    if (pfring_set_bpf_filter(self->pfring_handle, filter) != 0) {
+        g_print ("pfring_set_bpf_filter error setting '%s'\n", filter);
+        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_XDATASTREAM,
+            "pfring_set_bpf_filter error setting '%s'\n", filter);
+        g_propagate_error(error_loc, phantom_error);
+        pfring_close(self->pfring_handle);
+        return FALSE;
+    }
+
+    if (pfring_enable_ring(self->pfring_handle) != 0) {
+        g_print ("Error enabling ring\n");
+        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_XDATASTREAM,
+            "Error enabling ring\n");
+        g_propagate_error(error_loc, phantom_error);
+        pfring_close(self->pfring_handle);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static gboolean uca_phantom_communicate_setup_pfring_zc (UcaPhantomCommunicate* self, GError** error_loc) {
+    GError* phantom_error = NULL;
+
+    const char *filter = "ether proto 0x88b7";
+    int cluster_id = 100, queue_id = -1;
+
+    // self->pfring_zc_zq = pfring_zc_ipc_attach_queue(cluster_id, queue_id, rx_only);
+    // if(self->pfring_zc_zq == NULL) {
+    //     g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_XDATASTREAM,
+    //         "pfring_zc_ipc_attach_queue error [%s] Please check that cluster %d is running\n", strerror(errno), cluster_id);
+    //     g_propagate_error(error_loc, phantom_error);
+    //     return FALSE;
+    // }
+
+    
+
+    self->pfring_zc_zp = pfring_zc_ipc_attach_buffer_pool(cluster_id, queue_id);
+    if (self->pfring_zc_zp == NULL) {
+        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_XDATASTREAM,
+            "pfring_zc_ipc_attach_buffer_pool error [%s] Please check that cluster %d is running\n",
+            strerror(errno), cluster_id);
+        g_propagate_error(error_loc, phantom_error);
+        pfring_zc_ipc_detach_queue(self->pfring_zc_zq);
+        return FALSE;
+    }
+
+    
+
+    // self->pfring_zc_buffer = pfring_zc_get_packet_handle_from_pool(self->pfring_zc_zp);
+    // if (self->pfring_zc_buffer == NULL) {
+    //     g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_XDATASTREAM,
+    //         "pfring_zc_get_packet_handle_from_pool error\n");
+    //     g_propagate_error(error_loc, phantom_error);
+    //     pfring_zc_ipc_detach_queue(self->pfring_zc_zq);
+    //     pfring_zc_ipc_detach_buffer_pool(self->pfring_zc_zp);
+    //     return FALSE;
+    // }
+
+    // if (pfring_zc_set_bpf_filter(self->pfring_zc_zq, filter) != 0) {
+    //     fprintf(stderr, "pfring_zc_set_bpf_filter error setting '%s'\n", filter);
+    //     pfring_zc_ipc_detach_queue(self->pfring_zc_zq);
+    //     return -1;
+    // }
+
+}
+
+gboolean uca_phantom_communicate_connect_xdatastream (UcaPhantomCommunicate* self, GError** error_loc)
+{
+    g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
+
+    GError* phantom_error = NULL;
+
+    if (self->netlib == LIB_PCAP) {
+        if (!uca_phantom_communicate_setup_libpcap(self, &phantom_error)) {
+            g_propagate_error(error_loc, phantom_error);
+            return FALSE;
+        }
+    }
+    else if (self->netlib == LIB_PFRING_ZC) {
+        if (!uca_phantom_communicate_setup_pfring_zc(self, &phantom_error)) {
+            g_propagate_error(error_loc, phantom_error);
+            return FALSE;
+        }
+    }
+    else if (self->netlib == LIB_PFRING) {
+        g_print ("Setting up device %s on pfring\n", self->xnetcard);
+        if (!uca_phantom_communicate_setup_pfring(self, &phantom_error)) {
+            g_propagate_error(error_loc, phantom_error);
+            return FALSE;
+        }
+    }
+    else {
+        g_warning("Invalid netlib.\n");
+        return FALSE;
+    }
+    
+    g_print ("\t Finished setting up the x data stream!\n");
 
     self->xdata_connection_state = CONNECTED;
 
@@ -1559,8 +1709,18 @@ gboolean uca_phantom_communicate_disconnect_xdatastream(UcaPhantomCommunicate* s
     g_return_val_if_fail(G_IS_INPUT_STREAM(self->input_datastream), FALSE);
     g_return_val_if_fail(G_IS_SOCKET_CONNECTION(self->data_connection), FALSE);
 
-    pcap_close(self->handle);
-    self->handle = NULL;
+    if (self->netlib == LIB_PCAP) {
+        pcap_close(self->handle);
+        self->handle = NULL;
+    }
+    else if (self->netlib == LIB_PFRING) {
+        pfring_close(self->pfring_handle);
+        self->pfring_handle = NULL;
+    }
+    else if (self->netlib == LIB_PFRING_ZC) {
+        pfring_zc_ipc_detach_queue(self->pfring_zc_zq);
+        pfring_zc_ipc_detach_buffer_pool(self->pfring_zc_zp);
+    }
 
     self->xdata_connection_state = DISCONNECTED;
 
@@ -2141,13 +2301,299 @@ static gpointer uca_phantom_communicate_accept_img(gpointer data)
     return NULL;
 }
 
+static gpointer uca_phantom_communicate_accept_ximg_pfring (gpointer data) {
+    UcaPhantomCommunicate* self = UCA_PHANTOM_COMMUNICATE(data);
+    g_return_val_if_fail(self->control_connection_state == CONNECTED, NULL); // todo: insn't it the data connection state?
+    
+    guint nb_pixels = 0;
+    gsize packed_image_size = 0, packed_packet_size = 0;
+    gsize unpacked_image_size = 0, unpacked_packet_size = 0;
+    gsize buffer_size = 0, to_read = 0;
+    gsize remaining_bytes = 0;
+
+    // gssize ts_size = 0;
+    // gssize ts_packet_size = 0;
+    gsize bytes_read = 0;
+    guint8* image_buffer = NULL;
+    guint8* buffer_pointer = NULL;
+    guint8 pkt_data[9000];
+
+    struct pfring_pkthdr hdr;
+    memset(&hdr, 0, sizeof(hdr));
+    
+    // gpointer ts_buffer = NULL;
+    int read_all = FALSE;
+    ImageRequest* request = NULL;
+
+    while (TRUE) {
+        bytes_read = 0;
+        // Wait for a request to be available
+        request = g_async_queue_pop(self->request_queue);
+
+        g_print ("Request received\n");
+
+        if (request == NULL) {
+            g_warning("Failed to pop request from queue\n");
+            return NULL;
+        }
+        if (request->end_request == TRUE) {
+            uca_phantom_communicate_free_request(request);
+
+            // Push the end request to the packed queue
+            CineData* cine_data = g_new0(CineData, 1);
+            cine_data->RawImages = NULL;
+            cine_data->UnpackedImages = NULL;
+
+            // Add the data to the queue
+            g_async_queue_push(self->packed_queue, cine_data);
+
+            if (self->settings.timestamp_format != TS_NONE) {
+                // Create timestamp request
+                TsRequest* ts_request = g_new0(TsRequest, 1);
+                ts_request->end_request = TRUE;
+
+                // Push request to request queue
+                g_async_queue_push(self->ts_request_queue, ts_request);
+            }
+
+            g_print ("Closing thread that requests buffered images\n");
+
+            return data;
+        }
+        // Calculate the size of the image buffer
+        nb_pixels = self->settings.roi_pixel_width * self->settings.roi_pixel_height;
+        packed_image_size = nb_pixels * ImageFormatSpecs[request->img_format].byte_depth; // the packed image size
+        packed_packet_size = packed_image_size * request->nb_images; // the packed image packet size
+        unpacked_image_size = nb_pixels * sizeof(guint16); // the unpacked image size
+        unpacked_packet_size = unpacked_image_size * request->nb_images; // the unpacked image packet size
+
+        buffer_size = packed_packet_size;
+
+        image_buffer = g_malloc0(buffer_size + 128);
+        if (image_buffer == NULL) {
+            g_warning("Out of RAM... \n");
+            return NULL;
+        }
+
+        remaining_bytes = buffer_size;
+        buffer_pointer = pkt_data;
+
+        while (TRUE) {
+            if (remaining_bytes <= 0) {
+                break; // All bytes of the image frame have been read
+            }
+
+            if (pfring_recv(self->pfring_handle, &image_buffer, packed_packet_size, &hdr, TRUE) < 0) {
+                g_print ("Failed to read packet from pfring_zc_recv_pkt\n");
+                return NULL;
+            }
+
+            // Check if the packet size exceeds the remaining space in the buffer
+            // if (hdr.len - ETHERNET_HEADER_SIZE > remaining_bytes) {
+            //     to_read = remaining_bytes;
+            // } else {
+            to_read = hdr.len - ETHERNET_HEADER_SIZE;
+            // }
+
+            // Copy the packet data to the image buffer
+            memcpy(buffer_pointer, image_buffer + ETHERNET_HEADER_SIZE, to_read);
+
+            remaining_bytes -= to_read;
+            buffer_pointer += to_read;
+        }
+
+        bytes_read = packed_packet_size - remaining_bytes;
+
+        if (bytes_read != packed_packet_size) {
+            g_debug("Failed to read all bytes of image frame from datastream. Read %ld "
+                    "bytes, expected %ld bytes. Buffer will be padded.\n",
+                bytes_read, packed_packet_size);
+        }
+
+        // Create a new CineData struct
+        CineData* cine_data = g_new0(CineData, 1);
+        cine_data->ImgFormat = request->img_format;
+
+        cine_data->NbImages = request->nb_images;
+        cine_data->NbPixelsPerImage = nb_pixels;
+        cine_data->SizePerImageRaw = packed_image_size;
+        cine_data->SizePerImageUnpacked = unpacked_image_size;
+
+        cine_data->RawImages = image_buffer;
+        cine_data->UnpackedImages = NULL;
+
+        // Add the data to the queue
+        g_async_queue_push(self->packed_queue, cine_data);
+
+        if (self->settings.timestamp_format != TS_NONE) {
+            // Create timestamp request
+            TsRequest* ts_request = g_new0(TsRequest, 1);
+            ts_request->start = request->start;
+            ts_request->count = request->nb_images;
+            ts_request->end_request = FALSE;
+            ts_request->TsFormat = self->settings.timestamp_format;
+
+            // Push request to request queue
+            g_async_queue_push(self->ts_request_queue, ts_request);
+        }
+
+        g_debug ("Request processed\n");
+
+        // Free the request
+        uca_phantom_communicate_free_request(request);
+    }
+
+}
+
+static gpointer uca_phantom_communicate_accept_ximg_pfring_zc (gpointer data) {
+    UcaPhantomCommunicate* self = UCA_PHANTOM_COMMUNICATE(data);
+    g_return_val_if_fail(self->control_connection_state == CONNECTED, NULL); // todo: insn't it the data connection state?
+
+    guint nb_pixels = 0;
+    gsize packed_image_size = 0, packed_packet_size = 0;
+    gsize unpacked_image_size = 0, unpacked_packet_size = 0;
+    gsize buffer_size = 0, to_read = 0;
+    gsize remaining_bytes = 0;
+
+    // gssize ts_size = 0;
+    // gssize ts_packet_size = 0;
+    gsize bytes_read = 0;
+    guint8* image_buffer = NULL;
+    guint8* buffer_pointer = NULL;
+    guint8* pkt_data = NULL;
+
+    // gpointer ts_buffer = NULL;
+    int read_all = FALSE;
+    ImageRequest* request = NULL;
+
+    while (TRUE) {
+        bytes_read = 0;
+        // Wait for a request to be available
+        request = g_async_queue_pop(self->request_queue);
+
+        g_debug ("Request received\n");
+
+        if (request == NULL) {
+            return NULL;
+        }
+        if (request->end_request == TRUE) {
+            uca_phantom_communicate_free_request(request);
+
+            // Push the end request to the packed queue
+            CineData* cine_data = g_new0(CineData, 1);
+            cine_data->RawImages = NULL;
+            cine_data->UnpackedImages = NULL;
+
+            // Add the data to the queue
+            g_async_queue_push(self->packed_queue, cine_data);
+
+            if (self->settings.timestamp_format != TS_NONE) {
+                // Create timestamp request
+                TsRequest* ts_request = g_new0(TsRequest, 1);
+                ts_request->end_request = TRUE;
+
+                // Push request to request queue
+                g_async_queue_push(self->ts_request_queue, ts_request);
+            }
+
+            return NULL;
+        }
+        // Calculate the size of the image buffer
+        nb_pixels = self->settings.roi_pixel_width * self->settings.roi_pixel_height;
+        packed_image_size = nb_pixels * ImageFormatSpecs[request->img_format].byte_depth; // the packed image size
+        packed_packet_size = packed_image_size * request->nb_images; // the packed image packet size
+        unpacked_image_size = nb_pixels * sizeof(guint16); // the unpacked image size
+        unpacked_packet_size = unpacked_image_size * request->nb_images; // the unpacked image packet size
+
+        buffer_size = packed_packet_size;
+        // g_print ("Malloc size when reading: %ld\n", buffer_size);
+        image_buffer = g_malloc0(buffer_size + 128);
+        // g_print ("Malloc done when reading\n");
+        if (image_buffer == NULL) {
+            g_warning("Out of RAM... \n");
+            return NULL;
+        }
+
+        remaining_bytes = buffer_size;
+        buffer_pointer = image_buffer;
+
+        while (TRUE) {
+            if (remaining_bytes <= 0) {
+                break; // All bytes of the image frame have been read
+            }
+
+            if (pfring_zc_recv_pkt(self->pfring_zc_zq, &self->pfring_zc_buffer, TRUE) > 0) {
+                pkt_data = pfring_zc_pkt_buff_data(self->pfring_zc_buffer, self->pfring_zc_zq);
+            }
+            else {
+                g_print ("Failed to read packet from pfring_zc_recv_pkt\n");
+                return NULL;
+            }            
+
+            // Check if the packet size exceeds the remaining space in the buffer
+            if (self->pfring_zc_buffer->len - ETHERNET_HEADER_SIZE > remaining_bytes) {
+                to_read = remaining_bytes;
+            } else {
+                to_read = self->pfring_zc_buffer->len - ETHERNET_HEADER_SIZE;
+            }
+
+            // Copy the data to the image buffer
+            memcpy(buffer_pointer, pkt_data + ETHERNET_HEADER_SIZE, to_read);
+
+            buffer_pointer += to_read;
+            remaining_bytes -= to_read;
+        }
+
+        bytes_read = packed_packet_size - remaining_bytes;
+
+        if (bytes_read != packed_packet_size) {
+            g_debug("Failed to read all bytes of image frame from datastream. Read %ld "
+                    "bytes, expected %ld bytes. Buffer will be padded.\n",
+                bytes_read, packed_packet_size);
+        }
+
+        // Create a new CineData struct
+        CineData* cine_data = g_new0(CineData, 1);
+        cine_data->ImgFormat = request->img_format;
+
+        cine_data->NbImages = request->nb_images;
+        cine_data->NbPixelsPerImage = nb_pixels;
+        cine_data->SizePerImageRaw = packed_image_size;
+        cine_data->SizePerImageUnpacked = unpacked_image_size;
+
+        cine_data->RawImages = image_buffer;
+        cine_data->UnpackedImages = NULL;
+
+        // Add the data to the queue
+        g_async_queue_push(self->packed_queue, cine_data);
+
+        if (self->settings.timestamp_format != TS_NONE) {
+            // Create timestamp request
+            TsRequest* ts_request = g_new0(TsRequest, 1);
+            ts_request->start = request->start;
+            ts_request->count = request->nb_images;
+            ts_request->end_request = FALSE;
+            ts_request->TsFormat = self->settings.timestamp_format;
+
+            // Push request to request queue
+            g_async_queue_push(self->ts_request_queue, ts_request);
+        }
+
+        g_debug ("Request processed\n");
+
+        // Free the request
+        uca_phantom_communicate_free_request(request);
+    }
+
+}
+
 /**
  * @brief Accepts images from the camera and stores them in the unpacked queue
  *
  * @param data
  * @return gpointer
  */
-static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
+static gpointer uca_phantom_communicate_accept_ximg_pcap (gpointer data)
 {
     UcaPhantomCommunicate* self = UCA_PHANTOM_COMMUNICATE(data);
     g_return_val_if_fail(self->control_connection_state == CONNECTED, NULL);
@@ -2216,7 +2662,7 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
         // g_print ("Malloc done when reading\n");
         if (image_buffer == NULL) {
             g_warning("Out of RAM... \n");
-            return data;
+            return NULL;
         }
 
         remaining_bytes = buffer_size;
@@ -2294,6 +2740,36 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
 
         // Free the request
         uca_phantom_communicate_free_request(request);
+    }
+
+    return NULL;
+}
+
+static gpointer uca_phantom_communicate_accept_ximg (gpointer data) {
+    UcaPhantomCommunicate* self = UCA_PHANTOM_COMMUNICATE(data);
+    g_return_val_if_fail(self->control_connection_state == CONNECTED, NULL);
+    
+    gpointer ret = NULL;
+    if (self->netlib == LIB_PCAP) {
+        // call uca_phantom_communicate_accept_ximg_pcap
+        ret = uca_phantom_communicate_accept_ximg_pcap(data);
+    }
+    else if (self->netlib == LIB_PFRING) {
+        g_print ("Starting pfring thread\n");
+        // Start new thread to read data
+        ret = uca_phantom_communicate_accept_ximg_pfring(data);
+    }
+    else if (self->netlib == LIB_PFRING_ZC) {
+        // Start new thread to read data
+        ret = uca_phantom_communicate_accept_ximg_pfring_zc(data);
+    }
+    else {
+        // Start new thread to read data
+        return NULL;
+    }
+
+    if (ret == NULL) {
+        g_warning("Failed to accept images\n");
     }
 
     return NULL;
@@ -2894,8 +3370,7 @@ gboolean uca_phantom_communicate_start_readout (
         }
 
         // g_print ("Starting threads\n");
-
-        self->data_receiver = g_thread_new("data_receiver", uca_phantom_communicate_accept_ximg, self);
+        self->data_receiver = g_thread_new("data_receiver", uca_phantom_communicate_accept_ximg , self);
         self->data_unpacker = g_thread_new("data_unpacker", uca_phantom_communicate_unpack_ximg, self);
     } else {
         // Start new thread to read data
