@@ -316,9 +316,10 @@ struct _UcaPhantomCommunicate {
     // libpfring (vanilla)
     pfring* pfring_handle;
     // libpfring (ZC)
-    pfring_zc_queue *pfring_zc_zq;
-    pfring_zc_buffer_pool *pfring_zc_zp;
+    pfring_zc_cluster *pfring_zc_cluster;
+    pfring_zc_queue *pfring_zc_queue;
     pfring_zc_pkt_buff *pfring_zc_buffer;
+    pfring_zc_buffer_pool *pfring_zc_pool;
     ringbuf_t *packed_ring_buffer;
     ringbuf_t *unpacked_ring_buffer;
     GThread* data_receiver;
@@ -402,7 +403,7 @@ static void uca_phantom_communicate_init(UcaPhantomCommunicate* instance)
     instance->data_port = 7116;
     instance->control_port = 7115;
     instance->discovery_port = 7380;
-    instance->netlib = LIB_PFRING;
+    instance->netlib = LIB_PCAP;
 
     instance->control_connection_state = DISCONNECTED;
     instance->data_connection_state = DISCONNECTED;
@@ -1594,49 +1595,118 @@ static gboolean uca_phantom_communicate_setup_pfring (UcaPhantomCommunicate* sel
     return TRUE;
 }
 
+static int max_packet_len(char *device) { 
+  char ifname_buff[32], path[256];
+  char *ifname = ifname_buff, *ptr;
+  FILE *proc_net_pfr;
+  u_int32_t max_packet_size = 0;
+
+  /* Remove prefix (e.g. 'zc:') and queue (@0) if any */
+  snprintf(ifname, sizeof(ifname_buff), "%s", device);
+  ptr = strchr(ifname, ':');
+  if (ptr) ifname = ++ptr;
+  ptr = strchr(ifname, '@');  
+  if (ptr) *ptr = '\0';
+
+  /* Try reading from /proc */
+  snprintf(path, sizeof(path), "/proc/net/pf_ring/dev/%s/info", ifname);
+  proc_net_pfr = fopen(path, "r");
+  if (proc_net_pfr != NULL) {
+    while (fgets(path, sizeof(path), proc_net_pfr) != NULL) {
+      char *p = &path[0];
+      const char *slot_size = "RX Slot Size:";
+      if (!strncmp(p, slot_size, strlen(slot_size))) {
+        max_packet_size = atoi(&p[strlen(slot_size)]);
+        break;
+      }
+    }
+    fclose(proc_net_pfr);
+  }
+
+  if (!max_packet_size) {
+    /* Try opening socket */
+    pfring *ring;
+    pfring_card_settings settings;
+
+    ring = pfring_open(device, 1536, PF_RING_ZC_NOT_REPROGRAM_RSS);
+
+    if (!ring) {
+      max_packet_size = 1536;
+    } else {
+      int mtu = pfring_get_mtu_size(ring);
+      pfring_get_card_settings(ring, &settings);
+      if (settings.max_packet_size < mtu + 14 /* eth */)
+        max_packet_size = mtu + 14 /* eth */ + 4 /* vlan */;
+      else
+        max_packet_size = settings.max_packet_size;
+      pfring_close(ring);
+    }
+  }
+
+  return max_packet_size;
+}
+
+
 static gboolean uca_phantom_communicate_setup_pfring_zc (UcaPhantomCommunicate* self, GError** error_loc) {
     GError* phantom_error = NULL;
 
     const char *filter = "ether proto 0x88b7";
     int cluster_id = 100, queue_id = -1;
+    guint32 buffer_len = max_packet_len(self->xnetcard);
+    g_print ("Buffer length: %d\n", buffer_len);
+    const int max_card_slots = 1;
+    const int burt_len = 1;
+    const int bind_core = -1;
+    guint32 flags = PF_RING_ZC_DEVICE_NOT_PROMISC;
 
-    // self->pfring_zc_zq = pfring_zc_ipc_attach_queue(cluster_id, queue_id, rx_only);
-    // if(self->pfring_zc_zq == NULL) {
-    //     g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_XDATASTREAM,
-    //         "pfring_zc_ipc_attach_queue error [%s] Please check that cluster %d is running\n", strerror(errno), cluster_id);
-    //     g_propagate_error(error_loc, phantom_error);
-    //     return FALSE;
-    // }
-
-    
-
-    self->pfring_zc_zp = pfring_zc_ipc_attach_buffer_pool(cluster_id, queue_id);
-    if (self->pfring_zc_zp == NULL) {
+    self->pfring_zc_cluster = pfring_zc_create_cluster(
+            cluster_id, 
+            buffer_len,
+            0, 
+            max_card_slots + burt_len,
+            pfring_zc_numa_get_cpu_node(bind_core),
+            NULL /* auto hugetlb mountpoint */,
+            0 
+        );
+    if (self->pfring_zc_cluster == NULL) {
+        g_print ("pfring_zc_create_cluster error [%s]\n", strerror(errno));
         g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_XDATASTREAM,
-            "pfring_zc_ipc_attach_buffer_pool error [%s] Please check that cluster %d is running\n",
-            strerror(errno), cluster_id);
+            "pfring_zc_create_cluster error [%s]\n", strerror(errno));
         g_propagate_error(error_loc, phantom_error);
-        pfring_zc_ipc_detach_queue(self->pfring_zc_zq);
         return FALSE;
     }
 
-    
+    self->pfring_zc_queue = pfring_zc_open_device(self->pfring_zc_cluster, self->netcard, rx_only, flags);
+    if(self->pfring_zc_queue == NULL) {
+        g_print ("pfring_zc_open_device error [%s]\n", strerror(errno));
+        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_XDATASTREAM,
+            "pfring_zc_open_device error [%s]\n", strerror(errno));
+        g_propagate_error(error_loc, phantom_error);
+        return FALSE;
+    }
 
-    // self->pfring_zc_buffer = pfring_zc_get_packet_handle_from_pool(self->pfring_zc_zp);
-    // if (self->pfring_zc_buffer == NULL) {
-    //     g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_XDATASTREAM,
-    //         "pfring_zc_get_packet_handle_from_pool error\n");
-    //     g_propagate_error(error_loc, phantom_error);
-    //     pfring_zc_ipc_detach_queue(self->pfring_zc_zq);
-    //     pfring_zc_ipc_detach_buffer_pool(self->pfring_zc_zp);
-    //     return FALSE;
-    // }
+    // TODO: check license ?
+    guint32 maintenance;
+    if (pfring_zc_check_device_license(self->pfring_zc_queue, &maintenance)) {
+        printf("License Ok\n");
+    }
 
-    // if (pfring_zc_set_bpf_filter(self->pfring_zc_zq, filter) != 0) {
-    //     fprintf(stderr, "pfring_zc_set_bpf_filter error setting '%s'\n", filter);
-    //     pfring_zc_ipc_detach_queue(self->pfring_zc_zq);
-    //     return -1;
-    // }
+    self->pfring_zc_buffer = pfring_zc_get_packet_handle (self->pfring_zc_cluster);
+    if (self->pfring_zc_buffer == NULL) {
+        g_print ("pfring_zc_get_packet_handle error [%s]\n", strerror(errno));
+        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_XDATASTREAM,
+            "pfring_zc_get_packet_handle error [%s]\n", strerror(errno));
+        g_propagate_error(error_loc, phantom_error);
+        return FALSE;
+    }
+
+    if (pfring_zc_set_bpf_filter(self->pfring_zc_queue, filter) != 0) {
+        g_print ("pfring_zc_set_bpf_filter error setting '%s'\n", filter);
+        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_XDATASTREAM,
+            "pfring_zc_set_bpf_filter error setting '%s'\n", filter);
+        g_propagate_error(error_loc, phantom_error);
+        return FALSE;
+    }
 
 }
 
@@ -1718,8 +1788,8 @@ gboolean uca_phantom_communicate_disconnect_xdatastream(UcaPhantomCommunicate* s
         self->pfring_handle = NULL;
     }
     else if (self->netlib == LIB_PFRING_ZC) {
-        pfring_zc_ipc_detach_queue(self->pfring_zc_zq);
-        pfring_zc_ipc_detach_buffer_pool(self->pfring_zc_zp);
+        pfring_zc_ipc_detach_queue(self->pfring_zc_queue);
+        pfring_zc_ipc_detach_buffer_pool(self->pfring_zc_pool);
     }
 
     self->xdata_connection_state = DISCONNECTED;
@@ -2314,9 +2384,13 @@ static gpointer uca_phantom_communicate_accept_ximg_pfring (gpointer data) {
     // gssize ts_size = 0;
     // gssize ts_packet_size = 0;
     gsize bytes_read = 0;
+    gsize payload = 0;
     guint8* image_buffer = NULL;
     guint8* buffer_pointer = NULL;
     guint8 pkt_data[9000];
+    guint8 *pkt_buffer;
+
+    pkt_buffer = pkt_data;
 
     struct pfring_pkthdr hdr;
     memset(&hdr, 0, sizeof(hdr));
@@ -2376,30 +2450,23 @@ static gpointer uca_phantom_communicate_accept_ximg_pfring (gpointer data) {
         }
 
         remaining_bytes = buffer_size;
-        buffer_pointer = pkt_data;
+        buffer_pointer = image_buffer;
 
-        while (TRUE) {
-            if (remaining_bytes <= 0) {
-                break; // All bytes of the image frame have been read
-            }
-
-            if (pfring_recv(self->pfring_handle, &image_buffer, packed_packet_size, &hdr, TRUE) < 0) {
-                g_print ("Failed to read packet from pfring_zc_recv_pkt\n");
+        while (remaining_bytes > 0)
+        {
+            if (pfring_recv(self->pfring_handle, &pkt_buffer, packed_packet_size, &hdr, TRUE) < 0)
+            {
+                g_print("Failed to read packet from pfring_zc_recv_pkt\n");
                 return NULL;
             }
-
-            // Check if the packet size exceeds the remaining space in the buffer
-            // if (hdr.len - ETHERNET_HEADER_SIZE > remaining_bytes) {
-            //     to_read = remaining_bytes;
-            // } else {
-            to_read = hdr.len - ETHERNET_HEADER_SIZE;
-            // }
+            payload = hdr.caplen - ETHERNET_HEADER_SIZE;
+            to_read = remaining_bytes > payload ? payload : remaining_bytes;
 
             // Copy the packet data to the image buffer
-            memcpy(buffer_pointer, image_buffer + ETHERNET_HEADER_SIZE, to_read);
+            memcpy(buffer_pointer, pkt_buffer + ETHERNET_HEADER_SIZE, to_read);
 
             remaining_bytes -= to_read;
-            buffer_pointer += to_read;
+            buffer_pointer += to_read; // Update the buffer pointer
         }
 
         bytes_read = packed_packet_size - remaining_bytes;
@@ -2454,6 +2521,7 @@ static gpointer uca_phantom_communicate_accept_ximg_pfring_zc (gpointer data) {
     gsize unpacked_image_size = 0, unpacked_packet_size = 0;
     gsize buffer_size = 0, to_read = 0;
     gsize remaining_bytes = 0;
+    gsize payload = 0;
 
     // gssize ts_size = 0;
     // gssize ts_packet_size = 0;
@@ -2522,20 +2590,14 @@ static gpointer uca_phantom_communicate_accept_ximg_pfring_zc (gpointer data) {
                 break; // All bytes of the image frame have been read
             }
 
-            if (pfring_zc_recv_pkt(self->pfring_zc_zq, &self->pfring_zc_buffer, TRUE) > 0) {
-                pkt_data = pfring_zc_pkt_buff_data(self->pfring_zc_buffer, self->pfring_zc_zq);
-            }
-            else {
-                g_print ("Failed to read packet from pfring_zc_recv_pkt\n");
+            if (pfring_zc_recv_pkt(self->pfring_zc_queue, &self->pfring_zc_buffer, TRUE) < 0) {
+                g_print("Failed to read packet from pfring_zc_recv_pkt\n");
                 return NULL;
-            }            
-
-            // Check if the packet size exceeds the remaining space in the buffer
-            if (self->pfring_zc_buffer->len - ETHERNET_HEADER_SIZE > remaining_bytes) {
-                to_read = remaining_bytes;
-            } else {
-                to_read = self->pfring_zc_buffer->len - ETHERNET_HEADER_SIZE;
             }
+
+            payload = self->pfring_zc_buffer->len - ETHERNET_HEADER_SIZE;
+            to_read = remaining_bytes > payload ? payload : remaining_bytes;
+            pkt_data = pfring_zc_pkt_buff_data(self->pfring_zc_buffer, self->pfring_zc_queue);
 
             // Copy the data to the image buffer
             memcpy(buffer_pointer, pkt_data + ETHERNET_HEADER_SIZE, to_read);
