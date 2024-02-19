@@ -24,6 +24,8 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/types.h>
+#include <arpa/inet.h>
+#include <netinet/in.h> 
 
 #include "uca-phantom-communicate.h"
 #include "uca-phantom-variables.h"
@@ -1786,6 +1788,7 @@ gpointer uca_phantom_communicate_request_images_thread(gpointer data) {
 
     gboolean result = FALSE;
     CineInfo *cine_info = NULL;
+    guint grab_counter = 0;
 
     while(TRUE) {
         cine_info = g_async_queue_pop(self->cine_request_queue);
@@ -1795,6 +1798,8 @@ gpointer uca_phantom_communicate_request_images_thread(gpointer data) {
             g_free(cine_info);
             break;
         }
+
+        g_print ("Requesting images from cine %d\n", cine_info->cine);
 
         guint img_format = self->settings.image_format;
         guint start = cine_info->start_index;
@@ -1816,6 +1821,8 @@ gpointer uca_phantom_communicate_request_images_thread(gpointer data) {
                     g_free(additional);
                     return FALSE;
                 }
+
+                g_print ("Request %s\n", request_format);
 
                 // Request the datatransfer
                 gboolean res = uca_phantom_communicate_run_command(self, CMD_GET_XIMAGES, request_format, NULL, &sub_error);
@@ -1842,7 +1849,10 @@ gpointer uca_phantom_communicate_request_images_thread(gpointer data) {
 
                 // Push request to request queue
                 g_async_queue_push(self->request_queue, request);
-                g_async_queue_pop (self->throttle_queue);
+                while (grab_counter < nb_sub_images) {
+                    g_async_queue_pop (self->throttle_queue);
+                    grab_counter++;
+                }
             }
             g_free(additional);
         }
@@ -1892,6 +1902,8 @@ gpointer uca_phantom_communicate_request_images_thread(gpointer data) {
             g_free(additional);
         }
 
+        g_print ("Closing thread that requests images\n");
+
         if (self->settings.timestamp_format != TS_NONE) {
             // Request the timestamps:
             // format: time {cine:<cine_number>, start:<first_frame>,
@@ -1923,6 +1935,8 @@ gboolean uca_phantom_communicate_request_images(UcaPhantomCommunicate* self, Cap
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
     g_return_val_if_fail(self->local_acquisition_state == ACQUIRING, FALSE);
+
+    g_print ("YOOO WTF... Requesting images\n");
 
     GError* sub_error = NULL;
     GError* phantom_error = NULL;
@@ -2176,7 +2190,7 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
         // Wait for a request to be available
         request = g_async_queue_pop(self->request_queue);
 
-        g_debug ("Request received\n");
+        g_print ("accept_ximg: Request received\n");
 
         if (request == NULL) {
             return NULL;
@@ -2223,11 +2237,7 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
         buffer_pointer = image_buffer;
 
         // Read the image data directly from kernel buffer using pcap_next_ex
-        while (TRUE) {
-            if (remaining_bytes <= 0) {
-                break; // All bytes of the image frame have been read
-            }
-
+        while (remaining_bytes <= 0) {
             read_all = pcap_next_ex(self->handle, &pkt_header, &pkt_data);
 
             if (read_all == 0) {
@@ -2242,10 +2252,9 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
             }
 
             // Check if the packet size exceeds the remaining space in the buffer
-            if (pkt_header->len - ETHERNET_HEADER_SIZE > remaining_bytes) {
+            to_read = pkt_header->len - ETHERNET_HEADER_SIZE;
+            if (to_read > remaining_bytes) {
                 to_read = remaining_bytes;
-            } else {
-                to_read = pkt_header->len - ETHERNET_HEADER_SIZE;
             }
 
             // Copy the data to the image buffer
@@ -2290,7 +2299,7 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
             g_async_queue_push(self->ts_request_queue, ts_request);
         }
 
-        g_debug ("Request processed\n");
+        g_print ("Request processed\n");
 
         // Free the request
         uca_phantom_communicate_free_request(request);
@@ -2500,11 +2509,6 @@ static gpointer uca_phantom_communicate_unpack_ximg(gpointer data)
 
     GError* sub_error = NULL;
     GError* phantom_error = NULL;
-
-    gsize image_res = self->settings.roi_pixel_width * self->settings.roi_pixel_height * 2;
-    guint nb_images = MaxNumberImagesPerRequest[self->settings.image_format] * 2;
-
-    self->unpacked_ring_buffer = ringbuf_new (image_res * nb_images, TRUE, NULL);
 
     // Loop on CineData objects in the queue
     while (TRUE) {
@@ -2895,6 +2899,11 @@ gboolean uca_phantom_communicate_start_readout (
 
         // g_print ("Starting threads\n");
 
+        gsize image_res = self->settings.roi_pixel_width * self->settings.roi_pixel_height * 2;
+        guint nb_images = MaxNumberImagesPerRequest[self->settings.image_format] * 2;
+
+        self->unpacked_ring_buffer = ringbuf_new (image_res * nb_images, TRUE, NULL);
+
         self->data_receiver = g_thread_new("data_receiver", uca_phantom_communicate_accept_ximg, self);
         self->data_unpacker = g_thread_new("data_unpacker", uca_phantom_communicate_unpack_ximg, self);
     } else {
@@ -2911,15 +2920,7 @@ gboolean uca_phantom_communicate_start_readout (
 gboolean uca_phantom_communicate_grab_image(UcaPhantomCommunicate* self, gpointer data, GError** error_loc)
 {
     static guint count = 0;
-
-    guint max = MaxNumberImagesPerRequest[self->settings.image_format];
-    guint current_demand = self->settings.nb_post_trigger_frames + self->settings.nb_pre_trigger_frames;
-    gint nb_images = current_demand > max ? max : current_demand;
-
-    if (count % nb_images == 0 || count % current_demand == 0) {
-        g_print ("Pushing %d images to the queue\n", nb_images);
-        g_async_queue_push(self->throttle_queue, &count);
-    }
+    g_async_queue_push(self->throttle_queue, &count);
 
     gsize image_size = self->settings.roi_pixel_width * self->settings.roi_pixel_height * sizeof(guint16);
     // copy the image data to the output buffer
@@ -2928,7 +2929,12 @@ gboolean uca_phantom_communicate_grab_image(UcaPhantomCommunicate* self, gpointe
     // right amount of memory with the good bit depth.
     // TODO : Mqybe consider GBytes for the output buffer ?
     guint16 *data_buffer = data;
+
+    // g_print ("Grabbing image %d\n", count);
+
     ringbuf_pop (data_buffer, self->unpacked_ring_buffer, image_size);
+
+    // g_print ("Image %d grabbed\n", count);
 
     count++;
 

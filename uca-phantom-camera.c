@@ -236,7 +236,7 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     gboolean res = FALSE;
 
     // print the current cine
-    // g_print ("Saving in cine: %d\n", priv->settings.current_cine);
+    g_print ("Trigger: Saving in cine: %d\n", priv->settings.current_cine);
 
     time_to_record = priv->settings.nb_pre_trigger_frames / (gdouble)priv->settings.frames_per_second;
 
@@ -319,6 +319,7 @@ uca_phantom_camera_trigger (UcaCamera *camera,
 
     priv->settings.current_cine += 1;
     priv->settings.current_cine %= priv->nb_recordings;
+    g_print ("Trigger end: Saving in cine: %d\n", priv->settings.current_cine);
 }
 
 static void
@@ -437,7 +438,7 @@ uca_phantom_camera_set_property (GObject *object,
             // Image format requested on trigger
             break;
         case PROP_TRIGGER_SOURCE:
-            priv->settings.trigger_source = g_value_get_uint (value);
+            priv->settings.trigger_source = g_value_get_enum (value);
             // TODO
             break;
         case PROP_TRIGGER_TYPE:
@@ -841,7 +842,10 @@ ufo_net_camera_initable_init (GInitable *initable,
             g_propagate_error (error, internal_error);
             return FALSE;
         }
-    }    
+    }
+
+    // Set the number of cines
+    g_object_set (camera, "nb-recordings", 16, NULL);
 
     // Init base class properties
     priv->name = g_strdup ("Phantom Camera");
