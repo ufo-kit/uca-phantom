@@ -37,8 +37,8 @@
 #define MAX_KERNEL_BUF_SIZE 2147483647 // 2GBytes = 2^31 - 1 Bytes
 #define MAX_HEAP_BUF_SIZE MAX_KERNEL_BUF_SIZE
 
-#define MAX_SENSOR_PIXEL_WIDTH 2048 // Maximum sensor pixel width
-#define MAX_SENSOR_PIXEL_HEIGHT 1952 // Maximum sensor pixel height
+#define MAX_SENSOR_WIDTH 2048 // Maximum sensor pixel width
+#define MAX_SENSOR_HEIGHT 1952 // Maximum sensor pixel height
 
 #define MAX_NB_IMAGES_BUFFERING 40
 /**
@@ -160,6 +160,7 @@ typedef struct _ImageRequest {
     guint64 nb_images;
     ImageFormat img_format;
     guint buffer_index;
+    CaptureSettings settings;
 } ImageRequest;
 
 typedef struct _TsRequest {
@@ -189,6 +190,7 @@ typedef struct {
     gint start_index;
     guint nb_images;
     gboolean end_request;
+    CaptureSettings settings;
 } CineInfo;
 
 /**
@@ -246,7 +248,7 @@ const TimestampSpec TimestampSpecs[] = { { "0", sizeof(short_time_stamp) },
     { "2", sizeof(long_time_stamp) },
     { "3", sizeof(long_time_stamp32) } };
 
-const gdouble MaxNumberImages = MAX_KERNEL_BUF_SIZE / ((double)(MAX_SENSOR_PIXEL_HEIGHT * MAX_SENSOR_PIXEL_WIDTH) + ETHERNET_HEADER_SIZE);
+const gdouble MaxNumberImages = MAX_KERNEL_BUF_SIZE / ((double)(MAX_SENSOR_HEIGHT * MAX_SENSOR_WIDTH) + ETHERNET_HEADER_SIZE);
 
 const guint MaxNumberImagesPerRequest[] = { (MaxNumberImages), (MaxNumberImages), (MaxNumberImages / 2),
     (MaxNumberImages / 2), (MaxNumberImages / 1.25), (MaxNumberImages / 1.5) };
@@ -1799,7 +1801,7 @@ gpointer uca_phantom_communicate_request_images_thread(gpointer data) {
             break;
         }
 
-        g_print ("Requesting images from cine %d\n", cine_info->cine);
+        // g_debug ("Requesting images from cine %d\n", cine_info->cine);
 
         guint img_format = self->settings.image_format;
         guint start = cine_info->start_index;
@@ -1822,7 +1824,7 @@ gpointer uca_phantom_communicate_request_images_thread(gpointer data) {
                     return FALSE;
                 }
 
-                g_print ("Request %s\n", request_format);
+                // g_debug ("Request %s\n", request_format);
 
                 // Request the datatransfer
                 gboolean res = uca_phantom_communicate_run_command(self, CMD_GET_XIMAGES, request_format, NULL, &sub_error);
@@ -1841,6 +1843,7 @@ gpointer uca_phantom_communicate_request_images_thread(gpointer data) {
                 request->start = start;
                 request->nb_images = nb_sub_images;
                 request->img_format = img_format;
+                request->settings = self->settings;
                 request->end_request = FALSE;
 
                 // Update counters
@@ -1894,6 +1897,7 @@ gpointer uca_phantom_communicate_request_images_thread(gpointer data) {
                 ImageRequest* request = g_new0(ImageRequest, 1);
                 request->nb_images = nb_sub_images;
                 request->img_format = img_format;
+                request->settings = self->settings;
                 request->end_request = FALSE;
 
                 // Push request to request queue
@@ -1902,7 +1906,7 @@ gpointer uca_phantom_communicate_request_images_thread(gpointer data) {
             g_free(additional);
         }
 
-        g_print ("Closing thread that requests images\n");
+        // g_debug ("Closing thread that requests images\n");
 
         if (self->settings.timestamp_format != TS_NONE) {
             // Request the timestamps:
@@ -1927,6 +1931,8 @@ gpointer uca_phantom_communicate_request_images_thread(gpointer data) {
         g_free (cine_info);
     }
 
+    g_debug ("Closing thread that requests images\n");
+
     return NULL;
 }
 
@@ -1936,7 +1942,7 @@ gboolean uca_phantom_communicate_request_images(UcaPhantomCommunicate* self, Cap
     g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
     g_return_val_if_fail(self->local_acquisition_state == ACQUIRING, FALSE);
 
-    g_print ("YOOO WTF... Requesting images\n");
+    // g_debug ("Requesting images\n");
 
     GError* sub_error = NULL;
     GError* phantom_error = NULL;
@@ -2030,6 +2036,7 @@ gboolean uca_phantom_communicate_request_images(UcaPhantomCommunicate* self, Cap
     info->start_index = start;
     info->nb_images = total;
     info->end_request = FALSE;
+    info->settings = self->settings;
 
     // Push the settings to the settings queue
     g_async_queue_push(self->cine_request_queue, info);
@@ -2089,7 +2096,7 @@ static gpointer uca_phantom_communicate_accept_img(gpointer data)
         }
 
         // Calculate the size of the image buffer
-        nb_pixels = self->settings.roi_pixel_width * self->settings.roi_pixel_height;
+        nb_pixels = self->settings.sensor_width * self->settings.sensor_height;
         image_size = nb_pixels * ImageFormatSpecs[request->img_format].byte_depth;
         image_packet_size = image_size * request->nb_images;
 
@@ -2182,6 +2189,7 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
     // gpointer ts_buffer = NULL;
     int read_all = FALSE;
     ImageRequest* request = NULL;
+    CaptureSettings settings = {0};
 
     struct pcap_pkthdr* pkt_header = NULL;
 
@@ -2190,7 +2198,8 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
         // Wait for a request to be available
         request = g_async_queue_pop(self->request_queue);
 
-        g_print ("accept_ximg: Request received\n");
+        // g_debug ("accept_ximg: Request received\n");
+        settings = request->settings;
 
         if (request == NULL) {
             return NULL;
@@ -2206,7 +2215,7 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
             // Add the data to the queue
             g_async_queue_push(self->packed_queue, cine_data);
 
-            if (self->settings.timestamp_format != TS_NONE) {
+            if (settings.timestamp_format != TS_NONE) {
                 // Create timestamp request
                 TsRequest* ts_request = g_new0(TsRequest, 1);
                 ts_request->end_request = TRUE;
@@ -2217,17 +2226,20 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
 
             return NULL;
         }
+
+        
         // Calculate the size of the image buffer
-        nb_pixels = self->settings.roi_pixel_width * self->settings.roi_pixel_height;
+        nb_pixels = settings.sensor_width * settings.sensor_height;
+        g_debug ("sensor_width: %d, sensor_height: %d\n", settings.sensor_width, settings.sensor_height);
         packed_image_size = nb_pixels * ImageFormatSpecs[request->img_format].byte_depth; // the packed image size
         packed_packet_size = packed_image_size * request->nb_images; // the packed image packet size
         unpacked_image_size = nb_pixels * sizeof(guint16); // the unpacked image size
         unpacked_packet_size = unpacked_image_size * request->nb_images; // the unpacked image packet size
 
         buffer_size = packed_packet_size;
-        // g_print ("Malloc size when reading: %ld\n", buffer_size);
+        // g_debug ("Malloc size when reading: %ld\n", buffer_size);
         image_buffer = g_malloc0(buffer_size + 128);
-        // g_print ("Malloc done when reading\n");
+        // g_debug ("Malloc done when reading\n");
         if (image_buffer == NULL) {
             g_warning("Out of RAM... \n");
             return data;
@@ -2236,8 +2248,13 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
         remaining_bytes = buffer_size;
         buffer_pointer = image_buffer;
 
+        if (self->handle == NULL) {
+            g_warning("Handle is NULL\n");
+            return data;
+        }
+
         // Read the image data directly from kernel buffer using pcap_next_ex
-        while (remaining_bytes <= 0) {
+        while (remaining_bytes > 0) {
             read_all = pcap_next_ex(self->handle, &pkt_header, &pkt_data);
 
             if (read_all == 0) {
@@ -2287,19 +2304,19 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
         // Add the data to the queue
         g_async_queue_push(self->packed_queue, cine_data);
 
-        if (self->settings.timestamp_format != TS_NONE) {
+        if (settings.timestamp_format != TS_NONE) {
             // Create timestamp request
             TsRequest* ts_request = g_new0(TsRequest, 1);
             ts_request->start = request->start;
             ts_request->count = request->nb_images;
             ts_request->end_request = FALSE;
-            ts_request->TsFormat = self->settings.timestamp_format;
+            ts_request->TsFormat = settings.timestamp_format;
 
             // Push request to request queue
             g_async_queue_push(self->ts_request_queue, ts_request);
         }
 
-        g_print ("Request processed\n");
+        // g_debug ("Request processed\n");
 
         // Free the request
         uca_phantom_communicate_free_request(request);
@@ -2424,10 +2441,15 @@ static gboolean uca_phantom_communicate_unpack_image_p12l(UcaPhantomCommunicate*
 
     gsize output_size = cine_data->SizePerImageUnpacked * cine_data->NbImages;
 
+    g_debug ("SizePerImageUnpacked: %ld\n", cine_data->SizePerImageUnpacked);
+    g_debug ("NbImages: %d\n", cine_data->NbImages);
+
     // Allocate memory for the unpacked image
-    // g_print ("Malloc size when unnpacking: %ld\n", output_size);
+    // g_debug ("Malloc size when unnpacking: %ld\n", output_size);
     guint16* unpacked_buffer = g_malloc0(output_size);
-    // g_print ("Malloc done zhen unpacking\n");
+    // g_debug ("Malloc done zhen unpacking\n");
+
+    
 
     if (unpacked_buffer == NULL) {
         g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_UNPACK_IMAGE,
@@ -2510,6 +2532,8 @@ static gpointer uca_phantom_communicate_unpack_ximg(gpointer data)
     GError* sub_error = NULL;
     GError* phantom_error = NULL;
 
+    g_debug ("Unpacking images\n");
+
     // Loop on CineData objects in the queue
     while (TRUE) {
         // Get the next CineData object
@@ -2526,13 +2550,12 @@ static gpointer uca_phantom_communicate_unpack_ximg(gpointer data)
         if (cine_data->ImgFormat == IMG_P10) {
             if (!uca_phantom_communicate_unpack_image_p10(self, cine_data, &sub_error)) {
                 g_propagate_error(&phantom_error, sub_error);
-                g_clear_error(&sub_error);
                 return phantom_error;
             }
         } else if (cine_data->ImgFormat == IMG_P12L) {
             if (!uca_phantom_communicate_unpack_image_p12l(self, cine_data, &sub_error)) {
+                g_debug ("Error while unpacking image, %s\n", sub_error->message);
                 g_propagate_error(&phantom_error, sub_error);
-                g_clear_error(&sub_error);
                 return phantom_error;
             }
         } else {
@@ -2544,6 +2567,8 @@ static gpointer uca_phantom_communicate_unpack_ximg(gpointer data)
         // Free the cine data
         g_free(cine_data);
     }
+
+    g_debug ("Unpacking done\n");
 
     ringbuf_free (self->unpacked_ring_buffer);
 
@@ -2665,7 +2690,7 @@ gpointer uca_phantom_communicate_buffer_ximg_8 (gpointer data) {
         }
 
         // Calculate the size of the image buffer
-        nb_pixels = self->settings.roi_pixel_width * self->settings.roi_pixel_height;
+        nb_pixels = self->settings.sensor_width * self->settings.sensor_height;
         image_size = nb_pixels; // the packed image size
         packet_size = image_size * request->nb_images; // the packed image packet size
 
@@ -2707,7 +2732,7 @@ gpointer uca_phantom_communicate_buffer_ximg_8 (gpointer data) {
             // Copy eveything to the ring buffer
             result = ringbuf_push (self->live_ring_buffer, pkt_data + ETHERNET_HEADER_SIZE, to_read);
             if (result == NULL) {
-                g_print ("Error in the ring buffer...\n");
+                g_debug ("Error in the ring buffer...\n");
                 continue;
             }
 
@@ -2746,7 +2771,7 @@ gpointer uca_phantom_communicate_receive_live_images (gpointer data) {
 
     const gsize byte_depth = sizeof(guint16);
 
-    // g_print ("Buffering thread started, byte dethp %d\n", byte_depth);
+    g_debug ("Live images thread started. byte depth: %d\n", byte_depth);
 
     self->input_datastream = g_io_stream_get_input_stream(G_IO_STREAM(self->data_connection));
 
@@ -2766,7 +2791,7 @@ gpointer uca_phantom_communicate_receive_live_images (gpointer data) {
         }
 
         // Calculate the size of the image buffer
-        nb_pixels = self->settings.roi_pixel_width * self->settings.roi_pixel_height;
+        nb_pixels = self->settings.sensor_width * self->settings.sensor_height;
         image_size = nb_pixels * byte_depth; // the packed image size
         packet_size = image_size * request->nb_images; // the packed image packet size
         
@@ -2854,7 +2879,8 @@ gboolean uca_phantom_communicate_start_readout (
     }
 
     if (live_images) {
-        gsize image_size = self->settings.roi_pixel_width * self->settings.roi_pixel_height;
+        g_debug ("Starting live images\n");
+        gsize image_size = self->settings.sensor_width * self->settings.sensor_height;
         if (self->live_ring_buffer == NULL)
             self->live_ring_buffer = ringbuf_new (MAX_NB_IMAGES_BUFFERING * image_size, TRUE, NULL);
         else {
@@ -2870,11 +2896,11 @@ gboolean uca_phantom_communicate_start_readout (
         self->live_images_receiver = g_thread_new("live_images_receiver", uca_phantom_communicate_receive_live_images, self);
 
         self->live_image_buffer_state = ACQUIRING;
-
-        return TRUE;
     }
 
     if (self->xenabled) {
+        // Show the netcard name
+        g_debug ("XNetcard name: %s\n", self->xnetcard);
         if (self->mac_address_str == NULL) {
             // Get the mac address of the camera
             res = uca_phantom_communicate_get_mac_address(self, &sub_error);
@@ -2897,10 +2923,11 @@ gboolean uca_phantom_communicate_start_readout (
             }
         }
 
-        // g_print ("Starting threads\n");
-
-        gsize image_res = self->settings.roi_pixel_width * self->settings.roi_pixel_height * 2;
+        // g_debug ("Starting threads\n");
+        gsize image_res = self->settings.sensor_width * self->settings.sensor_height * 2;
         guint nb_images = MaxNumberImagesPerRequest[self->settings.image_format] * 2;
+
+        g_debug ("Image resolution: %d, %d nb_images: %d\n", self->settings.sensor_width, self->settings.sensor_height, nb_images);
 
         self->unpacked_ring_buffer = ringbuf_new (image_res * nb_images, TRUE, NULL);
 
@@ -2922,7 +2949,7 @@ gboolean uca_phantom_communicate_grab_image(UcaPhantomCommunicate* self, gpointe
     static guint count = 0;
     g_async_queue_push(self->throttle_queue, &count);
 
-    gsize image_size = self->settings.roi_pixel_width * self->settings.roi_pixel_height * sizeof(guint16);
+    gsize image_size = self->settings.sensor_width * self->settings.sensor_height * sizeof(guint16);
     // copy the image data to the output buffer
     // CAUTION : no verification is done on the size of the output buffer...
     // This is dangerous as it as it puts the user in charge of allocating the
@@ -2952,7 +2979,7 @@ gboolean uca_phantom_communicate_grab_live_image (UcaPhantomCommunicate* self, g
     // This is dangerous as it as it puts the user in charge of allocating the
     // right amount of memory with the good bit depth.
     // TODO : Mqybe consider GBytes for the output buffer ?
-    gsize image_size = self->settings.roi_pixel_width * self->settings.roi_pixel_height * sizeof(guint16);
+    gsize image_size = self->settings.sensor_width * self->settings.sensor_height * sizeof(guint16);
 
     guint16 *data_buffer = data;
     ringbuf_pop (data_buffer, self->live_ring_buffer, image_size);
@@ -2979,6 +3006,7 @@ gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate* self, GErro
     request->end_request = TRUE;
     request->nb_images = 0;
     request->img_format = 0;
+    request->settings = self->settings;
 
     g_async_queue_push(self->request_queue, request);
 
@@ -3009,6 +3037,10 @@ gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate* self, GErro
     if (self->live_image_buffer_state == ACQUIRING) {
         // Stop the buffering thread
         g_debug ("Stopping buffering thread\n");
+        // Create internal request
+        ImageRequest* request = g_new0(ImageRequest, 1);
+        request->end_request = TRUE;
+        g_async_queue_push(self->live_images_request_queue, request);
         sub_error = g_thread_join(self->live_images_receiver);
         if (sub_error != NULL) {
             g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_STOP_READOUT,

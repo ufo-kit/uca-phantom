@@ -163,22 +163,24 @@ typedef enum {
  */
 typedef struct{
     // base properties
-    guint16 sensor_pixel_width, sensor_pixel_height, sensor_bit_depth;
-    UcaCameraTriggerSource trigger_source;
-    UcaCameraTriggerType trigger_type;
+    guint sensor_width, sensor_height; // In pixels
+    guint roi_pixel_x, roi_pixel_y, roi_width, roi_height; // In pixels
+    guint sensor_bit_depth; // In bits
+
     gdouble frames_per_second;
     gdouble exposure_time;
-    gint roi_pixel_x, roi_pixel_y, roi_pixel_width, roi_pixel_height;
-    guint roi_width_multiplier, roi_height_multiplier;
 
     // phantom specific properties
     gfloat focal_length, aperture;
     guint edr_exp; // EDR exposure time
-    guint shutter_off, aexpmode;
-    gfloat aexpcomp; // Auto exposure compensation
+    gboolean shutter_off;
     guint nb_post_trigger_frames, nb_pre_trigger_frames;
     guint current_cine; // Current cine number in which the camera is recording
+    gfloat aexpcomp; // Auto exposure compensation
 
+    guint aexpmode;
+    UcaCameraTriggerSource trigger_source;
+    UcaCameraTriggerType trigger_type;
     SyncMode sync_mode;
     AcquisitionMode acquisition_mode;
     ImageFormat image_format;
