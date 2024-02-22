@@ -88,6 +88,7 @@ typedef enum {
     ACQUISITION_MODE_HS_BINNED = 7,
     ACQUISITION_MODE_BRIGHT_FIELD
 } AcquisitionMode;
+// G_DEFINE_ENUM_TYPE (AcquisitionMode, acquisition_mode)
 
 /**
  * @brief Enumeration of auto exposure modes for Phantom camera image capture.
@@ -101,6 +102,7 @@ typedef enum {
     AUTO_EXP_MODE_SPOT,         /**< Auto exposure is based on a spot meter reading. */
     AUTO_EXP_MODE_CENTER        /**< Auto exposure is based on the center of the image. */
 } AutoExpMode;
+// G_DEFINE_ENUM_TYPE (AutoExpMode, aexp_mode)
 
 /**
  * @brief The bit depth of the image format.
@@ -117,6 +119,7 @@ typedef enum {
     IMG_P10, // 10 bits per pixel packed into 32-bit big-endian words, FPN and PRNU corrected, non-linear, raw.
     IMG_P12L // 12 bits per pixel packed into 32-bit big-endian words, FPN and PRNU corrected, linear, raw.
 } ImageFormat;
+// G_DEFINE_ENUM_TYPE (ImageFormat, image_format)
 
 /**
  * @brief Enumeration of timestamp formats for Phantom camera image capture.
@@ -131,6 +134,7 @@ typedef enum {
     TS_LONG32,  /**< 32-bit long timestamp format. */
     TS_NONE     /**< No timestamp is requested. */
 } TimestampFormat;
+// G_DEFINE_ENUM_TYPE (TimestampFormat, timestamp_format)
 
 /**
  * @brief Enumeration of IP source flags for the TCP connection.
@@ -149,6 +153,7 @@ typedef enum {
     USE_BCAST,
     N_IP_FLAGS
 } IP_SOURCE_FLAGS;
+// G_DEFINE_ENUM_TYPE (IP_SOURCE_FLAGS, ip_source_flags)
 
 /**
  * @brief Struct containing capture settings for the Phantom camera.
@@ -164,7 +169,7 @@ typedef enum {
 typedef struct{
     // base properties
     guint sensor_width, sensor_height; // In pixels
-    guint roi_pixel_x, roi_pixel_y, roi_width, roi_height; // In pixels
+    guint roi_x0, roi_y0, roi_width, roi_height; // In pixels
     guint sensor_bit_depth; // In bits
 
     gdouble frames_per_second;

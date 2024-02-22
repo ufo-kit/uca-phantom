@@ -113,6 +113,9 @@ struct _UcaPhantomCameraPrivate {
 
     // Hack for tracking the last cine used
     gboolean recording;
+    guint *cine_tracker;
+    GCond cine_cond;
+    GMutex cine_mutex;
 
     UcaPhantomCommunicate *communicator;
 };
@@ -242,7 +245,7 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     g_return_if_fail (error == NULL || *error == NULL);
     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
     UcaPhantomCameraPrivate *priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
-    g_return_if_fail (priv->recording || !priv->buffered);
+    g_return_if_fail (priv->recording);
 
     GError *internal_error = NULL;
     gdouble time_to_record = 0;
@@ -342,6 +345,13 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     }
 
     if (trigger_source == UCA_CAMERA_TRIGGER_SOURCE_SOFTWARE){
+        // // Wait until we've grabbed enough images to overwrite the new cine
+        // g_mutex_lock (&priv->cine_mutex);
+        // guint ni = priv->settings.nb_post_trigger_frames + priv->settings.nb_pre_trigger_frames;
+        // while (priv->cine_tracker[priv->settings.current_cine] < ni ) {
+        //     g_cond_wait (&priv->cine_cond, &priv->cine_mutex);
+        // }
+        // g_cond_wait (&priv->cine_cond, &priv->cine_mutex);
         priv->settings.current_cine += 1;
         priv->settings.current_cine %= priv->numbuffers;
     }
@@ -398,8 +408,18 @@ uca_phantom_camera_grab (UcaCamera *camera,
     if (trigger_source == UCA_CAMERA_TRIGGER_SOURCE_AUTO){
         uca_phantom_camera_trigger(camera, error);
     }
+
+    // g_print ("ReadGrabbing an image\n");
+
+    if (!uca_phantom_communicate_grab_image (priv->communicator, data, error)) {
+        return FALSE;
+    }
+    priv->cine_tracker[priv->settings.current_cine] += 1;
+    // if (priv->cine_tracker[priv->settings.current_cine] == priv->settings.nb_post_trigger_frames + priv->settings.nb_pre_trigger_frames) {
+    //     g_cond_signal (&priv->cine_cond);
+    // }
   
-    return uca_phantom_communicate_grab_image (priv->communicator, data, error);
+    return TRUE;
 }
 
 /**
@@ -482,15 +502,15 @@ uca_phantom_camera_set_property (GObject *object,
             g_free (fps);
             break;
         case PROP_ROI_X:
-            priv->settings.roi_pixel_x = g_value_get_uint (value);
-            gchar* roi_x = g_strdup_printf("%d", priv->settings.roi_pixel_x);
+            priv->settings.roi_x0 = g_value_get_int (value);
+            gchar* roi_x = g_strdup_printf("%d", priv->settings.roi_x0);
             if (priv->control_connected)
                 res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_OX, roi_x, &internal_error);
             g_free (roi_x);
             break;
         case PROP_ROI_Y:
-            priv->settings.roi_pixel_y = g_value_get_uint (value);
-            gchar* roi_y = g_strdup_printf("%d", priv->settings.roi_pixel_y);
+            priv->settings.roi_y0 = g_value_get_int (value);
+            gchar* roi_y = g_strdup_printf("%d", priv->settings.roi_y0);
             if (priv->control_connected)
                 res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_OY, roi_y, &internal_error);
             g_free (roi_y);
@@ -592,6 +612,9 @@ uca_phantom_camera_set_property (GObject *object,
             if (priv->control_connected){
                 res = uca_phantom_communicate_set_nb_cines (priv->communicator, priv->numbuffers, &internal_error);
             }
+            if (priv->cine_tracker != NULL)
+                g_free (priv->cine_tracker);
+            priv->cine_tracker = g_new0 (guint, priv->numbuffers);
             break;
         default:
             g_print ("set : Property %d not found\n", property_id);
@@ -681,10 +704,10 @@ uca_phantom_camera_get_property (GObject *object,
             g_value_set_double (value, priv->settings.frames_per_second);
             break;
         case PROP_ROI_X:
-            g_value_set_uint (value, priv->settings.roi_pixel_x);
+            g_value_set_uint (value, priv->settings.roi_x0);
             break;
         case PROP_ROI_Y:
-            g_value_set_uint (value, priv->settings.roi_pixel_y);
+            g_value_set_uint (value, priv->settings.roi_y0);
             break;
         case PROP_ROI_WIDTH:
             g_value_set_uint (value, priv->settings.roi_width);
@@ -779,6 +802,14 @@ uca_phantom_camera_dispose (GObject *object) {
         g_free (priv->name);
         priv->name = NULL;
     }
+
+    if (priv->cine_tracker) {
+        g_free (priv->cine_tracker);
+        priv->cine_tracker = NULL;
+    }
+
+    g_cond_clear (&priv->cine_cond);
+    g_mutex_clear (&priv->cine_mutex);
 }
 
 static void
@@ -846,14 +877,16 @@ uca_phantom_camera_initable_init (GInitable *initable,
     priv->buffered = TRUE;
     priv->xenabled = TRUE;
     priv->numbuffers = 16;
+    priv->cine_tracker = g_new0 (guint, priv->numbuffers);
+    
 
     // Set the network properties
     gchar *xnetcard = getenv ("PHANTOM_XNETCARD");
     if (xnetcard == NULL) {
-        g_print ("No XNETCARD environment variable found\n");
+        g_debug ("No XNETCARD environment variable found\n");
         xnetcard = priv->xnetcard;
     }
-    g_print ("XNETCARD: %s\n", xnetcard);
+    // g_print ("XNETCARD: %s\n", xnetcard);
 
     g_object_set (camera, "xnetcard", xnetcard,
                         "xenabled", priv->xenabled,
@@ -885,6 +918,8 @@ uca_phantom_camera_initable_init (GInitable *initable,
     priv->max_sensor_resolution_width = g_value_get_uint (&value);
     priv->settings.sensor_width = priv->max_sensor_resolution_width;
     priv->auto_settings.sensor_width = priv->max_sensor_resolution_width;
+    priv->roi_width_multiplier = 1;
+    priv->settings.roi_width = priv->max_sensor_resolution_width;
     g_value_unset (&value);
 
     if (!uca_phantom_communicate_get_variable (priv->communicator, UNIT_INFO_YMAX, &value, &internal_error)) {
@@ -894,6 +929,8 @@ uca_phantom_camera_initable_init (GInitable *initable,
     priv->max_sensor_resolution_height = g_value_get_uint (&value);
     priv->settings.sensor_height = priv->max_sensor_resolution_height;
     priv->auto_settings.sensor_height = priv->max_sensor_resolution_height; 
+    priv->roi_height_multiplier = 1;
+    priv->settings.roi_height = priv->max_sensor_resolution_height;
     g_value_unset (&value);
 
     if (!uca_phantom_communicate_get_variable (priv->communicator, UNIT_INFO_EXPDEAD, &value, &internal_error)) {
@@ -917,8 +954,7 @@ uca_phantom_camera_initable_init (GInitable *initable,
     priv->yinc = g_value_get_uint (&value);
     g_value_unset (&value);
 
-    if (!uca_phantom_communicate_get_variable (priv->communicator, UNIT_INFO_CINEMEM, &value, &internal_error)) {
-        g_propagate_error (error, internal_error);
+    if (!uca_phantom_communicate_get_variable (priv->communicator, UNIT_INFO_CINEMEM, &value, error)) {
         return FALSE;
     }
     priv->internal_memory_size = g_value_get_uint (&value);
@@ -928,6 +964,11 @@ uca_phantom_camera_initable_init (GInitable *initable,
     priv->sensor_physical_height = priv->max_sensor_resolution_height * sensor_pixel_height;
     priv->sensor_pixel_width = sensor_pixel_width;
     priv->sensor_pixel_height = sensor_pixel_height;
+
+    // // Experimental !
+    // gchar* enable_crop = g_strdup_printf("%d", 1);
+    // res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_CROP, enable_crop, error);
+    // g_free(enable_crop);
 
     return TRUE;
 }
@@ -1132,11 +1173,14 @@ uca_phantom_camera_init (UcaPhantomCamera *self) {
 
     // g_print ("Initializing Phantom Camera\n");
 
+    g_cond_init (&priv->cine_cond);
+    g_mutex_init (&priv->cine_mutex);
+
     priv->settings = (CaptureSettings){
         .sensor_width = priv->max_sensor_resolution_width,
         .sensor_height = priv->max_sensor_resolution_height,
-        .roi_pixel_x = 0,
-        .roi_pixel_y = 0,
+        .roi_x0 = 0,
+        .roi_y0 = 0,
         .roi_width = priv->max_sensor_resolution_width,
         .roi_height = priv->max_sensor_resolution_height,
         .sensor_bit_depth = ImageFormatSpecs[IMG_P12L].bit_depth,
@@ -1164,8 +1208,8 @@ uca_phantom_camera_init (UcaPhantomCamera *self) {
     priv->auto_settings = (CaptureSettings){
         .sensor_width = priv->max_sensor_resolution_width,
         .sensor_height = priv->max_sensor_resolution_height,
-        .roi_pixel_x = 0,
-        .roi_pixel_y = 0,
+        .roi_x0 = 0,
+        .roi_y0 = 0,
         .roi_width = priv->max_sensor_resolution_width,
         .roi_height = priv->max_sensor_resolution_height,
         .sensor_bit_depth = ImageFormatSpecs[IMG_P12L].bit_depth,

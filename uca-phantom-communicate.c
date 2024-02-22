@@ -1824,7 +1824,7 @@ gpointer uca_phantom_communicate_request_images_thread(gpointer data) {
                     return FALSE;
                 }
 
-                // g_debug ("Request %s\n", request_format);
+                g_debug ("Request %s\n", request_format);
 
                 // Request the datatransfer
                 gboolean res = uca_phantom_communicate_run_command(self, CMD_GET_XIMAGES, request_format, NULL, &sub_error);
@@ -1856,6 +1856,8 @@ gpointer uca_phantom_communicate_request_images_thread(gpointer data) {
                     g_async_queue_pop (self->throttle_queue);
                     grab_counter++;
                 }
+                g_debug ("Grabbed %d images\n", grab_counter);
+                grab_counter = 0;
             }
             g_free(additional);
         }
@@ -2433,6 +2435,7 @@ static gboolean uca_phantom_communicate_unpack_image_p12l(UcaPhantomCommunicate*
     GError** error_loc)
 {
     // TODO: pass the unpacked image as argument
+    static guint counter = 0;
 
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(cine_data != NULL, FALSE);
@@ -2504,8 +2507,11 @@ static gboolean uca_phantom_communicate_unpack_image_p12l(UcaPhantomCommunicate*
         g_warning("Error while unpacking image");
     }
 
+    counter += cine_data->NbImages;
+
     // copy into the ring buffer
     ringbuf_push (self->unpacked_ring_buffer, unpacked_buffer, output_size);
+
 
     // free the unpacked buffer
     g_free (unpacked_buffer);
