@@ -45,6 +45,7 @@ typedef enum {
     UCA_PHANTOM_COMMUNICATE_ERROR_GRAB_IMAGE,
     UCA_PHANTOM_COMMUNICATE_ERROR_ACCEPT_XIMG,
     UCA_PHANTOM_COMMUNICATE_ERROR_ACCEPT_IMG,
+    UCA_PHANTOM_COMMUNICATE_ERROR_ACCEPT_TIMESTAMPS,
     UCA_PHANTOM_COMMUNICATE_ERROR_DISCONNECT_DATASTREAM,
     UCA_PHANTOM_COMMUNICATE_ERROR_STOP_READOUT,
     UCA_PHANTOM_COMMUNICATE_ERROR_NEXT_EVENT,
@@ -298,11 +299,12 @@ gboolean uca_phantom_communicate_disconnect_xdatastream(UcaPhantomCommunicate *s
  *
  * @param self
  * @param variable_flag
+ * @param cine // optional
  * @param return_value
  * @param error_loc
  * @return gboolean
  */
-gboolean uca_phantom_communicate_get_variable (UcaPhantomCommunicate *self, guint variable_flag, GValue *return_value, GError **error);
+gboolean uca_phantom_communicate_get_variable (UcaPhantomCommunicate *self, guint variable_flag, gint cine, GValue *return_value, GError **error);
 
 /**
  * @brief Set the value of a variable on the phantom
@@ -404,7 +406,7 @@ gboolean uca_phantom_communicate_trigger (UcaPhantomCommunicate *self, GError **
  * @param error_loc A pointer to a GError object to store any errors that occur.
  * @return TRUE if the request was successful, FALSE otherwise.
  */
-gboolean uca_phantom_communicate_request_images (UcaPhantomCommunicate *self, CaptureSettings *settings, GError **error_loc);
+gboolean uca_phantom_communicate_request_images (UcaPhantomCommunicate *self, CaptureSettings settings, GError **error_loc);
 
 /**
  * @brief Grab an image from the program's image queue
@@ -431,8 +433,22 @@ gboolean uca_phantom_communicate_grab_image (UcaPhantomCommunicate *self, gpoint
  * @param error_loc Pointer to a GError object to store any errors that occur
  * @return gboolean TRUE if the readout was successfully stopped, FALSE otherwise
  */
-gboolean uca_phantom_communicate_grab_live_image (UcaPhantomCommunicate* self, gpointer data, GError** error_loc);
+gboolean uca_phantom_communicate_grab_live_image (UcaPhantomCommunicate* self, gpointer data, CaptureSettings settings, GError **error_loc);
 
+
+/**
+ * @brief Grab a timestamp from the program's timestamp queue
+ * 
+ * @details Copys the timestamp data allocated in the internal timestamp queue to the provided pointer.
+ * This functions supposes that the provided pointer is large enough to hold the timestamp data.
+ * 
+ * @note This function will block until a timestamp is available in the queue
+ *
+ * @param self Pointer to the UcaPhantomCommunicate object
+ * @param error_loc Pointer to a GError object to store any errors that occur
+ * @return gboolean TRUE if the readout was successfully stopped, FALSE otherwise
+ */
+gboolean uca_phantom_communicate_grab_timestamp (UcaPhantomCommunicate* self, guint64 *time, TimestampFormat format, GError** error_loc);
 /**
  * @brief The flags that represent phantom unit variables.
  *

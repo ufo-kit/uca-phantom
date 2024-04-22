@@ -43,9 +43,14 @@ static inline int memfd_create(const char *name, unsigned int flags) {
 ringbuf_t *ringbuf_new (gsize size, gboolean block, GError **error) {
     // Check that the requested size is a multiple of a page. If it isn't, we're in trouble.
     gsize s = size;
-    if (s % getpagesize() != 0) {
-        g_warning ("Requested ring buffer size is not a multiple of a page");
-        return NULL;
+    gsize page_size = getpagesize();
+    if (s % page_size != 0) {
+        if (s < page_size) {
+            s = 2*page_size;
+        }
+        else {
+            s = (s / page_size + 1) * page_size;
+        }
     }
 
     gint fd = -1;
