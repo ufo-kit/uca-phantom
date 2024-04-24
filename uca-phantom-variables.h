@@ -68,7 +68,7 @@ Unit variables[] = {
     {"info.rto_channels",    G_TYPE_UINT,   G_PARAM_READABLE,     UNIT_INFO_RTO_CHANNELS, TRUE},
     // Color correction (non concerned)
     // Camera status monitoring
-    {"info.modes", G_TYPE_UINT,     G_PARAM_READABLE,   UNIT_INFO_MODES,    TRUE},
+    {"info.modes", G_TYPE_STRING,     G_PARAM_READABLE,   UNIT_INFO_MODES,    TRUE},
     // meta
     {"meta.name",    G_TYPE_STRING,     G_PARAM_READWRITE,  UNIT_META_NAME, TRUE},
     {"meta.lens",    G_TYPE_STRING,     G_PARAM_READABLE,   UNIT_META_LENS, TRUE},

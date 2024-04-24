@@ -226,7 +226,7 @@ uca_phantom_camera_stop_recording (UcaCamera *camera,
     GError *internal_error = NULL;
 
     // Temp read timestamps
-    for (int i = 0; i < 1000; i++) {
+    for (int i = 0; i < 2000; i++) {
         guint64 time;
         gboolean res = uca_phantom_communicate_grab_timestamp(priv->communicator, &time, 0, error);
         if (!res) {
@@ -332,11 +332,16 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     gboolean ready_to_request = FALSE;
     GValue flags2 = G_VALUE_INIT;
 
-    while (!ready_to_request) {
+    gboolean extra_loop = FALSE;
+
+    do {
+        if (ready_to_request) {
+            extra_loop = TRUE;
+        }
+
         res = uca_phantom_communicate_get_variable (priv->communicator, UNIT_CT_STATE, settings.current_cine, &flags2, &internal_error);
         if (res != TRUE && internal_error != NULL) {
             g_propagate_error (error, internal_error);
-            return;
         }
         flags_str = g_value_get_string (&flags2);
         if (flags_str == NULL) {
@@ -347,9 +352,11 @@ uca_phantom_camera_trigger (UcaCamera *camera,
         if (found != NULL) {
             ready_to_request = TRUE;
         }
+
+        
         
         g_value_unset (&flags2);
-    }
+    } while (!ready_to_request && !extra_loop);
 
     res = !uca_phantom_communicate_request_images (
             priv->communicator, 
@@ -527,7 +534,7 @@ uca_phantom_camera_set_property (GObject *object,
         case PROP_EXPOSURE_TIME:
             priv->settings.exposure_time = g_value_get_double (value);
             g_print ("Setting exposure to %f\n", priv->settings.exposure_time);
-            gchar* exposure = g_strdup_printf("%f", priv->settings.exposure_time);
+            gchar* exposure = g_strdup_printf("%d", (guint)(priv->settings.exposure_time));
             g_print ("Setting exposure to %s\n", exposure);
             if (priv->control_connected)
                 res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_EXP, exposure, &internal_error);
@@ -597,7 +604,7 @@ uca_phantom_camera_set_property (GObject *object,
             break;
         case PROP_NB_POST_TRIGGER_FRAMES:
             priv->settings.nb_post_trigger_frames = g_value_get_uint (value);
-            gchar* nb_post_trigger_frames = g_strdup_printf("%d", priv->settings.nb_post_trigger_frames);
+            gchar* nb_post_trigger_frames = g_strdup_printf("%d", priv->settings.nb_post_trigger_frames+1);
             if (priv->control_connected)
                 res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_PTFRAMES, nb_post_trigger_frames, &internal_error);
             g_free(nb_post_trigger_frames);

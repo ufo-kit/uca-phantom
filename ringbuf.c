@@ -195,6 +195,40 @@ gconstpointer ringbuf_head (ringbuf_t *rb) {
     return retval;
 }
 
+gconstpointer ringbuf_move_tail (ringbuf_t *rb, gsize size) {
+    gpointer tail = NULL;
+    
+    // Wait for data to become available
+    g_mutex_lock(&rb->mutex);
+    while (ringbuf_bytes_used_unlocked(rb) < size) {
+        g_cond_wait (&rb->readable, &rb->mutex);
+    }
+
+    rb->tail += size;
+    tail = rb->buf + rb->tail;
+
+    if(rb->tail >= rb->buffer_size) {
+        rb->head -= rb->buffer_size;
+        rb->tail -= rb->buffer_size;
+    }
+
+    g_cond_signal (&rb->writeable);
+    g_mutex_unlock (&rb->mutex);
+
+    return tail;
+}
+
+gconstpointer ringbuf_move_head (ringbuf_t *rb, gsize size) {
+    gpointer head = NULL;
+    
+    // Wait for space to become available
+    g_mutex_lock(&rb->mutex);
+    rb->head += size;
+    head = rb->buf + rb->head;
+    g_mutex_unlock(&rb->mutex);
+
+    return head;
+}
 
 gpointer ringbuf_push(ringbuf_t *dst, gconstpointer src, gsize size) {
     gpointer head = NULL;

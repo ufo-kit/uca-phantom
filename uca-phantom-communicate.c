@@ -183,7 +183,7 @@ typedef struct __attribute__((packed)) {
     guint32 range_d1; // second 32bits received as rangedata, lsb first, big endian
     guint32 range_d2; // third 32bits received as rangedata, lsb first, big endian
     guint32 range_d3; // fourth 32bits received as rangedata, lsb first, big endian
-    guint32 cine;
+    gint32 cine;
 } PhantomTimestamp;
 /** @} */
 
@@ -3028,7 +3028,7 @@ gboolean uca_phantom_communicate_start_readout (
     gsize unpacked_rb_size = nb_pixels * 2 * nb_images;
     g_debug ("\t>Unpacked ring buffer size: %ld\n", unpacked_rb_size);
 
-    self->packed_ring_buffer = ringbuf_new (nb_images * image_size, TRUE, NULL);
+    // self->packed_ring_buffer = ringbuf_new (nb_images * image_size, TRUE, NULL);
     self->unpacked_ring_buffer = ringbuf_new (unpacked_rb_size, TRUE, NULL);
     if (self->unpacked_ring_buffer == NULL) {
         g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_START_RECORDING,
@@ -3096,7 +3096,7 @@ guint64 decode_timestamp (PhantomTimestamp tmp, TimestampFormat ts_format, guint
         case TS_LONG:
             tmp.csecs = ntohl(tmp.csecs);
             tmp.exptime = ntohs(tmp.exptime);
-            tmp.frac = ntohs(tmp.frac) << 2;
+            tmp.frac = ntohs(tmp.frac) >> 2;
             csecs = tmp.csecs;
             frac = tmp.frac;
             exptime = tmp.exptime;
@@ -3117,7 +3117,8 @@ gboolean uca_phantom_communicate_grab_timestamp (UcaPhantomCommunicate* self, gu
 {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     static gint prev_cine = 0;
-    static guint prec_trigger_time = 0;
+
+    static gint64 prev_trigger_time = 0, prev_trigger_time_frac = 0;
 
     // CAUTION : no verification is done on the size of the output buffer...
     // This is dangerous as it as it puts the user in charge of allocating the
@@ -3135,8 +3136,15 @@ gboolean uca_phantom_communicate_grab_timestamp (UcaPhantomCommunicate* self, gu
     if (prev_cine != tmp.cine) {
         prev_cine = tmp.cine;
         GValue value = G_VALUE_INIT;
+        // g_print ("Getting trigger time in cine%d\n", tmp.cine);
         uca_phantom_communicate_get_variable (self, UNIT_CT_TRIGTIME_SECS, tmp.cine, &value, error_loc);
-        prec_trigger_time = g_value_get_uint (&value);
+        prev_trigger_time = g_value_get_uint (&value);
+
+
+        uca_phantom_communicate_get_variable (self, UNIT_CT_TRIGTIME_FRAC, tmp.cine, &value, error_loc);
+        prev_trigger_time_frac = g_value_get_uint (&value);
+
+        prev_trigger_time = prev_trigger_time * 1e6 + prev_trigger_time_frac;
     }
     
 
@@ -3148,7 +3156,7 @@ gboolean uca_phantom_communicate_grab_timestamp (UcaPhantomCommunicate* self, gu
     // t.shutter_close_time = *time;
     
     // Print; time on trigger, exposure time, time on close shutter
-    g_print ("Timestamp: %d, %d, %ld\n", prec_trigger_time, tmp.exptime, *time);
+    g_print ("%ld,%d,%ld\n", prev_trigger_time, tmp.exptime, *time);
 
     return TRUE;
 }
