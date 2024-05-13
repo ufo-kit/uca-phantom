@@ -39,7 +39,7 @@ void print_gvalue(guint i, const GValue *value) {
         g_print ("Property %d: %f\n", i, g_value_get_float(value));
     }
     else if (type == G_TYPE_STRING) {
-        g_print ("Property %d: %s\n", i, g_value_get_string(value));
+        g_print ("string Property %d: %s\n", i, g_value_get_string(value));
     }
     else if (type == G_TYPE_UINT) {
         g_print ("Property %d: %u\n", i, g_value_get_uint(value));
@@ -54,13 +54,13 @@ void attempt_get_variable(UcaPhantomCommunicate *communicator, guint variable_fl
     GValue val = G_VALUE_INIT;
     gboolean result = FALSE;
 
-    result = uca_phantom_communicate_get_variable (communicator, variable_flag, &val, &error);
+    result = uca_phantom_communicate_get_variable (communicator, variable_flag, 1, &val, &error);
 
     if (!result && error != NULL) {
         g_print ("Houston theres a problem: %s", error->message);
     }
     else {
-        // print_gvalue (variable_flag, &val);
+        print_gvalue (variable_flag, &val);
     }
 
     g_value_unset (&val);
@@ -103,10 +103,7 @@ gboolean main() {
     gboolean result;
 
     UcaPhantomCommunicate *communicator = g_object_new (UCA_TYPE_PHANTOM_COMMUNICATE, 
-        "phantom_ipsource", USE_CLASS,
-        "xenabled", TRUE,
-        "xnetcard", "enp5s0f1",
-        "timestamping", FALSE,
+        "xenabled", FALSE,
         NULL);
    
     gboolean connected = uca_phantom_communicate_connect_controlstream(communicator, &error);
@@ -140,7 +137,11 @@ gboolean main() {
     // attempt_get_variable (communicator, UNIT_INFO_FEATURES);
 
     // attempt_get_variable (communicator, UNIT_DEFC_RATE);
-    // attempt_get_variable (communicator, UNIT_DEFC_RES);
+    attempt_get_variable (communicator, UNIT_CAM_SYNCIMG);
+    attempt_get_variable (communicator, UNIT_INFO_MODES);
+    attempt_get_variable (communicator, UNIT_INFO_FEATURES);
+    attempt_get_variable (communicator, UNIT_CAM_FRDELAY);
+    attempt_get_variable (communicator, UNIT_VIDEO_SYSTEM);
 
 
     g_object_unref (communicator);

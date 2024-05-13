@@ -103,6 +103,7 @@ struct _UcaPhantomCameraPrivate {
     guint numbuffers; // nb cines
     gboolean has_streaming, has_camram_recording;
     gboolean buffered;
+    guint imgsync_mode;
     CaptureSettings settings; // Groups all the main writeable properties
     
 
@@ -226,7 +227,7 @@ uca_phantom_camera_stop_recording (UcaCamera *camera,
     GError *internal_error = NULL;
 
     // Temp read timestamps
-    for (int i = 0; i < 2000; i++) {
+    for (int i = 0; i < 200; i++) {
         guint64 time;
         gboolean res = uca_phantom_communicate_grab_timestamp(priv->communicator, &time, 0, error);
         if (!res) {
@@ -522,10 +523,9 @@ uca_phantom_camera_set_property (GObject *object,
             break;
         case PROP_TRIGGER_SOURCE:
             priv->settings.trigger_source = g_value_get_enum (value);
-            // TODO
             break;
         case PROP_TRIGGER_TYPE:
-            priv->settings.trigger_type = g_value_get_uint (value);
+            priv->settings.trigger_type = g_value_get_enum (value);
             gchar* trigger_type = g_strdup_printf("%u", priv->settings.trigger_type);
             if (priv->control_connected)
                 res = uca_phantom_communicate_set_variable(communicator, UNIT_CAM_TRIGPOL, trigger_type, &internal_error);
@@ -589,7 +589,7 @@ uca_phantom_camera_set_property (GObject *object,
             g_free(shutter_off);
             break;
         case PROP_AEXPMODE:
-            priv->settings.aexpmode = g_value_get_uint (value);
+            priv->settings.aexpmode = g_value_get_enum (value);
             gchar* aexpmode = g_strdup_printf("%d", priv->settings.aexpmode);
             if (priv->control_connected)
                 res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_AEXPMODE, aexpmode, &internal_error);
@@ -614,25 +614,25 @@ uca_phantom_camera_set_property (GObject *object,
             // Requested when triggered
             break;
         case PROP_SYNC_MODE:
-            priv->settings.sync_mode = g_value_get_uint (value);
+            priv->settings.sync_mode = g_value_get_enum (value);
             gchar* sync_mode = g_strdup_printf("%d", priv->settings.sync_mode);
             if (priv->control_connected)
                 res = uca_phantom_communicate_set_variable(communicator, UNIT_CAM_SYNCIMG, sync_mode, &internal_error);
             g_free(sync_mode);
             break;
         case PROP_ACQUISITION_MODE:
-            priv->settings.acquisition_mode = g_value_get_uint (value);
+            priv->settings.acquisition_mode = g_value_get_enum (value);
             gchar* acquisition_mode = g_strdup_printf("%d", priv->settings.acquisition_mode);
             if (priv->control_connected)
                 res = uca_phantom_communicate_set_variable(communicator, UNIT_CAM_MODE, acquisition_mode, &internal_error);
             g_free(acquisition_mode);
             break;
         case PROP_IMAGE_FORMAT:
-            priv->settings.image_format = g_value_get_uint (value);
+            priv->settings.image_format = g_value_get_enum (value);
             // Requested when triggered
             break;
         case PROP_TIMESTAMP_FORMAT:
-            priv->settings.timestamp_format = g_value_get_uint (value);
+            priv->settings.timestamp_format = g_value_get_enum (value);
             if (priv->settings.timestamp_format != TS_NONE && priv->control_connected){
                 gchar* timestamp_format = g_strdup_printf ("%u", priv->settings.timestamp_format);
                 res = uca_phantom_communicate_set_variable (communicator, UNIT_CAM_TSFORMAT, timestamp_format, &internal_error);
@@ -790,7 +790,7 @@ uca_phantom_camera_get_property (GObject *object,
             g_value_set_boolean (value, priv->settings.shutter_off);
             break;
         case PROP_AEXPMODE:
-            g_value_set_uint (value, priv->settings.aexpmode);
+            g_value_set_enum (value, priv->settings.aexpmode);
             break;
         case PROP_AEXPCOMP:
             g_value_set_float (value, priv->settings.aexpcomp);
@@ -802,16 +802,16 @@ uca_phantom_camera_get_property (GObject *object,
             g_value_set_uint (value, priv->settings.nb_pre_trigger_frames);
             break;
         case PROP_SYNC_MODE:
-            g_value_set_uint (value, priv->settings.sync_mode);
+            g_value_set_enum (value, priv->settings.sync_mode);
             break;
         case PROP_ACQUISITION_MODE:
-            g_value_set_uint (value, priv->settings.acquisition_mode);
+            g_value_set_enum (value, priv->settings.acquisition_mode);
             break;
         case PROP_IMAGE_FORMAT:
-            g_value_set_uint (value, priv->settings.image_format);
+            g_value_set_enum (value, priv->settings.image_format);
             break;
         case PROP_TIMESTAMP_FORMAT:
-            g_value_set_uint (value, priv->settings.timestamp_format);
+            g_value_set_enum (value, priv->settings.timestamp_format);
             break;
         case PROP_XNETCARD:
             g_value_set_string (value, priv->xnetcard);
@@ -1055,6 +1055,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
     camera_class->trigger = uca_phantom_camera_trigger;
 
 
+
     // Implement the base class properties
     for (guint i = 0; base_overrideables[i] != 0; i++) {
         g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
@@ -1068,6 +1069,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
                              "Focal length",
                              0, G_MAXFLOAT, 0,
                              G_PARAM_READWRITE);
+    
     uca_phantom_camera_properties[PROP_APERTURE] =
         g_param_spec_float ("aperture",
                              "Aperture",
@@ -1075,71 +1077,82 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
                              0, G_MAXFLOAT, 0,
                              G_PARAM_READWRITE);
                              
+    
     uca_phantom_camera_properties[PROP_EDR_EXP] =
         g_param_spec_uint ("edrexp",
                              "EDR exposure time",
                              "EDR exposure time",
                              0, G_MAXUINT, 0,
                              G_PARAM_READWRITE);
+    
     uca_phantom_camera_properties[PROP_SHUTTER_OFF] =
         g_param_spec_boolean ("shutteroff",
                               "Shutter off",
                               "Shutter off",
                               FALSE,
                               G_PARAM_READWRITE);
+    
     uca_phantom_camera_properties[PROP_AEXPMODE] =
-        g_param_spec_uint ("aexpmode",
-                            "Auto exposure mode",
-                            "Auto exposure mode",
-                            AUTO_EXP_MODE_OFF, AUTO_EXP_MODE_CENTER, AUTO_EXP_MODE_CENTER,
-                            G_PARAM_READWRITE);
-
+        g_param_spec_enum ("aexpmode",
+                           "Auto exposure mode",
+                           "Auto exposure mode",
+                           AUTO_TYPE_EXP_MODE,
+                           AUTO_EXP_MODE_OFF,
+                           G_PARAM_READWRITE);
+    
     uca_phantom_camera_properties[PROP_AEXPCOMP] =
         g_param_spec_float ("aexpcomp",
                             "Auto exposure compensation",
                             "Auto exposure compensation",
                             0, G_MAXFLOAT, 0,
                             G_PARAM_READWRITE);
+    
     uca_phantom_camera_properties[PROP_NB_POST_TRIGGER_FRAMES] =
         g_param_spec_uint ("postframes",
                            "Number of post trigger frames",
                            "Number of post trigger frames",
                            0, G_MAXUINT, 0,
                            G_PARAM_READWRITE);
+    
     uca_phantom_camera_properties[PROP_NB_PRE_TRIGGER_FRAMES] =
         g_param_spec_uint ("preframes",
                            "Number of pre trigger frames",
                            "Number of pre trigger frames",
                            0, G_MAXUINT, 1,
                            G_PARAM_READWRITE);
+    
     uca_phantom_camera_properties[PROP_SYNC_MODE] =
-        g_param_spec_uint ("syncmode",
-                           "Sync mode",
-                           "Sync mode",
+        g_param_spec_enum ("syncmode",
+                           "Image sync mode",
+                           "Image sync mode",
+                           SYNC_TYPE_MODE,
                            SYNC_MODE_FREE_RUN,
-                           SYNC_MODE_VIDEO_FRAME_RATE,
-                           SYNC_MODE_VIDEO_FRAME_RATE,
                            G_PARAM_READWRITE);
+    
     uca_phantom_camera_properties[PROP_ACQUISITION_MODE] =
-        g_param_spec_uint ("acqmode",
+        g_param_spec_enum ("acqmode",
                            "Acquisition mode",
                            "Acquisition mode",
-                           ACQUISITION_MODE_STANDARD,
-                           ACQUISITION_MODE_BRIGHT_FIELD,
+                           ACQUISITION_TYPE_MODE,
                            ACQUISITION_MODE_STANDARD,
                            G_PARAM_READWRITE);
+    
     uca_phantom_camera_properties[PROP_IMAGE_FORMAT] =
-        g_param_spec_uint ("imgformat",
+        g_param_spec_enum ("imgformat",
                            "Image format",
                            "Image format",
-                            IMG_8, IMG_P12L, IMG_P12L,
+                           IMAGE_TYPE_FORMAT,
+                           IMG_P12L,
                            G_PARAM_READWRITE);
+    
     uca_phantom_camera_properties[PROP_TIMESTAMP_FORMAT] =
-        g_param_spec_uint ("tsformat",
-                             "Timestamp",
-                             "Timestamp",
-                             TS_SHORT, TS_NONE, TS_NONE,
-                             G_PARAM_READWRITE);
+        g_param_spec_enum ("tsformat",
+                           "Timestamp format",
+                           "Timestamp format",
+                           TIMESTAMP_TYPE_FORMAT,
+                           TS_NONE,
+                           G_PARAM_READWRITE);
+    
     uca_phantom_camera_properties[PROP_XNETCARD] =
         g_param_spec_string ("xnetcard",
                              "10 Gb NIC",
@@ -1147,6 +1160,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
                              "ens21f0",
                              G_PARAM_READWRITE);
                              
+    
     uca_phantom_camera_properties[PROP_XENABLED] =
         g_param_spec_boolean ("xenabled",
                               "X enabled",
@@ -1154,60 +1168,70 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
                               TRUE,
                               G_PARAM_READWRITE);
                             
+    
     uca_phantom_camera_properties[PROP_BUFFERED] =
         g_param_spec_boolean ("buffered",
                            "Save images to cine first",
                            "Save images to cine first",
                            TRUE,
                            G_PARAM_READWRITE);
+    
     uca_phantom_camera_properties[PROP_NAME] =
         g_param_spec_string ("name",
                              "Name",
                              "Name",
                              "Phantom",
                              G_PARAM_READWRITE);
+    
     uca_phantom_camera_properties[PROP_SENSOR_PHYSICAL_HEIGHT] =
         g_param_spec_double ("sensor-physical-height",
                             "Sensor physical height",
                             "Sensor physical height",
                             0, G_MAXDOUBLE, 0,
                             G_PARAM_READABLE);
+    
     uca_phantom_camera_properties[PROP_SENSOR_PHYSICAL_WIDTH] =
         g_param_spec_double ("sensor-physical-width",
                             "Sensor physical width",
                             "Sensor physical width",
                             0, G_MAXDOUBLE, 0,
                             G_PARAM_READABLE);
+    
     uca_phantom_camera_properties[PROP_MAX_SENSOR_RESOLUTION_WIDTH] =
         g_param_spec_uint ("max-sensor-resolution-width",
                             "Max sensor resolution width",
                             "Max sensor resolution width",
                             0, G_MAXUINT, 0,
                             G_PARAM_READABLE);
+    
     uca_phantom_camera_properties[PROP_MAX_SENSOR_RESOLUTION_HEIGHT] =
         g_param_spec_uint ("max-sensor-resolution-height",
                             "Max sensor resolution height",
                             "Max sensor resolution height",
                             0, G_MAXUINT, 0,
                             G_PARAM_READABLE);
+    
     uca_phantom_camera_properties[PROP_XINC] =
         g_param_spec_uint ("xinc",
                             "X increment",
                             "X increment",
                             0, G_MAXUINT, 0,
                             G_PARAM_READABLE);
+    
     uca_phantom_camera_properties[PROP_YINC] =
         g_param_spec_uint ("yinc",
                             "Y increment",
                             "Y increment",
                             0, G_MAXUINT, 0,
                             G_PARAM_READABLE);
+    
     uca_phantom_camera_properties[PROP_INTERNAL_MEMORY_SIZE] =
         g_param_spec_uint ("internal-memory",
                             "Internal memory size",
                             "Internal memory size",
                             0, G_MAXUINT, 0,
                             G_PARAM_READABLE);
+
     
     for (guint id = N_BASE_PROPERTIES; id < N_PHANTOM_PROPERTIES; id++) {
         g_object_class_install_property (oclass, id, uca_phantom_camera_properties[id]);

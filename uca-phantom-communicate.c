@@ -3086,14 +3086,19 @@ gboolean uca_phantom_communicate_grab_live_image (UcaPhantomCommunicate* self, g
 
 guint64 decode_timestamp (PhantomTimestamp tmp, TimestampFormat ts_format, guint32 yearbegin) {
     guint32 csecs = 0, frac = 0, exptime = 0;
+    guint16 exptime32 = 0, frac32 = 0;
     
     switch (ts_format) {
-        case TS_SHORT32:
         case TS_LONG32:
             // fall through
-        case TS_SHORT:
-            // fall through
         case TS_LONG:
+            // fall through
+        case TS_SHORT32:
+            tmp.exptime32 = ntohs(tmp.exptime32);
+            exptime32 = tmp.exptime32;
+            tmp.frac32 = ntohs(tmp.frac32); // in 1/65536 of a microsecond
+            frac32 = tmp.frac32;
+        case TS_SHORT:
             tmp.csecs = ntohl(tmp.csecs);
             tmp.exptime = ntohs(tmp.exptime);
             tmp.frac = ntohs(tmp.frac) >> 2;
@@ -3108,7 +3113,7 @@ guint64 decode_timestamp (PhantomTimestamp tmp, TimestampFormat ts_format, guint
     }
 
     guint64 tv_sec = csecs / 100 + yearbegin; // seconds since epoch
-    guint64 tv_usec = (csecs % 100) * 10000 + frac; // microseconds
+    guint64 tv_usec = (csecs % 100) * 10000 + frac + frac32 / 65536;
 
     return tv_sec * 1000000 + tv_usec;
 }
