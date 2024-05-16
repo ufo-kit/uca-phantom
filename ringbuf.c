@@ -247,7 +247,6 @@ gpointer ringbuf_push(ringbuf_t *dst, gconstpointer src, gsize size) {
     g_cond_signal(&dst->readable);
     g_mutex_unlock(&dst->mutex);
 
-
     return head;
 }
 
@@ -302,7 +301,6 @@ gpointer ringbuf_timed_pop (gpointer dst, ringbuf_t *src, gsize size, guint64 ti
     g_cond_signal (&src->writeable);
     g_mutex_unlock (&src->mutex);
     
-
     return tail;
 }
 

@@ -33,6 +33,7 @@ typedef enum {
     UCA_PHANTOM_COMMUNICATE_ERROR_RUN_COMMAND,
     UCA_PHANTOM_COMMUNICATE_ERROR_NOTIFY,
     UCA_PHANTOM_COMMUNICATE_ERROR_SET_NB_CINES,
+    UCA_PHANTOM_COMMUNICATE_ERROR_GET_CINE_INDEX,
     UCA_PHANTOM_COMMUNICATE_ERROR_GET_SETTINGS,
     UCA_PHANTOM_COMMUNICATE_ERROR_SET_SETTINGS,
     UCA_PHANTOM_COMMUNICATE_ERROR_GET_RESOLUTION,
@@ -43,6 +44,8 @@ typedef enum {
     UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES,
     UCA_PHANTOM_COMMUNICATE_ERROR_UNPACK_IMAGE,
     UCA_PHANTOM_COMMUNICATE_ERROR_GRAB_IMAGE,
+    UCA_PHANTOM_COMMUNICATE_ERROR_GRAB_LIVE_IMAGE,
+    UCA_PHANTOM_COMMUNICATE_ERROR_GRAB_TIMESTAMP,
     UCA_PHANTOM_COMMUNICATE_ERROR_ACCEPT_XIMG,
     UCA_PHANTOM_COMMUNICATE_ERROR_ACCEPT_IMG,
     UCA_PHANTOM_COMMUNICATE_ERROR_ACCEPT_TIMESTAMPS,
@@ -365,6 +368,9 @@ gboolean uca_phantom_communicate_start_readout (UcaPhantomCommunicate* self, gbo
  */
 gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate *self, GError **error_loc);
 
+gboolean uca_phantom_communicate_release_cine(UcaPhantomCommunicate* self, gint cine, GError** error_loc);
+gboolean uca_phantom_communicate_delete_cine(UcaPhantomCommunicate* self, gint cine, GError** error_loc);
+
 /**
  * @brief Arms the phantom for acquisition in a cine partition.
  *
@@ -391,6 +397,8 @@ gboolean uca_phantom_communicate_disarm (UcaPhantomCommunicate* self, GError** e
  */
 gboolean uca_phantom_communicate_trigger (UcaPhantomCommunicate *self, GError **error_loc);
 
+gboolean uca_phantom_communicate_get_cine_state (UcaPhantomCommunicate* self, gint cine, gchar *flag, GError** error_loc);
+gboolean uca_phantom_communicate_get_cine_index (UcaPhantomCommunicate* self, gint cine, guint prop, gint* res, GError** error_loc);
 /**
  * @brief Send a request for images to the Phantom camera and push an internal request to receive images in the program.
  *
@@ -402,7 +410,7 @@ gboolean uca_phantom_communicate_trigger (UcaPhantomCommunicate *self, GError **
  * @param error_loc A pointer to a GError object to store any errors that occur.
  * @return TRUE if the request was successful, FALSE otherwise.
  */
-gboolean uca_phantom_communicate_request_images (UcaPhantomCommunicate *self, CaptureSettings settings, GError **error_loc);
+gboolean uca_phantom_communicate_request_images (UcaPhantomCommunicate *self, CaptureSettings settings, gboolean earlyimg, GError **error_loc);
 
 /**
  * @brief Grab an image from the program's image queue
