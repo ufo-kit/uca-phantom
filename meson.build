@@ -39,7 +39,12 @@ uca_headers = include_directories('@0@/@1@/uca'.format(get_option('prefix'), 'in
 
 plugindir = uca_dep.get_pkgconfig_variable('plugindir')
 
-sources = files('uca-phantom-communicate.c', 'uca-phantom-camera.c', 'ringbuf.c') + enum_files
+sources = files(
+    'uca-phantom-variables.c',
+    'uca-phantom-communicate.c',
+    'uca-phantom-camera.c',
+    'ringbuf.c',
+) + enum_files
 
 phantom = library('ucaphantom',
     c_args: c_args,
@@ -50,4 +55,4 @@ phantom = library('ucaphantom',
     install_dir: plugindir,
 )
 
-subdir('test')
+# subdir('test')

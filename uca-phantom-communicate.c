@@ -27,14 +27,15 @@
 #include <arpa/inet.h>
 #include <netinet/in.h> 
 
-#include "uca-phantom-communicate.h"
 #include "uca-phantom-variables.h"
 #include "uca-phantom-commands.h"
+#include "uca-phantom-communicate.h"
 #include "ringbuf.h"
 
 // Note: if you wish to screw everything up, please tweak the following macros
 #define ETHERNET_HEADER_SIZE 32 // 16 bytes for L1 ethernet header, 16 bytes for custom header
-#define MAX_KERNEL_BUF_SIZE 1000000000 // 1Gbyte
+#define MAX_BUNDLE_SIZE 1e+9 // Maximum size of request bundle
+#define MAX_KERNEL_BUF_SIZE 1000000000 // 1 Gbyte
 #define MAX_HEAP_BUF_SIZE MAX_KERNEL_BUF_SIZE
 
 #define MAX_SENSOR_WIDTH 2048 // Maximum sensor pixel width
@@ -1190,7 +1191,7 @@ gboolean uca_phantom_communicate_get_variable(UcaPhantomCommunicate* self, guint
     gboolean res = FALSE;
 
     // Check if the command is between CT_STATE and CT_META_GPS
-    if (variable_flag >= UNIT_CT_STATE && variable_flag <= UNIT_CT_META_GPS) {
+    if (variable_flag >= UNIT_C_STATE && variable_flag <= UNIT_C_META_GPS) {
         name = g_strdup_printf(variables[variable_flag].name, cine);
         res = uca_phantom_communicate_run_command(self, CMD_GET, name, &reply, &sub_error);
         g_free(name);
@@ -1254,7 +1255,7 @@ gboolean uca_phantom_communicate_get_variable(UcaPhantomCommunicate* self, guint
 
     // Use Gvalue container to store it
     switch (variables[variable_flag].type) {
-    case G_TYPE_STRING | PHANTOM_TYPE_FLAGS:
+    case G_TYPE_STRING:
         g_value_set_string(return_value, suffix);
         break;
     case G_TYPE_UINT:
@@ -1509,7 +1510,7 @@ gboolean uca_phantom_communicate_connect_xdatastream(UcaPhantomCommunicate* self
     g_debug("Opening device %s for packet capture\n", self->xnetcard);
 
     // Set the capture options
-    pcap_set_snaplen(self->handle, 65535);
+    pcap_set_snaplen(self->handle, 2048); // packets seem to be of size 1504
     pcap_set_promisc(self->handle, FALSE);
     pcap_set_timeout(self->handle, 5000);
     pcap_set_rfmon(self->handle, FALSE);
@@ -1597,7 +1598,6 @@ gboolean uca_phantom_communicate_disconnect_xdatastream(UcaPhantomCommunicate* s
 static gboolean uca_phantom_communicate_get_mac_address(UcaPhantomCommunicate* self, GError** error_loc)
 {
     g_return_val_if_fail(UCA_IS_PHANTOM_COMMUNICATE(self), FALSE);
-    g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
 
     GError* phantom_error = NULL;
 
@@ -1851,7 +1851,7 @@ gboolean uca_phantom_communicate_trigger(UcaPhantomCommunicate* self, GError** e
 
 gboolean uca_phantom_communicate_get_cine_state (UcaPhantomCommunicate* self, gint cine, gchar *flag, GError** error_loc) {
     GValue flags = G_VALUE_INIT;
-    gboolean res = uca_phantom_communicate_get_variable (self, UNIT_CT_STATE, cine, &flags, error_loc);
+    gboolean res = uca_phantom_communicate_get_variable (self, UNIT_C_STATE, cine, &flags, error_loc);
     if (!res)
         return FALSE;
 
@@ -1869,7 +1869,7 @@ gboolean uca_phantom_communicate_get_cine_state (UcaPhantomCommunicate* self, gi
 }
 
 gboolean uca_phantom_communicate_get_cine_index (UcaPhantomCommunicate* self, gint cine, guint prop, gint* res, GError** error_loc) {
-    if (prop != UNIT_CT_FRCOUNT && prop != UNIT_CT_FIRSTFR && prop != UNIT_CT_LASTFR) {
+    if (prop != UNIT_C_FRCOUNT && prop != UNIT_C_FIRSTFR && prop != UNIT_C_LASTFR) {
         g_set_error(error_loc, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GET_CINE_INDEX,
             "Only frcount, firstfr and lastfr are allowed.\n");
         return FALSE;
@@ -1884,7 +1884,7 @@ gboolean uca_phantom_communicate_get_cine_index (UcaPhantomCommunicate* self, gi
         return FALSE;
     }
 
-    if (prop == UNIT_CT_FRCOUNT) {
+    if (prop == UNIT_C_FRCOUNT) {
         *res = g_value_get_uint (&index);
         return TRUE;
     }
@@ -1902,7 +1902,7 @@ gboolean throttled_requester (UcaPhantomCommunicate *self, CineInfo *info, GErro
     // The maximum number of images that can be requested in a single request
     gsize ImageSize = settings.sensor_width * settings.sensor_height * ImageFormatSpecs[settings.image_format].byte_depth;
     gsize frame_size = ImageSize + ETHERNET_HEADER_SIZE;
-    guint MaxNumberImagesPerRequest = MAX_KERNEL_BUF_SIZE / frame_size;
+    guint MaxNumberImagesPerRequest = MAX_BUNDLE_SIZE / frame_size;
 
     guint count = 0;
 
@@ -1929,7 +1929,7 @@ gboolean throttled_requester (UcaPhantomCommunicate *self, CineInfo *info, GErro
     gint first_frame = 0;
     if (info->earlyimg) {
         do {
-            gboolean res = uca_phantom_communicate_get_cine_index (self, info->cine, UNIT_CT_FIRSTFR, &first_frame, error_loc);
+            gboolean res = uca_phantom_communicate_get_cine_index (self, info->cine, UNIT_C_FIRSTFR, &first_frame, error_loc);
             if (!res) {
                 // TODO:
                 // Set error
@@ -1958,7 +1958,7 @@ gboolean throttled_requester (UcaPhantomCommunicate *self, CineInfo *info, GErro
     while (start < info->nb_images){
         // Ask camera for how many post frames are available
         gint last_frame = 0;
-        gboolean res = uca_phantom_communicate_get_cine_index (self, info->cine, UNIT_CT_LASTFR, &last_frame, error_loc);
+        gboolean res = uca_phantom_communicate_get_cine_index (self, info->cine, UNIT_C_LASTFR, &last_frame, error_loc);
         if (!res) {
             // TODO:
             // Set error
@@ -2129,6 +2129,7 @@ gboolean uca_phantom_communicate_request_images(UcaPhantomCommunicate* self, Cap
 
         self->mac_address_str = g_strdup_printf("%02x%02x%02x%02x%02x%02x", self->mac_address[0], self->mac_address[1],
             self->mac_address[2], self->mac_address[3], self->mac_address[4], self->mac_address[5]);
+
 
         if (self->mac_address_str == NULL) {
             g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES,
@@ -2499,6 +2500,8 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
             } else if (read_all == -2) {
                 g_debug("Being read from savefile\n");
             }
+
+            // g_print ("Packet size: %d\n", pkt_header->len);
 
             // Check if the packet size exceeds the remaining space in the buffer
             to_read = pkt_header->len - ETHERNET_HEADER_SIZE;
@@ -3027,7 +3030,7 @@ gboolean uca_phantom_communicate_start_readout (
     gsize nb_pixels = settings->sensor_width * settings->sensor_height;
     gsize image_size = nb_pixels * ImageFormatSpecs[settings->image_format].byte_depth;
     gsize frame_size = image_size + ETHERNET_HEADER_SIZE;
-    guint MaxNumberImagesPerRequest = MAX_KERNEL_BUF_SIZE / frame_size;
+    guint MaxNumberImagesPerRequest = MAX_BUNDLE_SIZE / frame_size;
 
     g_debug ("Starting readout\n");
 
@@ -3230,11 +3233,11 @@ gboolean uca_phantom_communicate_grab_timestamp (UcaPhantomCommunicate* self, gu
         prev_cine = tmp.cine;
         GValue value = G_VALUE_INIT;
         // g_print ("Getting trigger time in cine%d\n", tmp.cine);
-        uca_phantom_communicate_get_variable (self, UNIT_CT_TRIGTIME_SECS, tmp.cine, &value, error_loc);
+        uca_phantom_communicate_get_variable (self, UNIT_C_TRIGTIME_SECS, tmp.cine, &value, error_loc);
         prev_trigger_time = g_value_get_uint (&value);
 
 
-        uca_phantom_communicate_get_variable (self, UNIT_CT_TRIGTIME_FRAC, tmp.cine, &value, error_loc);
+        uca_phantom_communicate_get_variable (self, UNIT_C_TRIGTIME_FRAC, tmp.cine, &value, error_loc);
         prev_trigger_time_frac = g_value_get_uint (&value);
 
         prev_trigger_time = prev_trigger_time * 1e6 + prev_trigger_time_frac;
