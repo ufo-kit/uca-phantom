@@ -79,6 +79,7 @@ enum {
     PROP_MAX_SENSOR_RESOLUTION_WIDTH,
     PROP_MAX_SENSOR_RESOLUTION_HEIGHT,
     PROP_NUM_CINES,
+    PROP_LIVEIMAGES,
     // PROP_XINC,
     // PROP_YINC,
     // PROP_INTERNAL_MEMORY_SIZE,
@@ -119,6 +120,7 @@ struct _UcaPhantomCameraPrivate {
     guint numcines; // nb cines
     gboolean has_streaming, has_camram_recording;
     gboolean buffered;
+    gboolean liveimages;
     guint imgsync_mode;
     CaptureSettings settings; // Groups all the main writeable properties
     
@@ -155,7 +157,7 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
 
     gboolean result = FALSE;
 
-    if ((priv->settings.timestamp_format != TS_NONE || !priv->buffered) && !priv->data_connected) {
+    if ((priv->settings.timestamp_format != TS_NONE || !priv->liveimages) && !priv->data_connected) {
         g_debug ("Connecting to the datastream\n");
         result = uca_phantom_communicate_connect_datastream (priv->communicator, &internal_error);
         g_debug ("Connected to the datastream\n");
@@ -182,7 +184,7 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
 
     // Launch the readout using the communicator
     g_debug ("Starting readout function\n");
-    result = uca_phantom_communicate_start_readout (priv->communicator, !priv->buffered, &(priv->settings), &internal_error);
+    result = uca_phantom_communicate_start_readout (priv->communicator, !priv->liveimages, &(priv->settings), &internal_error);
     if (result != TRUE && internal_error != NULL) {
         g_propagate_error (error, internal_error);
         return;
@@ -281,14 +283,16 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     gboolean res = FALSE;
 
     CaptureSettings settings = priv->settings;
-    gboolean buffered;
-    g_object_get(camera, "buffered", &buffered, NULL);
 
     if (settings.trigger_source == UCA_CAMERA_TRIGGER_SOURCE_AUTO){
         g_print ("AUto Trigger\n");
     }
 
-    if (buffered) {
+    if (priv->liveimages) {
+        g_print ("Live images\n");
+        settings.current_cine = -1;
+    }
+    else {
         settings.current_cine = priv->settings.current_cine;
 
         // // Make sure the previous cine complete
@@ -300,9 +304,6 @@ uca_phantom_camera_trigger (UcaCamera *camera,
         //     // If not, wait for the cine to be ready
         //     g_usleep (1000);
         // }
-    }
-    else {
-        settings.current_cine = -1;
     }
 
     // print the current cine
@@ -460,7 +461,7 @@ uca_phantom_camera_grab (UcaCamera *camera,
     UcaCameraTriggerSource trigger_source;
     g_object_get(camera, "trigger-source", &(priv->settings.trigger_source), NULL);
 
-    if (!priv->buffered) {
+    if (priv->liveimages) {
         // grab a live image without saving in a cine
         g_print ("Grabbing a live image\n");
         return uca_phantom_camera_grab_live (camera, data, error);
@@ -630,6 +631,9 @@ uca_phantom_camera_set_property (GObject *object,
                 g_free (priv->cine_tracker);
             priv->cine_tracker = g_new0 (guint, priv->numcines);
             break;
+        case PROP_LIVEIMAGES:
+            priv->liveimages = g_value_get_boolean (value);
+            break;
         /* End of uca phantom specific */
         /* Start phantom variables specific */
         
@@ -775,8 +779,8 @@ uca_phantom_camera_get_property (GObject *object,
         case PROP_XENABLED:
             g_value_set_boolean (value, priv->xenabled);
             break;
-        case PROP_BUFFERED:
-            g_value_set_boolean (value, priv->buffered);
+        case PROP_LIVEIMAGES:
+            g_value_set_boolean (value, priv->liveimages);
             break;
         case PROP_NUM_CINES:
             g_value_set_uint (value, priv->numcines);
@@ -888,7 +892,7 @@ uca_phantom_camera_initable_init (GInitable *initable,
     priv->name = g_strdup ("Phantom Camera");
     priv->has_streaming = FALSE;
     priv->has_camram_recording = TRUE;
-    priv->buffered = FALSE;
+    priv->liveimages = FALSE;
     priv->xenabled = FALSE;
     priv->numcines = 16;
     priv->cine_tracker = g_new0 (guint, priv->numcines);
@@ -904,6 +908,7 @@ uca_phantom_camera_initable_init (GInitable *initable,
     g_object_set (priv->communicator,
                     "xnetcard", priv->xnetcard,
                     "xenabled", priv->xenabled,
+                    "phantom_ipsource", 0,
                     NULL);    
 
     // g_print ("Connecting to the camera\n");
@@ -919,7 +924,7 @@ uca_phantom_camera_initable_init (GInitable *initable,
 
     g_object_set (camera, "xnetcard", priv->xnetcard,
                         "xenabled", priv->xenabled,
-                        "buffered", priv->buffered,
+                        "liveimages", priv->liveimages,
                         "num-cines", priv->numcines, // Number of cines. 16 cines ~ 3000 full resolution images per cine
                         NULL);
 
@@ -1018,6 +1023,8 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
     camera_class->grab = uca_phantom_camera_grab;
     // camera_class->grab_live = uca_phantom_camera_grab_live;
     camera_class->trigger = uca_phantom_camera_trigger;
+
+    g_print ("Registering phantom camera properties\n");
 
 
 
@@ -1120,40 +1127,55 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
                             "Number of cines",
                             0, G_MAXUINT, 16,
                             G_PARAM_READWRITE);
+    uca_phantom_camera_properties[PROP_LIVEIMAGES] =
+        g_param_spec_boolean ("liveimages",
+                            "Live images",
+                            "Live images",
+                            FALSE,
+                            G_PARAM_READWRITE);
+
+    g_print ("Registering thw special phantom camera properties\n");
 
     // Finally install all the phantom specific properties
     for (int i = UNIT_INFO_SENSOR + N_PHANTOM_PROPERTIES; i < N_UNIT_PROPERTIES; i++) {
         PhantomUnit unit = variables[i];
+        // replace . in the name by -
+        GString *name = g_string_new (unit.name);
+        g_string_replace (name, ".", "-", 50);
+        gchar *pname = g_string_free_and_steal (name);
+
+        g_print ("Registering property %s\n", pname);
+
         if (unit.type == G_TYPE_STRING) {
-            uca_phantom_camera_properties[i] = g_param_spec_string (unit.name,
+            uca_phantom_camera_properties[i] = g_param_spec_string (pname,
                                                                     unit.description,
                                                                     unit.description,
                                                                     "",
                                                                     unit.flags);
         }
         else if (unit.type == G_TYPE_UINT) {
-            uca_phantom_camera_properties[i] = g_param_spec_uint (unit.name,
+            uca_phantom_camera_properties[i] = g_param_spec_uint (pname,
                                                                   unit.description,
                                                                   unit.description,
                                                                   0, G_MAXUINT, 0,
                                                                   unit.flags);
         }
         else if (unit.type == G_TYPE_INT) {
-            uca_phantom_camera_properties[i] = g_param_spec_int (unit.name,
+            uca_phantom_camera_properties[i] = g_param_spec_int (pname,
                                                                  unit.description,
                                                                  unit.description,
                                                                  G_MININT, G_MAXINT, 0,
                                                                  unit.flags);
         }
         else if (unit.type == G_TYPE_FLOAT) {
-            uca_phantom_camera_properties[i] = g_param_spec_float (unit.name,
+            uca_phantom_camera_properties[i] = g_param_spec_float (pname,
                                                                    unit.description,
                                                                    unit.description,
                                                                    0, G_MAXFLOAT, 0,
                                                                    unit.flags);
         }
         else if (unit.type == G_TYPE_BOOLEAN) {
-            uca_phantom_camera_properties[i] = g_param_spec_boolean (unit.name,
+            uca_phantom_camera_properties[i] = g_param_spec_boolean (pname,
                                                                      unit.description,
                                                                      unit.description,
                                                                      FALSE,
@@ -1162,6 +1184,8 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
         else {
             g_warning ("Type not supported\n");
         }
+
+        g_free (pname);
     }
 
     

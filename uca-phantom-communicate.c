@@ -966,6 +966,9 @@ gboolean uca_phantom_communicate_connect_controlstream(UcaPhantomCommunicate* se
     gchar* ip_address = NULL;
 
     switch (self->phantom_ipsource) {
+    case USE_ENV:
+        ip_address = g_strdup(getenv("PHANTOM_IP"));
+        break;
     case USE_CLASS:
         ip_address = g_strdup(self->phantom_ip);
         break;
@@ -979,6 +982,14 @@ gboolean uca_phantom_communicate_connect_controlstream(UcaPhantomCommunicate* se
         g_propagate_error(error_loc, phantom_error);
         return FALSE;
         break;
+    }
+
+    if (ip_address == NULL) {
+        g_warning("Could not get the IP address.\n");
+        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT,
+            "Could not get the IP address.\n");
+        g_propagate_error(error_loc, phantom_error);
+        return FALSE;
     }
 
     // /* resolve the server address */
@@ -1180,7 +1191,8 @@ gboolean uca_phantom_communicate_run_command(UcaPhantomCommunicate* self, guint 
 gboolean uca_phantom_communicate_get_variable(UcaPhantomCommunicate* self, guint variable_flag, gint cine, GValue* return_value,
     GError** error_loc)
 {
-    g_return_val_if_fail(variable_flag < N_UNIT_PROPERTIES, FALSE);
+    g_print ("uca_phantom_communicate_get_variable %d\n", variable_flag);
+    g_return_val_if_fail(variable_flag < N_CINE_PROPERTIES, FALSE);
     g_return_val_if_fail(self->control_connection_state == CONNECTED, FALSE);
 
     GError* sub_error = NULL;
@@ -1191,8 +1203,9 @@ gboolean uca_phantom_communicate_get_variable(UcaPhantomCommunicate* self, guint
     gboolean res = FALSE;
 
     // Check if the command is between CT_STATE and CT_META_GPS
-    if (variable_flag >= UNIT_C_STATE && variable_flag <= UNIT_C_META_GPS) {
+    if (variable_flag >= UNIT_USETS_VALID_NUMBER && variable_flag <= UNIT_C_META_GPS) {
         name = g_strdup_printf(variables[variable_flag].name, cine);
+        g_print ("unit name: %s\n", name);
         res = uca_phantom_communicate_run_command(self, CMD_GET, name, &reply, &sub_error);
         g_free(name);
     } else {
@@ -1328,6 +1341,8 @@ static gboolean uca_phantom_communicate_get_resolution(UcaPhantomCommunicate* se
     const gchar* pattern = "([0-9]+)\\sx\\s([0-9]+)";
     GValue resolution = G_VALUE_INIT;
     const gchar* reply = NULL;
+
+    g_print ("uca_phantom_communicate_get_resolution\n");
 
     gboolean res = uca_phantom_communicate_get_variable(self, UNIT_DEFC_RES, 0, &resolution, &sub_error);
 
@@ -1851,7 +1866,11 @@ gboolean uca_phantom_communicate_trigger(UcaPhantomCommunicate* self, GError** e
 
 gboolean uca_phantom_communicate_get_cine_state (UcaPhantomCommunicate* self, gint cine, gchar *flag, GError** error_loc) {
     GValue flags = G_VALUE_INIT;
+    g_print ("Cine state: \n");
+
     gboolean res = uca_phantom_communicate_get_variable (self, UNIT_C_STATE, cine, &flags, error_loc);
+
+
     if (!res)
         return FALSE;
 
@@ -1874,6 +1893,8 @@ gboolean uca_phantom_communicate_get_cine_index (UcaPhantomCommunicate* self, gi
             "Only frcount, firstfr and lastfr are allowed.\n");
         return FALSE;
     }
+
+    g_print ("Getting cine index\n");
 
     // TODO
     // set error
