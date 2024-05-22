@@ -3,11 +3,38 @@
 #include <uca/uca-camera.h>
 #include <stdio.h>
 #include <glib.h>
+#include <glib-object.h>
 
 const gchar *filename = "/dev/null"; // Change this to the path where you want to save the images
 guint expected_images = 0, res_x = 0, res_y = 0;
 
+gpointer image_grabber (gpointer data) {
+    GError *error = NULL;
+    UcaCamera *camera = data;
+    int nb_images = 0;
+    guint16 *buffer = g_malloc0(sizeof(guint16) * res_x * res_y);
+    if (buffer == NULL) {
+        g_print("Error: Could not allocate memory for the buffer\n");
+        return NULL;
+    }
+    while (nb_images < expected_images) {
+        uca_camera_grab(camera, buffer, &error);
+        if (error != NULL) {
+            g_print("Error: %s\n", error->message);
+            return NULL;
+        }
+        save_image_16 (buffer, res_x, res_y, filename);
+        g_print ("Grabbed image %d\n", nb_images);
+        nb_images++;
 
+    }
+
+    g_free(buffer); 
+
+    g_print ("Grabbed %d images\n", nb_images);
+
+    return NULL;
+}
 
 int main (int argc, char *argv[]) {
     // Declaring the variables to be used

@@ -22,6 +22,7 @@
 #include <uca/uca-camera.h>
 #include "uca-phantom-communicate.h"
 #include "phantom-enums.h"
+#include "uca-phantom-properties.h"
 
 G_BEGIN_DECLS
 

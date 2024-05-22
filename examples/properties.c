@@ -30,7 +30,7 @@ int main (int argc, char *argv[]) {
     // Set properties of the camera
     g_object_set(
         G_OBJECT(camera),
-        "defc-rate", 1000,
+        "defc-rate", (float)1000,
         NULL);
 
     // Get the class
@@ -42,21 +42,25 @@ int main (int argc, char *argv[]) {
 
     // Print the properties
     for (int i = 0; i < n_properties; i++) {
-        // Get the type of the property
-        GType type = G_PARAM_SPEC_VALUE_TYPE(properties[i]);
         // Get the value of the property
         GValue value = G_VALUE_INIT;
-        g_value_init(&value, type);
-        g_object_get_property (G_OBJECT(camera), properties[i]->name, &value);
+        const gchar *property_name = g_param_spec_get_name(properties[i]);
+        g_object_get_property (G_OBJECT(camera), property_name, &value);
 
-        if (type == G_TYPE_INT) {
-            g_print("Property: %s, Value: %d\n", properties[i]->name, g_value_get_int(&value));
-        } else if (type == G_TYPE_FLOAT) {
-            g_print("Property: %s, Value: %f\n", properties[i]->name, g_value_get_float(&value));
-        } else if (type == G_TYPE_BOOLEAN) {
-            g_print("Property: %s, Value: %s\n", properties[i]->name, g_value_get_boolean(&value) ? "TRUE" : "FALSE");
-        } else {
-            g_print("Property: %s, Value: %s\n", properties[i]->name, g_value_get_string(&value));
+        if (G_VALUE_HOLDS_INT(&value)) {
+            g_print("Property: %s, Value: %d\n", property_name, g_value_get_int(&value));
+        } else if (G_VALUE_HOLDS_UINT(&value)) {
+            g_print("Property: %s, Value: %u\n", property_name, g_value_get_uint(&value));
+        } else if (G_VALUE_HOLDS_ENUM(&value)) {
+            g_print("Property: %s, Value: %d\n", property_name, g_value_get_enum(&value));
+        } else if (G_VALUE_HOLDS_FLOAT(&value)) {
+            g_print("Property: %s, Value: %f\n", property_name, g_value_get_float(&value));
+        } else if (G_VALUE_HOLDS_DOUBLE(&value)) {
+            g_print("Property: %s, Value: %f\n", property_name, g_value_get_double(&value));
+        } else if (G_VALUE_HOLDS_STRING(&value)) {
+            g_print("Property: %s, Value: %s\n", property_name, g_value_get_string(&value));
+        } else if (G_VALUE_HOLDS_BOOLEAN(&value)) {
+            g_print("Property: %s, Value: %s\n", property_name, g_value_get_boolean(&value) ? "true" : "false");
         }
 
         // Print the description of the property

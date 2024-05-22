@@ -5,7 +5,7 @@
 #include <glib.h>
 
 const gchar *filename = "/dev/null"; // Change this to the path where you want to save the images
-guint expected_images = 0, res_x = 0, res_y = 0;
+guint expected_images = 0, res_x = 2048, res_y = 1952;
 
 gpointer image_grabber (gpointer data) {
     GError *error = NULL;
@@ -46,18 +46,18 @@ int main (int argc, char *argv[]) {
         return 1;
     }
 
-    int preframes = 100;
-    int postframes = 200;
+    int preframes = 0;
+    int postframes = 10;
     guint nb_recordings = 20;
 
     expected_images = nb_recordings * (preframes + postframes);
 
-    // Get the max resolution of the camera
-    g_object_get(
-        G_OBJECT(camera),
-        "info-xmax", &res_x,
-        "info-ymax", &res_y,
-        NULL);
+    // // Get the max resolution of the camera
+    // g_object_get(
+    //     G_OBJECT(camera),
+    //     "info-xmax", &res_x,
+    //     "info-ymax", &res_y,
+    //     NULL);
 
     // Connecting to the camera and starting the readout threads
     g_print ("Setting properties\n");
@@ -65,6 +65,7 @@ int main (int argc, char *argv[]) {
         G_OBJECT(camera),
         "frames-per-second", (float)2000,
         "xenabled", TRUE, // Images over 1Gb connection
+        "xnetcard", "enp59s0f0", // First network card
         "imgformat", 5, // Native 12 bit, to 16-bit
         "trigger-source", UCA_CAMERA_TRIGGER_SOURCE_SOFTWARE,
         "syncmode", 0, // Sync exposure time and trigger

@@ -52,18 +52,18 @@
  * - Add documentation
  */
 
-enum {
-    PROP_PHANTOM_IP = 1,
-    PROP_PHANTOM_XIP,
-    PROP_NETCARD_IP,
-    PROP_NETCARD_XIP,
-    PROP_NETCARD,
-    PROP_XNETCARD,
-    PROP_XENABLED,
-    PROP_CONTROL_PORT,
-    PROP_PHANTOM_IPSOURCE,
-    N_PROPERTIES
-} UcaPhantomCommunicateProperties;
+// enum {
+//     PROP_COM_PHANTOM_IP = 1,
+//     PROP_COM_PHANTOM_XIP,
+//     PROP_COM_NETCARD_IP,
+//     PROP_COM_NETCARD_XIP,
+//     PROP_COM_NETCARD,
+//     PROP_COM_XNETCARD,
+//     PROP_COM_XENABLED,
+//     PROP_COM_CONTROL_PORT,
+//     PROP_COM_PHANTOM_IPSOURCE,
+//     N_COM_PROPERTIES
+// } UcaPhantomCommunicateProperties;
 
 /**
  * @defgroup NetworkStructures Network related structures
@@ -261,7 +261,7 @@ static void uca_phantom_communicate_finalize(GObject* object);
 
 static gboolean uca_phantom_communicate_get_resolution(UcaPhantomCommunicate* self, guint16* width, guint16* height,
     GError** error_loc);
-static GParamSpec* uca_phantom_communicate_properties[N_PROPERTIES] = {
+static GParamSpec* uca_phantom_communicate_properties[N_COM_PROPERTIES] = {
     NULL,
 };
 
@@ -351,33 +351,33 @@ static void uca_phantom_communicate_class_init(UcaPhantomCommunicateClass* class
     gobject_class->finalize = uca_phantom_communicate_finalize;
 
     // install properties
-    uca_phantom_communicate_properties[PROP_PHANTOM_IP] = g_param_spec_string(
+    uca_phantom_communicate_properties[PROP_COM_PHANTOM_IP] = g_param_spec_string(
         "phantom_ip", "Phantom IP address", "IP address of the Phantom camera over normal 1Gb ethernet",
         "100.100.189.164", G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
-    uca_phantom_communicate_properties[PROP_PHANTOM_XIP] = g_param_spec_string(
+    uca_phantom_communicate_properties[PROP_COM_PHANTOM_XIP] = g_param_spec_string(
         "phantom_xip", "Phantom 10Gb IP address", "IP address of the Phantom camera over a 10Gb ethernet",
         "172.16.31.157", G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
-    uca_phantom_communicate_properties[PROP_NETCARD_IP] = g_param_spec_string("netcard_ip", "Network card IP", "IP address of the network card used for 1Gb ethernet",
+    uca_phantom_communicate_properties[PROP_COM_NETCARD_IP] = g_param_spec_string("netcard_ip", "Network card IP", "IP address of the network card used for 1Gb ethernet",
         "100.100.100.1", G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
-    uca_phantom_communicate_properties[PROP_NETCARD_XIP] = g_param_spec_string(
+    uca_phantom_communicate_properties[PROP_COM_NETCARD_XIP] = g_param_spec_string(
         "netcard_xip", "10Gb network card IP", "IP address of the network card used for 10Gb ethernet", "172.16.0.1",
         G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
-    uca_phantom_communicate_properties[PROP_NETCARD] = g_param_spec_string("netcard", "Network card", "Name of the network card used for 1Gb ethernet", "eth0",
+    uca_phantom_communicate_properties[PROP_COM_NETCARD] = g_param_spec_string("netcard", "Network card", "Name of the network card used for 1Gb ethernet", "eth0",
         G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
-    uca_phantom_communicate_properties[PROP_XNETCARD] = g_param_spec_string("xnetcard", "10Gb network card", "Name of the network card used for 10Gb ethernet", "eth1",
+    uca_phantom_communicate_properties[PROP_COM_XNETCARD] = g_param_spec_string("xnetcard", "10Gb network card", "Name of the network card used for 10Gb ethernet", "eth1",
         G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
-    uca_phantom_communicate_properties[PROP_XENABLED] = g_param_spec_boolean("xenabled", "Enable 10Gb data transfer", "Enable 10Gb data transfer", TRUE,
+    uca_phantom_communicate_properties[PROP_COM_XENABLED] = g_param_spec_boolean("xenabled", "Enable 10Gb data transfer", "Enable 10Gb data transfer", TRUE,
         G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
 
-    uca_phantom_communicate_properties[PROP_CONTROL_PORT] = g_param_spec_uint(
+    uca_phantom_communicate_properties[PROP_COM_CONTROL_PORT] = g_param_spec_uint(
         "control_port", "Set connection port", "Set the port used to establish TCP connection with phantom", 1024,
         49151, 7115, G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
 
-    uca_phantom_communicate_properties[PROP_PHANTOM_IPSOURCE] = g_param_spec_uint(
+    uca_phantom_communicate_properties[PROP_COM_PHANTOM_IPSOURCE] = g_param_spec_uint(
         "phantom_ipsource", "Set the IP source using IP flags", "Possible flags: USE_ENV, USE_CLASS, USE_DISCOVER.", 0,
         N_IP_FLAGS, USE_CLASS, G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
 
-    g_object_class_install_properties(gobject_class, N_PROPERTIES, uca_phantom_communicate_properties);
+    g_object_class_install_properties(gobject_class, N_COM_PROPERTIES, uca_phantom_communicate_properties);
 }
 
 static void uca_phantom_communicate_init(UcaPhantomCommunicate* instance)
@@ -670,31 +670,31 @@ static void uca_phantom_communicate_set_property(GObject* object, guint property
     UcaPhantomCommunicate* self = UCA_PHANTOM_COMMUNICATE(object);
 
     switch (property_id) {
-    case PROP_PHANTOM_IP:
+    case PROP_COM_PHANTOM_IP:
         uca_phantom_communicate_set_phantom_ip(self, g_value_get_string(value));
         break;
-    case PROP_PHANTOM_XIP:
+    case PROP_COM_PHANTOM_XIP:
         uca_phantom_communicate_set_phantom_xip(self, g_value_get_string(value));
         break;
-    case PROP_NETCARD_IP:
+    case PROP_COM_NETCARD_IP:
         uca_phantom_communicate_set_netcard_ip(self, g_value_get_string(value));
         break;
-    case PROP_NETCARD_XIP:
+    case PROP_COM_NETCARD_XIP:
         uca_phantom_communicate_set_netcard_xip(self, g_value_get_string(value));
         break;
-    case PROP_NETCARD:
+    case PROP_COM_NETCARD:
         uca_phantom_communicate_set_netcard(self, g_value_get_string(value));
         break;
-    case PROP_XNETCARD:
+    case PROP_COM_XNETCARD:
         uca_phantom_communicate_set_xnetcard(self, g_value_get_string(value));
         break;
-    case PROP_XENABLED:
+    case PROP_COM_XENABLED:
         uca_phantom_communicate_set_xenabled(self, g_value_get_boolean(value));
         break;
-    case PROP_CONTROL_PORT:
+    case PROP_COM_CONTROL_PORT:
         uca_phantom_communicate_set_control_port(self, g_value_get_uint(value));
         break;
-    case PROP_PHANTOM_IPSOURCE:
+    case PROP_COM_PHANTOM_IPSOURCE:
         uca_phantom_communicate_set_ip_source(self, g_value_get_uint(value));
         break;
     default:
@@ -708,31 +708,31 @@ static void uca_phantom_communicate_get_property(GObject* object, guint property
     UcaPhantomCommunicate* self = UCA_PHANTOM_COMMUNICATE(object);
 
     switch (property_id) {
-    case PROP_PHANTOM_IP:
+    case PROP_COM_PHANTOM_IP:
         g_value_set_string(value, uca_phantom_communicate_get_phantom_ip(self));
         break;
-    case PROP_PHANTOM_XIP:
+    case PROP_COM_PHANTOM_XIP:
         g_value_set_string(value, uca_phantom_communicate_get_phantom_xip(self));
         break;
-    case PROP_NETCARD_IP:
+    case PROP_COM_NETCARD_IP:
         g_value_set_string(value, uca_phantom_communicate_get_netcard_ip(self));
         break;
-    case PROP_NETCARD_XIP:
+    case PROP_COM_NETCARD_XIP:
         g_value_set_string(value, uca_phantom_communicate_get_netcard_xip(self));
         break;
-    case PROP_NETCARD:
+    case PROP_COM_NETCARD:
         g_value_set_string(value, uca_phantom_communicate_get_netcard(self));
         break;
-    case PROP_XNETCARD:
+    case PROP_COM_XNETCARD:
         g_value_set_string(value, uca_phantom_communicate_get_xnetcard(self));
         break;
-    case PROP_XENABLED:
+    case PROP_COM_XENABLED:
         g_value_set_boolean(value, uca_phantom_communicate_get_xenabled(self));
         break;
-    case PROP_CONTROL_PORT:
+    case PROP_COM_CONTROL_PORT:
         g_value_set_uint(value, uca_phantom_communicate_get_control_port(self));
         break;
-    case PROP_PHANTOM_IPSOURCE:
+    case PROP_COM_PHANTOM_IPSOURCE:
         g_value_set_uint(value, uca_phantom_communicate_get_ip_source(self));
         break;
     default:
@@ -1277,6 +1277,12 @@ gboolean uca_phantom_communicate_get_variable(UcaPhantomCommunicate* self, guint
         break;
     case G_TYPE_FLOAT:
         g_value_set_float(return_value, strtof(suffix, NULL));
+        break;
+    case G_TYPE_DOUBLE:
+        g_value_set_double(return_value, strtod(suffix, NULL));
+        break;
+    case G_TYPE_BOOLEAN:
+        g_value_set_boolean(return_value, g_ascii_strtoull(suffix, NULL, 10));
         break;
     // // TODO : handle these cases in a more custom way in the future ?
     // case PHANTOM_TYPE_HEX:
@@ -1990,12 +1996,13 @@ gboolean throttled_requester (UcaPhantomCommunicate *self, CineInfo *info, GErro
                 g_warning ("Failed to get last frame %s\n", (*error_loc)->message);
                 return FALSE;
             }
+            g_debug ("\t\t>%p: Image throttler: last frame of cine: %d\n", g_thread_self(), last_frame);
         }
 
         // Create frame range to pull
         guint count = MIN (ABS (last_frame - start), MaxNumberImagesPerRequest);
 
-        if (count <= 1) {
+        if (count < 1) {
             continue;
         }
 
@@ -2029,12 +2036,14 @@ gboolean throttled_requester (UcaPhantomCommunicate *self, CineInfo *info, GErro
         }
 
         g_debug ("\t>%p: Image throttler: requested %d images\n", g_thread_self(), count);
-
+        
+        guint64 time = g_get_monotonic_time();
         for (int i=0; i<count; i++) {
             g_async_queue_pop (self->throttle_queue);
         }
+        gfloat time_ms = (gfloat)(g_get_monotonic_time() - time) / 1000;
         
-        g_debug ("\t>%p: finished throttling %d images\n", g_thread_self(), count);
+        g_info ("\t>%p: Image throttler: requested %d images in %.6f ms\n", g_thread_self(), count, time_ms);
 
         start += count;
         total += count;
