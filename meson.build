@@ -56,3 +56,4 @@ phantom = library('ucaphantom',
 )
 
 # subdir('test')
+subdir('examples')

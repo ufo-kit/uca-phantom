@@ -75,58 +75,61 @@ GType uca_phantom_camera_get_type(void);
 
 UcaPhantomCamera *uca_phantom_camera_new(void);
 
-// #if GLIB_CHECK_VERSION(2, 74, 0)
+/*
+#if GLIB_CHECK_VERSION(2, 74, 0)
 
-// #else
-//     #define G_DEFINE_ENUM_VALUE(EnumValue, EnumNick) \
-//     { EnumValue, #EnumValue, EnumNick }
+#else
+    #define G_DEFINE_ENUM_VALUE(EnumValue, EnumNick) \
+    { EnumValue, #EnumValue, EnumNick }
 
-//     #define G_DEFINE_ENUM_TYPE(TypeName, type_name, ...) \
-//     GType \
-//     type_name ## _get_type (void) { \
-//     static gsize g_define_type__static = 0; \
-//     if (g_once_init_enter (&g_define_type__static)) { \
-//         static const GEnumValue enum_values[] = { \
-//         __VA_ARGS__ , \
-//         { 0, NULL, NULL }, \
-//         }; \
-//         GType g_define_type = g_enum_register_static (g_intern_static_string (#TypeName), enum_values); \
-//         g_once_init_leave (&g_define_type__static, g_define_type); \
-//     } \
-//     return g_define_type__static; \
-//     }
-// #endif
+    #define G_DEFINE_ENUM_TYPE(TypeName, type_name, ...) \
+    GType \
+    type_name ## _get_type (void) { \
+    static gsize g_define_type__static = 0; \
+    if (g_once_init_enter (&g_define_type__static)) { \
+        static const GEnumValue enum_values[] = { \
+        __VA_ARGS__ , \
+        { 0, NULL, NULL }, \
+        }; \
+        GType g_define_type = g_enum_register_static (g_intern_static_string (#TypeName), enum_values); \
+        g_once_init_leave (&g_define_type__static, g_define_type); \
+    } \
+    return g_define_type__static; \
+    }
+#endif
 
-// G_DEFINE_ENUM_TYPE (SyncMode, sync_mode,
-//     G_DEFINE_ENUM_VALUE (SYNC_MODE_FREE_RUN, "internal"),
-//     G_DEFINE_ENUM_VALUE (SYNC_MODE_FSYNC, "external"),
-//     G_DEFINE_ENUM_VALUE (SYNC_MODE_IRIG, "irig"),
-//     G_DEFINE_ENUM_VALUE (SYNC_MODE_VIDEO_FRAME_RATE, "video"),
-//     G_DEFINE_ENUM_VALUE (SYNC_MODE_TRIGGER, "trigger"))
-// G_DEFINE_ENUM_TYPE (AcquisitionMode, acquisition_mode,
-//     G_DEFINE_ENUM_VALUE (ACQUISITION_MODE_STANDARD, "standard"),
-//     G_DEFINE_ENUM_VALUE (ACQUISITION_MODE_STANDARD_BINNED, "standard-binned"),
-//     G_DEFINE_ENUM_VALUE (ACQUISITION_MODE_HS, "hs"),
-//     G_DEFINE_ENUM_VALUE (ACQUISITION_MODE_HS_BINNED, "hs-binned"),
-//     G_DEFINE_ENUM_VALUE (ACQUISITION_MODE_BRIGHT_FIELD, "bright-field"))
-// G_DEFINE_ENUM_TYPE (AutoExpMode, aexp_mode,
-//     G_DEFINE_ENUM_VALUE (AUTO_EXP_MODE_OFF, "off"),
-//     G_DEFINE_ENUM_VALUE (AUTO_EXP_MODE_AVERAGE, "average"),
-//     G_DEFINE_ENUM_VALUE (AUTO_EXP_MODE_SPOT, "spot"),
-//     G_DEFINE_ENUM_VALUE (AUTO_EXP_MODE_CENTER, "center"))
-// G_DEFINE_ENUM_TYPE (ImageFormat, image_format,
-//     G_DEFINE_ENUM_VALUE (IMG_8, "8bit"),
-//     G_DEFINE_ENUM_VALUE (IMG_8R, "8bit-raw"),
-//     G_DEFINE_ENUM_VALUE (IMG_P16, "16bit"),
-//     G_DEFINE_ENUM_VALUE (IMG_P16R, "16bit-raw"),
-//     G_DEFINE_ENUM_VALUE (IMG_P10, "10bit"),
-//     G_DEFINE_ENUM_VALUE (IMG_P12L, "12bit"))
-// G_DEFINE_ENUM_TYPE (TimestampFormat, timestamp_format,
-//     G_DEFINE_ENUM_VALUE (TS_SHORT, "short"),
-//     G_DEFINE_ENUM_VALUE (TS_SHORT32, "short32"),
-//     G_DEFINE_ENUM_VALUE (TS_LONG, "long"),
-//     G_DEFINE_ENUM_VALUE (TS_LONG32, "long32"),
-//     G_DEFINE_ENUM_VALUE (TS_NONE, "none"))
+G_DEFINE_ENUM_TYPE (SyncMode, sync_mode,
+    G_DEFINE_ENUM_VALUE (SYNC_MODE_FREE_RUN, "internal"),
+    G_DEFINE_ENUM_VALUE (SYNC_MODE_FSYNC, "external"),
+    G_DEFINE_ENUM_VALUE (SYNC_MODE_IRIG, "irig"),
+    G_DEFINE_ENUM_VALUE (SYNC_MODE_VIDEO_FRAME_RATE, "video"),
+    G_DEFINE_ENUM_VALUE (SYNC_MODE_TRIGGER, "trigger"))
+G_DEFINE_ENUM_TYPE (AcquisitionMode, acquisition_mode,
+    G_DEFINE_ENUM_VALUE (ACQUISITION_MODE_STANDARD, "standard"),
+    G_DEFINE_ENUM_VALUE (ACQUISITION_MODE_STANDARD_BINNED, "standard-binned"),
+    G_DEFINE_ENUM_VALUE (ACQUISITION_MODE_HS, "hs"),
+    G_DEFINE_ENUM_VALUE (ACQUISITION_MODE_HS_BINNED, "hs-binned"),
+    G_DEFINE_ENUM_VALUE (ACQUISITION_MODE_BRIGHT_FIELD, "bright-field"))
+G_DEFINE_ENUM_TYPE (AutoExpMode, aexp_mode,
+    G_DEFINE_ENUM_VALUE (AUTO_EXP_MODE_OFF, "off"),
+    G_DEFINE_ENUM_VALUE (AUTO_EXP_MODE_AVERAGE, "average"),
+    G_DEFINE_ENUM_VALUE (AUTO_EXP_MODE_SPOT, "spot"),
+    G_DEFINE_ENUM_VALUE (AUTO_EXP_MODE_CENTER, "center"))
+G_DEFINE_ENUM_TYPE (ImageFormat, image_format,
+    G_DEFINE_ENUM_VALUE (IMG_8, "8bit"),
+    G_DEFINE_ENUM_VALUE (IMG_8R, "8bit-raw"),
+    G_DEFINE_ENUM_VALUE (IMG_P16, "16bit"),
+    G_DEFINE_ENUM_VALUE (IMG_P16R, "16bit-raw"),
+    G_DEFINE_ENUM_VALUE (IMG_P10, "10bit"),
+    G_DEFINE_ENUM_VALUE (IMG_P12L, "12bit"))
+G_DEFINE_ENUM_TYPE (TimestampFormat, timestamp_format,
+    G_DEFINE_ENUM_VALUE (TS_SHORT, "short"),
+    G_DEFINE_ENUM_VALUE (TS_SHORT32, "short32"),
+    G_DEFINE_ENUM_VALUE (TS_LONG, "long"),
+    G_DEFINE_ENUM_VALUE (TS_LONG32, "long32"),
+    G_DEFINE_ENUM_VALUE (TS_NONE, "none"))
+
+*/
 
 G_END_DECLS
 

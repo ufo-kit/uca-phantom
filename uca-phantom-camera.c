@@ -157,7 +157,7 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
 
     gboolean result = FALSE;
 
-    if ((priv->settings.timestamp_format != TS_NONE || !priv->liveimages) && !priv->data_connected) {
+    if ((priv->settings.timestamp_format != TS_NONE || priv->liveimages || !priv->xenabled) && !priv->data_connected) {
         g_debug ("Connecting to the datastream\n");
         result = uca_phantom_communicate_connect_datastream (priv->communicator, &internal_error);
         g_debug ("Connected to the datastream\n");
@@ -184,7 +184,7 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
 
     // Launch the readout using the communicator
     g_debug ("Starting readout function\n");
-    result = uca_phantom_communicate_start_readout (priv->communicator, !priv->liveimages, &(priv->settings), &internal_error);
+    result = uca_phantom_communicate_start_readout (priv->communicator, priv->liveimages, &(priv->settings), &internal_error);
     if (result != TRUE && internal_error != NULL) {
         g_propagate_error (error, internal_error);
         return;
@@ -220,8 +220,6 @@ uca_phantom_camera_start_recording (UcaCamera *camera,
 
     GError *internal_error = NULL;
     UcaPhantomCameraPrivate *priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
-
-    gboolean result = FALSE;
 
     // Start readout automatically
     uca_phantom_camera_start_readout (camera, &internal_error);
@@ -284,44 +282,53 @@ uca_phantom_camera_trigger (UcaCamera *camera,
 
     CaptureSettings settings = priv->settings;
 
-    if (settings.trigger_source == UCA_CAMERA_TRIGGER_SOURCE_AUTO){
-        g_print ("AUto Trigger\n");
-    }
-
     if (priv->liveimages) {
+        settings.current_cine = 0;
         g_print ("Live images\n");
-        settings.current_cine = -1;
+        // Wait for the cine to be ready to be triggered
+        if (!uca_phantom_communicate_get_cine_state(priv->communicator, 0, "ACT", error)) {
+            if (error != NULL) {
+                g_print ("Error get zstate\n");
+                return;
+            }
+            res = uca_phantom_communicate_arm (priv->communicator, settings.current_cine, &internal_error);
+            if (res != TRUE && internal_error != NULL) {
+                g_propagate_error (error, internal_error);
+            }
+        }
+        
+        return;
     }
-    else {
-        settings.current_cine = priv->settings.current_cine;
 
-        // // Make sure the previous cine complete
-        // gint prev_cine = (settings.current_cine - 1) % priv->numcines;
-        // while (!uca_phantom_communicate_get_cine_state(priv->communicator, prev_cine, "STR", error)) {
-        //     if (error != NULL) {
-        //         return;
-        //     }
-        //     // If not, wait for the cine to be ready
-        //     g_usleep (1000);
-        // }
-    }
+    settings.current_cine = priv->settings.current_cine;
+
+    // // Make sure the previous cine complete
+    // gint prev_cine = (settings.current_cine - 1) % priv->numcines;
+    // while (!uca_phantom_communicate_get_cine_state(priv->communicator, prev_cine, "STR", error)) {
+    //     if (error != NULL) {
+    //         return;
+    //     }
+    //     // If not, wait for the cine to be ready
+    //     g_usleep (1000);
+    // }
 
     // print the current cine
     guint min_frames = MAX (settings.nb_pre_trigger_frames, 5);
-    gdouble time_to_record = min_frames / (gdouble)settings.frames_per_second;
+    gdouble period = 1 / (gdouble)settings.frames_per_second;
+    gdouble time_to_record = min_frames * period;
 
     // Arm the camera
-    // res = uca_phantom_communicate_delete_cine(priv->communicator, settings.current_cine, &internal_error);
-    // if (res != TRUE && internal_error != NULL) {
-    //     g_propagate_error (error, internal_error);
-    //     return;
-    // }
-    // // Not sure this is useful ? Makes the cine reusable ?
-    // res = uca_phantom_communicate_release_cine(priv->communicator, settings.current_cine, &internal_error);
-    // if (res != TRUE && internal_error != NULL) {
-    //     g_propagate_error (error, internal_error);
-    //     return;
-    // }
+    res = uca_phantom_communicate_delete_cine(priv->communicator, settings.current_cine, &internal_error);
+    if (res != TRUE && internal_error != NULL) {
+        g_propagate_error (error, internal_error);
+        return;
+    }
+    // Not sure this is useful ? Makes the cine reusable ?
+    res = uca_phantom_communicate_release_cine(priv->communicator, settings.current_cine, &internal_error);
+    if (res != TRUE && internal_error != NULL) {
+        g_propagate_error (error, internal_error);
+        return;
+    }
     res = uca_phantom_communicate_arm (priv->communicator, settings.current_cine, &internal_error);
     if (res != TRUE && internal_error != NULL) {
         g_propagate_error (error, internal_error);
@@ -332,14 +339,15 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     // In particular, we wait for at least 1 frame to be present
     // This is so the camera can directly index the post trigger frames starting from 0
     g_usleep (time_to_record * G_USEC_PER_SEC);
-    // g_debug ("checking how many frames are present\n");
-    // guint nb_frames;
-    // do {
-    //     res = uca_phantom_communicate_get_cine_index (priv->communicator, settings.current_cine, UNIT_CT_FRCOUNT, &nb_frames, error);
-    //     if (res != TRUE) {
-    //         return;
-    //     }
-    // } while (nb_frames < min_frames);
+    g_debug ("Waiting for preframes to be full\n");
+    guint nb_frames;
+    do {
+        res = uca_phantom_communicate_get_cine_index (priv->communicator, settings.current_cine, UNIT_C_FRCOUNT, (gint*)(&nb_frames), error);
+        if (res != TRUE) {
+            return;
+        }
+        g_usleep (period * G_USEC_PER_SEC);
+    } while (nb_frames < min_frames);
 
     // Wait for the cine to be ready to be triggered
     while (!uca_phantom_communicate_get_cine_state(priv->communicator, settings.current_cine, "WTR", error)) {
@@ -399,19 +407,19 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     // g_print ("Trigger end: Saving in cine: %d\n", priv->settings.current_cine);
 }
 
-static void
-uca_phantom_camera_write (UcaCamera *camera,
-                          const gchar *name,
-                          gpointer data,
-                          gsize size,
-                          GError **error) {
-    g_return_if_fail (error == NULL || *error == NULL);
-    g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
+// static void
+// uca_phantom_camera_write (UcaCamera *camera,
+//                           const gchar *name,
+//                           gpointer data,
+//                           gsize size,
+//                           GError **error) {
+//     g_return_if_fail (error == NULL || *error == NULL);
+//     g_return_if_fail (UCA_IS_PHANTOM_CAMERA (camera));
 
-    /*
-        Not implemented
-    */
-}
+//     /*
+//         Not implemented
+//     */
+// }
 
 /**
  *
@@ -421,28 +429,28 @@ uca_phantom_camera_grab_live (UcaCamera *camera,
                          gpointer data,
                          GError **error) {
     UcaPhantomCameraPrivate *priv;
-    static gboolean first = TRUE;
+    // static gboolean first = TRUE;
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
-    if (first) {
-        // Arm the camera
-        gboolean res = uca_phantom_communicate_arm (priv->communicator, -1, error);
-        if (res != TRUE) {
-            return FALSE;
-        }
+    // if (first) {
+        // // Arm the camera
+        // gboolean res = uca_phantom_communicate_arm (priv->communicator, -1, error);
+        // if (res != TRUE) {
+        //     return FALSE;
+        // }
 
         // Trigger the camera using the communicator
 
         // Wait for the camera to be ready
-        gdouble time_to_record = 1 / (gdouble)priv->settings.frames_per_second;
-        g_print ("Time to record postframes: %f\n", time_to_record);
+        // gdouble time_to_record = 1 / (gdouble)priv->settings.frames_per_second;
+        // g_print ("Time to record postframes: %f\n", time_to_record);
 
-        g_usleep (time_to_record * G_USEC_PER_SEC);
+        // g_usleep (time_to_record * G_USEC_PER_SEC);
 
-        res = uca_phantom_communicate_trigger (priv->communicator, error);
+        // res = uca_phantom_communicate_trigger (priv->communicator, error);
         
-        first = FALSE;
-    }
+        // first = FALSE;
+    // }
 
     return uca_phantom_communicate_grab_live_image (priv->communicator, data, priv->settings, error);
 }
@@ -458,8 +466,11 @@ uca_phantom_camera_grab (UcaCamera *camera,
     UcaPhantomCameraPrivate *priv;
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
 
-    UcaCameraTriggerSource trigger_source;
     g_object_get(camera, "trigger-source", &(priv->settings.trigger_source), NULL);
+
+    if (priv->settings.trigger_source == UCA_CAMERA_TRIGGER_SOURCE_AUTO){
+        uca_phantom_camera_trigger(camera, error);
+    }
 
     if (priv->liveimages) {
         // grab a live image without saving in a cine
@@ -467,9 +478,7 @@ uca_phantom_camera_grab (UcaCamera *camera,
         return uca_phantom_camera_grab_live (camera, data, error);
     }
 
-    if (priv->settings.trigger_source == UCA_CAMERA_TRIGGER_SOURCE_AUTO){
-        uca_phantom_camera_trigger(camera, error);
-    }
+    
 
     // g_print ("ReadGrabbing an image\n");
 
@@ -517,6 +526,7 @@ uca_phantom_camera_set_property (GObject *object,
             break;
         case PROP_SENSOR_WIDTH:
             priv->settings.sensor_width = g_value_get_uint (value);
+            // Fall through
         case PROP_SENSOR_HEIGHT:
             priv->settings.sensor_height = g_value_get_uint (value);
             resolution = g_strdup_printf (
@@ -563,6 +573,7 @@ uca_phantom_camera_set_property (GObject *object,
             break;
         case PROP_ROI_WIDTH:
             priv->settings.roi_width = g_value_get_uint (value);
+            // Fall through
         case PROP_ROI_HEIGHT:
             priv->settings.roi_height = g_value_get_uint (value);
             resolution = g_strdup_printf (
@@ -790,7 +801,6 @@ uca_phantom_camera_get_property (GObject *object,
                 if (priv->control_connected && 
                     ((variables[property_id].flags | G_PARAM_READABLE) || 
                     (variables[property_id].flags | G_PARAM_WRITABLE))) {
-                    gchar* value_str = NULL;
                     gboolean res = uca_phantom_communicate_get_variable (priv->communicator, property_id, 0, value, &internal_error);
                     if (res != TRUE && internal_error != NULL) {
                         g_warning ("Failed to get property %s: %s", g_param_spec_get_name (pspec), internal_error->message);
@@ -849,7 +859,6 @@ static void
 uca_phantom_camera_constructed (GObject *object) {
     UcaPhantomCamera *camera;
     UcaPhantomCameraPrivate *priv;
-    GError *error = NULL;
 
     camera = UCA_PHANTOM_CAMERA (object);
     priv = camera->priv;
@@ -908,7 +917,7 @@ uca_phantom_camera_initable_init (GInitable *initable,
     g_object_set (priv->communicator,
                     "xnetcard", priv->xnetcard,
                     "xenabled", priv->xenabled,
-                    "phantom_ipsource", 0,
+                    // "phantom_ipsource", 0,
                     NULL);    
 
     // g_print ("Connecting to the camera\n");
@@ -1019,14 +1028,10 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
     camera_class->stop_recording = uca_phantom_camera_stop_recording;
     camera_class->start_readout = uca_phantom_camera_start_readout;
     camera_class->stop_readout = uca_phantom_camera_stop_readout;
-    camera_class->write = uca_phantom_camera_write;
     camera_class->grab = uca_phantom_camera_grab;
-    // camera_class->grab_live = uca_phantom_camera_grab_live;
     camera_class->trigger = uca_phantom_camera_trigger;
-
-    g_print ("Registering phantom camera properties\n");
-
-
+    // camera_class->grab_live = uca_phantom_camera_grab_live;
+    // camera_class->write = uca_phantom_camera_write;
 
     // Implement the base class properties
     for (guint i = 0; base_overrideables[i] != 0; i++) {
@@ -1134,17 +1139,13 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
                             FALSE,
                             G_PARAM_READWRITE);
 
-    g_print ("Registering thw special phantom camera properties\n");
-
     // Finally install all the phantom specific properties
     for (int i = UNIT_INFO_SENSOR + N_PHANTOM_PROPERTIES; i < N_UNIT_PROPERTIES; i++) {
         PhantomUnit unit = variables[i];
         // replace . in the name by -
         GString *name = g_string_new (unit.name);
         g_string_replace (name, ".", "-", 50);
-        gchar *pname = g_string_free_and_steal (name);
-
-        g_print ("Registering property %s\n", pname);
+        gchar *pname = g_string_free (name, FALSE);
 
         if (unit.type == G_TYPE_STRING) {
             uca_phantom_camera_properties[i] = g_param_spec_string (pname,
