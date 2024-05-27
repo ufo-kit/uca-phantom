@@ -1346,8 +1346,6 @@ static gboolean uca_phantom_communicate_get_resolution(UcaPhantomCommunicate* se
     GValue resolution = G_VALUE_INIT;
     const gchar* reply = NULL;
 
-    g_print ("uca_phantom_communicate_get_resolution\n");
-
     gboolean res = uca_phantom_communicate_get_variable(self, UNIT_DEFC_RES, 0, &resolution, &sub_error);
 
     if (res != TRUE && sub_error != NULL) {
@@ -1705,7 +1703,7 @@ gboolean uca_phantom_communicate_request_live_images (UcaPhantomCommunicate *sel
 
     guint count = 1;
     guint start = 0;
-    guint cine = 0;
+    guint cine = settings.current_cine;
     guint image_format = settings.image_format;
 
     // Setup the arguments for image transfer on 1Gb ethernet
@@ -1978,7 +1976,7 @@ gboolean throttled_requester (UcaPhantomCommunicate *self, CineInfo *info, GErro
                 g_warning ("Cine not complete %s\n", (*error_loc)->message);
                 return FALSE;
             }
-            g_print ("\t\t>%p: Image throttler: cine complete\n", g_thread_self());
+            g_debug ("\t\t>%p: Image throttler: cine complete\n", g_thread_self());
         }
         while (!cine_complete && ++safety_counter > 0);
     }
@@ -2372,13 +2370,15 @@ gpointer uca_phantom_communicate_accept_live_img (gpointer data) {
     // self->input_datastream = g_io_stream_get_input_stream(G_IO_STREAM(self->data_connection));
     guint8 *image_buffer = NULL;
 
+    g_debug ("Live buffering thread started\n");
+
     while (TRUE) {
         // Wait for a request to be available
-        g_print ("Waiting for request\n");
+        g_debug ("\t>%p: Waiting for request\n", g_thread_self());
 
         ImageRequest* request = g_async_queue_pop (self->live_images_request_queue);
 
-        g_debug ("Request received\n");
+        g_debug ("\t>%p: Request received\n", g_thread_self());
 
         if (request == NULL) {
             return NULL;

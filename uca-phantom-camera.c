@@ -118,16 +118,17 @@ struct _UcaPhantomCameraPrivate {
     guint roi_x0, roi_y0, roi_width, roi_height, roi_width_multiplier, roi_height_multiplier;
     guint numcines; // nb cines
     gboolean has_streaming, has_camram_recording;
-    gboolean buffered;
     gboolean liveimages;
-    guint imgsync_mode;
+    gboolean earlyimg;
     CaptureSettings settings; // Groups all the main writeable properties
+
     
 
     // Network properties
     gchar *xnetcard;
     gboolean xenabled;
     gboolean x_data_connected, data_connected, control_connected;
+    IpSource ip_source;
 
     // Hack for tracking the last cine used
     gboolean recording;
@@ -282,19 +283,21 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     CaptureSettings settings = priv->settings;
 
     if (priv->liveimages) {
-        settings.current_cine = 0;
-        g_print ("Live images\n");
-        // Wait for the cine to be ready to be triggered
-        if (!uca_phantom_communicate_get_cine_state(priv->communicator, 0, "ACT", error)) {
-            if (error != NULL) {
-                g_print ("Error get zstate\n");
-                return;
-            }
-            res = uca_phantom_communicate_arm (priv->communicator, settings.current_cine, &internal_error);
-            if (res != TRUE && internal_error != NULL) {
-                g_propagate_error (error, internal_error);
-            }
-        }
+        priv->settings.current_cine = -1;
+        settings.current_cine = -1;
+        g_debug ("Triggering preview cine\n");
+        // // Wait for the cine to be ready to be triggered
+        // if (!uca_phantom_communicate_get_cine_state(priv->communicator, 0, "RDY", error) &&
+        //     !uca_phantom_communicate_get_cine_state(priv->communicator, 0, "ACT", error)) {
+        //     if (error != NULL) {
+        //         g_print ("Error get cine state: the preview cine was not ready\n");
+        //         return;
+        //     }
+        //     res = uca_phantom_communicate_arm (priv->communicator, settings.current_cine, &internal_error);
+        //     if (res != TRUE && internal_error != NULL) {
+        //         g_propagate_error (error, internal_error);
+        //     }
+        // }
         
         return;
     }
@@ -351,7 +354,7 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     // Wait for the cine to be ready to be triggered
     while (!uca_phantom_communicate_get_cine_state(priv->communicator, settings.current_cine, "WTR", error)) {
         if (error != NULL) {
-            g_print ("Error get zstate\n");
+            g_print ("Error get cine state: waiting for cine to be triggerable\n");
             return;
         }
     }
@@ -374,7 +377,7 @@ uca_phantom_camera_trigger (UcaCamera *camera,
 
         while (!uca_phantom_communicate_get_cine_state(priv->communicator, settings.current_cine, "STR", error)) {
             if (error != NULL) {
-                g_print ("Error get state 2\n");
+                g_print ("Error get cine state: waiting for complete cine.\n");
                 return;
             }
         }
@@ -475,7 +478,7 @@ uca_phantom_camera_grab (UcaCamera *camera,
 
     if (priv->liveimages) {
         // grab a live image without saving in a cine
-        g_print ("Grabbing a live image\n");
+        g_debug ("Grabbing a live image\n");
         return uca_phantom_camera_grab_live (camera, data, error);
     }
 
@@ -503,7 +506,6 @@ uca_phantom_camera_set_property (GObject *object,
                                  const GValue *value,
                                  GParamSpec *pspec) {
     UcaPhantomCameraPrivate *priv;
-
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (object);
     UcaPhantomCommunicate *communicator = priv->communicator;
 
@@ -524,6 +526,11 @@ uca_phantom_camera_set_property (GObject *object,
         case PROP_HAS_STREAMING: // Nothing to do, this is a read-only property
         case PROP_HAS_CAMRAM_RECORDING:
             // Nothing to do, this is a read-only property
+            break;
+        case PROP_IP_SOURCE:
+            priv->ip_source = g_value_get_enum (value);
+            if (priv->communicator != NULL)
+                g_object_set (priv->communicator, "phantom_ipsource", priv->ip_source, NULL);
             break;
         case PROP_SENSOR_WIDTH:
             priv->settings.sensor_width = g_value_get_uint (value);
@@ -610,8 +617,16 @@ uca_phantom_camera_set_property (GObject *object,
                 res = uca_phantom_communicate_set_variable(communicator, UNIT_CAM_MODE, acquisition_mode, &internal_error);
             g_free(acquisition_mode);
             break;
+        case PROP_AUTO_EXPOSURE_MODE:
+            priv->settings.aexpmode = g_value_get_enum (value);
+            gchar* auto_exposure_mode = g_strdup_printf("%d", priv->settings.aexpmode);
+            if (priv->control_connected)
+                res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_AEXPMODE, auto_exposure_mode, &internal_error);
+            g_free(auto_exposure_mode);
+            break;
         case PROP_IMAGE_FORMAT:
             priv->settings.image_format = g_value_get_enum (value);
+	    guint bitdepth = priv->settings.image_format > 1 ? 16 : 8;
             // Requested when triggered
             break;
         case PROP_TIMESTAMP_FORMAT:
@@ -646,13 +661,16 @@ uca_phantom_camera_set_property (GObject *object,
         case PROP_LIVEIMAGES:
             priv->liveimages = g_value_get_boolean (value);
             break;
+        case PROP_EARLYIMG:
+            priv->earlyimg = g_value_get_boolean (value);
+            break;
         /* End of uca phantom specific */
         /* Start phantom variables specific */
         
         default:
-            if (property_id < N_UNIT_PROPERTIES) {
+            if (N_PHANTOM_PROPERTIES <= property_id && property_id < N_UNIT_PROPERTIES) {
                 guint i_var = property_id - N_PHANTOM_PROPERTIES;
-                if (priv->control_connected && variables[i_var].flags == G_PARAM_READWRITE){
+                if (priv->control_connected){
                     gchar* value_str = g_strdup_value_contents (value);
                     gboolean res = uca_phantom_communicate_set_variable (priv->communicator, i_var, value_str, &internal_error);
                     if (res != TRUE && internal_error != NULL) {
@@ -728,6 +746,12 @@ uca_phantom_camera_get_property (GObject *object,
         case PROP_SENSOR_VERTICAL_BINNING:
             g_value_set_uint (value, 1); // TODO
             break;
+        case PROP_IP_SOURCE:
+            if (priv->communicator != NULL)
+                g_object_set (priv->communicator, "phantom_ipsource", priv->ip_source, NULL);
+
+            g_value_set_enum (value, priv->ip_source);
+            break;
         case PROP_TRIGGER_SOURCE:
             g_value_set_enum (value, priv->settings.trigger_source);
             break;
@@ -780,6 +804,9 @@ uca_phantom_camera_get_property (GObject *object,
         case PROP_ACQUISITION_MODE:
             g_value_set_enum (value, priv->settings.acquisition_mode);
             break;
+        case PROP_AUTO_EXPOSURE_MODE:
+            g_value_set_enum (value, priv->settings.aexpmode);
+            break;
         case PROP_IMAGE_FORMAT:
             g_value_set_enum (value, priv->settings.image_format);
             break;
@@ -798,12 +825,13 @@ uca_phantom_camera_get_property (GObject *object,
         case PROP_NUM_CINES:
             g_value_set_uint (value, priv->numcines);
             break;
+        case PROP_EARLYIMG:
+            g_value_set_boolean (value, priv->earlyimg);
+            break;
         default:
-            if (property_id < N_UNIT_PROPERTIES) {
+            if (N_PHANTOM_PROPERTIES <= property_id && property_id < N_UNIT_PROPERTIES) {
                 guint i_var = property_id - N_PHANTOM_PROPERTIES;
-                if (priv->control_connected && 
-                    ((variables[i_var].flags | G_PARAM_READABLE) || 
-                    (variables[i_var].flags | G_PARAM_WRITABLE))) {
+                if (priv->control_connected) {
                     gboolean res = uca_phantom_communicate_get_variable (priv->communicator, i_var, 0, value, &internal_error);
                     if (res != TRUE && internal_error != NULL) {
                         g_warning ("Failed to get property %s: %s", g_param_spec_get_name (pspec), internal_error->message);
@@ -812,9 +840,9 @@ uca_phantom_camera_get_property (GObject *object,
                 }
                 break;
             }
-            // Warn if the property is not defined in this class
-            G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
-            break;       
+        // Warn if the property is not defined in this class
+        G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
+        break;       
     }
 }
 static void
@@ -1040,7 +1068,13 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
     for (guint i = 0; base_overrideables[i] != 0; i++) {
         g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
     }
-    
+    uca_phantom_camera_properties[PROP_IP_SOURCE] = 
+        g_param_spec_enum ("ip-source",
+                           "IP source",
+                           "Source used to find the ip of the camera. Class is hard coded. Env is PHANTOM_IP, Bcast automatically finds the camera",
+                           IP_TYPE_SOURCE,
+                           USE_CLASS,
+                           G_PARAM_READWRITE);
     uca_phantom_camera_properties[PROP_NB_POST_TRIGGER_FRAMES] =
         g_param_spec_uint ("postframes",
                            "Number of post trigger frames",
@@ -1071,6 +1105,14 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
                            ACQUISITION_MODE_STANDARD,
                            G_PARAM_READWRITE);
     
+    uca_phantom_camera_properties[PROP_AUTO_EXPOSURE_MODE] =
+        g_param_spec_enum ("autoexposure",
+                           "Auto exposure mode",
+                           "Auto exposure mode",
+                           AUTOEXP_TYPE_MODE,
+                           AUTOEXP_MODE_OFF,
+                           G_PARAM_READWRITE);
+    
     uca_phantom_camera_properties[PROP_IMAGE_FORMAT] =
         g_param_spec_enum ("imgformat",
                            "Image format",
@@ -1092,7 +1134,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
                              "10 Gb NIC",
                              "10 Gb NIC",
                              "ens21f0",
-                             G_PARAM_READWRITE);
+                             G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
                              
     
     uca_phantom_camera_properties[PROP_XENABLED] =
@@ -1140,6 +1182,12 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
                             "Live images",
                             "Live images",
                             FALSE,
+                            G_PARAM_READWRITE);
+    uca_phantom_camera_properties[PROP_EARLYIMG] =
+        g_param_spec_boolean ("earlyimg",
+                            "Early images",
+                            "Early images",
+                            TRUE,
                             G_PARAM_READWRITE);
 
     // Finally install all the phantom specific properties
@@ -1235,7 +1283,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self) {
         .nb_pre_trigger_frames = 0,
         .current_cine = 1,
 
-        .aexpmode = AUTO_EXP_MODE_AVERAGE,
+        .aexpmode = AUTOEXP_MODE_AVERAGE,
         .sync_mode = SYNC_MODE_VIDEO_FRAME_RATE,
         .acquisition_mode = ACQUISITION_MODE_STANDARD,
         .image_format = IMG_P12L,

@@ -102,11 +102,11 @@ typedef enum {
  * 
  */
 typedef enum {
-    AUTO_EXP_MODE_OFF = 0,      /**< Auto exposure is turned off. */
-    AUTO_EXP_MODE_AVERAGE,      /**< Auto exposure is based on the average brightness of the image. */
-    AUTO_EXP_MODE_SPOT,         /**< Auto exposure is based on a spot meter reading. */
-    AUTO_EXP_MODE_CENTER        /**< Auto exposure is based on the center of the image. */
-} AutoExpMode;
+    AUTOEXP_MODE_OFF = 0,      /**< Auto exposure is turned off. */
+    AUTOEXP_MODE_AVERAGE,      /**< Auto exposure is based on the average brightness of the image. */
+    AUTOEXP_MODE_SPOT,         /**< Auto exposure is based on a spot meter reading. */
+    AUTOEXP_MODE_CENTER        /**< Auto exposure is based on the center of the image. */
+} AutoexpMode;
 
 /**
  * @brief The bit depth of the image format.
@@ -154,7 +154,7 @@ typedef enum {
     USE_CLASS,
     USE_BCAST,
     N_IP_FLAGS
-} IP_SOURCE_FLAGS;
+} IpSource;
 
 /**
  * @brief Struct containing capture settings for the Phantom camera.
@@ -184,7 +184,7 @@ typedef struct{
     guint current_cine; // Current cine number in which the camera is recording
     gfloat aexpcomp; // Auto exposure compensation
 
-    AutoExpMode aexpmode;
+    AutoexpMode aexpmode;
     UcaCameraTriggerSource trigger_source;
     UcaCameraTriggerType trigger_type;
     SyncMode sync_mode;

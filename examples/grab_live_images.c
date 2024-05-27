@@ -5,7 +5,7 @@
 #include <glib.h>
 
 const gchar *filename = "/dev/null"; // Change this to the path where you want to save the images
-guint expected_images = 0, res_x = 0, res_y = 0;
+guint expected_images = 0, res_x = 2048, res_y = 1952;
 
 gpointer image_grabber (gpointer data) {
     GError *error = NULL;
