@@ -626,7 +626,7 @@ uca_phantom_camera_set_property (GObject *object,
             break;
         case PROP_IMAGE_FORMAT:
             priv->settings.image_format = g_value_get_enum (value);
-	    guint bitdepth = priv->settings.image_format > 1 ? 16 : 8;
+	        guint bitdepth = priv->settings.image_format > 1 ? 16 : 8;
             // Requested when triggered
             break;
         case PROP_TIMESTAMP_FORMAT:
