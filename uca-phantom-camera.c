@@ -503,6 +503,7 @@ uca_phantom_camera_set_property (GObject *object,
                                  const GValue *value,
                                  GParamSpec *pspec) {
     UcaPhantomCameraPrivate *priv;
+    UcaCamera *camera = UCA_CAMERA (object);
 
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (object);
     UcaPhantomCommunicate *communicator = priv->communicator;
@@ -612,6 +613,9 @@ uca_phantom_camera_set_property (GObject *object,
             break;
         case PROP_IMAGE_FORMAT:
             priv->settings.image_format = g_value_get_enum (value);
+            guint bitdepth = priv->settings.image_format > 1 ? 16 : 8;
+            // Modify libuca bitdepth
+            g_object_set (camera, "sensor-bitdepth", bitdepth, NULL);
             // Requested when triggered
             break;
         case PROP_TIMESTAMP_FORMAT:
