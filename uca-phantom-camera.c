@@ -158,9 +158,9 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
     gboolean result = FALSE;
 
     if ((priv->settings.timestamp_format != TS_NONE || priv->liveimages || !priv->xenabled) && !priv->data_connected) {
-        g_debug ("Connecting to the datastream\n");
+        g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Connecting to the datastream\n");
         result = uca_phantom_communicate_connect_datastream (priv->communicator, &internal_error);
-        g_debug ("Connected to the datastream\n");
+        g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Connected to the datastream\n");
 
         if (result != TRUE && internal_error != NULL) {
             g_propagate_error (error, internal_error);
@@ -172,7 +172,7 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
 
     // Connect to the x datastream
     if (priv->xenabled && !priv->x_data_connected) {
-        g_debug ("Connecting to the x datastream\n");
+        g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Connecting to the x datastream\n");
         result = uca_phantom_communicate_connect_xdatastream (priv->communicator, &internal_error);
 
         if (result != TRUE && internal_error != NULL) {
@@ -183,7 +183,7 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
     } 
 
     // Launch the readout using the communicator
-    g_debug ("Starting readout function\n");
+    g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Starting readout function\n");
     result = uca_phantom_communicate_start_readout (priv->communicator, priv->liveimages, &(priv->settings), &internal_error);
     if (result != TRUE && internal_error != NULL) {
         g_propagate_error (error, internal_error);
@@ -285,34 +285,12 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     if (priv->liveimages) {
         priv->settings.current_cine = -1;
         settings.current_cine = -1;
-        g_debug ("Triggering preview cine\n");
-        // // Wait for the cine to be ready to be triggered
-        // if (!uca_phantom_communicate_get_cine_state(priv->communicator, 0, "RDY", error) &&
-        //     !uca_phantom_communicate_get_cine_state(priv->communicator, 0, "ACT", error)) {
-        //     if (error != NULL) {
-        //         g_print ("Error get cine state: the preview cine was not ready\n");
-        //         return;
-        //     }
-        //     res = uca_phantom_communicate_arm (priv->communicator, settings.current_cine, &internal_error);
-        //     if (res != TRUE && internal_error != NULL) {
-        //         g_propagate_error (error, internal_error);
-        //     }
-        // }
+        g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Triggering preview cine\n");
         
         return;
     }
 
     settings.current_cine = priv->settings.current_cine;
-
-    // // Make sure the previous cine complete
-    // gint prev_cine = (settings.current_cine - 1) % priv->numcines;
-    // while (!uca_phantom_communicate_get_cine_state(priv->communicator, prev_cine, "STR", error)) {
-    //     if (error != NULL) {
-    //         return;
-    //     }
-    //     // If not, wait for the cine to be ready
-    //     g_usleep (1000);
-    // }
 
     // print the current cine
     guint min_frames = MAX (settings.nb_pre_trigger_frames, 5);
@@ -341,7 +319,7 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     // In particular, we wait for at least 1 frame to be present
     // This is so the camera can directly index the post trigger frames starting from 0
     g_usleep (time_to_record * G_USEC_PER_SEC);
-    g_debug ("Waiting for preframes to be full\n");
+    g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Waiting for preframes to be full\n");
     guint nb_frames;
     do {
         res = uca_phantom_communicate_get_cine_index (priv->communicator, settings.current_cine, UNIT_C_FRCOUNT, (gint*)(&nb_frames), error);
@@ -354,7 +332,7 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     // Wait for the cine to be ready to be triggered
     while (!uca_phantom_communicate_get_cine_state(priv->communicator, settings.current_cine, "WTR", error)) {
         if (error != NULL) {
-            g_print ("Error get cine state: waiting for cine to be triggerable\n");
+            g_error ("Error get cine state: waiting for cine to be triggerable\n");
             return;
         }
     }
@@ -366,9 +344,7 @@ uca_phantom_camera_trigger (UcaCamera *camera,
         return;
     }
 
-    gboolean earlyimg = TRUE;
-
-    if (!earlyimg) {
+    if (!priv->earlyimg) {
         // check if the cine is flagged READY !
         // Same thing, estimate the time to record the post trigger frames
         time_to_record = settings.nb_post_trigger_frames / (gdouble)settings.frames_per_second;
@@ -377,18 +353,26 @@ uca_phantom_camera_trigger (UcaCamera *camera,
 
         while (!uca_phantom_communicate_get_cine_state(priv->communicator, settings.current_cine, "STR", error)) {
             if (error != NULL) {
-                g_print ("Error get cine state: waiting for complete cine.\n");
+                g_error ("Error get cine state: waiting for complete cine.\n");
                 return;
             }
         }
     }
 
-    g_debug ("Going to request the images !");
+    // This is experimental
+    // does not yet work correctly
+    // Although, it does do something
+    if (settings.crop) {
+        settings.sensor_width = settings.roi_width;
+        settings.sensor_height = settings.roi_height;
+    }
+
+    g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Going to request the images !");
 
     res = !uca_phantom_communicate_request_images (
             priv->communicator, 
             settings,
-            earlyimg,
+            priv->earlyimg,
             &internal_error);
     if (res != TRUE && internal_error != NULL) {
         g_propagate_error (error, internal_error);
@@ -396,19 +380,12 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     }
 
     if (settings.trigger_source == UCA_CAMERA_TRIGGER_SOURCE_SOFTWARE){
-        // // Wait until we've grabbed enough images to overwrite the new cine
-        // g_mutex_lock (&priv->cine_mutex);
-        // guint ni = priv->settings.nb_post_trigger_frames + priv->settings.nb_pre_trigger_frames;
-        // while (priv->cine_tracker[priv->settings.current_cine] < ni ) {
-        //     g_cond_wait (&priv->cine_cond, &priv->cine_mutex);
-        // }
-        // g_cond_wait (&priv->cine_cond, &priv->cine_mutex);
+        // TODO: Track cine states for no overwriting
         priv->settings.current_cine += 1;
         if (priv->settings.current_cine >= priv->numcines) {
             priv->settings.current_cine = 1;
         }
     }
-    // g_print ("Trigger end: Saving in cine: %d\n", priv->settings.current_cine);
 }
 
 // static void
@@ -433,28 +410,7 @@ uca_phantom_camera_grab_live (UcaCamera *camera,
                          gpointer data,
                          GError **error) {
     UcaPhantomCameraPrivate *priv;
-    // static gboolean first = TRUE;
     priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
-
-    // if (first) {
-        // // Arm the camera
-        // gboolean res = uca_phantom_communicate_arm (priv->communicator, -1, error);
-        // if (res != TRUE) {
-        //     return FALSE;
-        // }
-
-        // Trigger the camera using the communicator
-
-        // Wait for the camera to be ready
-        // gdouble time_to_record = 1 / (gdouble)priv->settings.frames_per_second;
-        // g_print ("Time to record postframes: %f\n", time_to_record);
-
-        // g_usleep (time_to_record * G_USEC_PER_SEC);
-
-        // res = uca_phantom_communicate_trigger (priv->communicator, error);
-        
-        // first = FALSE;
-    // }
 
     return uca_phantom_communicate_grab_live_image (priv->communicator, data, priv->settings, error);
 }
@@ -478,21 +434,14 @@ uca_phantom_camera_grab (UcaCamera *camera,
 
     if (priv->liveimages) {
         // grab a live image without saving in a cine
-        g_debug ("Grabbing a live image\n");
+        g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Grabbing a live image\n");
         return uca_phantom_camera_grab_live (camera, data, error);
     }
-
-    
-
-    // g_print ("ReadGrabbing an image\n");
 
     if (!uca_phantom_communicate_grab_image (priv->communicator, data, error)) {
         return FALSE;
     }
     priv->cine_tracker[priv->settings.current_cine] += 1;
-    // if (priv->cine_tracker[priv->settings.current_cine] == priv->settings.nb_post_trigger_frames + priv->settings.nb_pre_trigger_frames) {
-    //     g_cond_signal (&priv->cine_cond);
-    // }
   
     return TRUE;
 }
@@ -565,6 +514,13 @@ uca_phantom_camera_set_property (GObject *object,
                 res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_RATE, fps, &internal_error);
             g_free (fps);
             break;
+        case PROP_CROP:
+            priv->settings.crop = g_value_get_boolean (value);
+            // gchar* crop_str = g_strdup_printf("%d", priv->settings.crop);
+            // if (priv->control_connected)
+            //     res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_CROP, crop_str, &internal_error);
+            // g_free (crop_str);
+            break;
         case PROP_ROI_X:
             priv->settings.roi_x0 = g_value_get_int (value);
             gchar* roi_x = g_strdup_printf("%d", priv->settings.roi_x0);
@@ -579,16 +535,47 @@ uca_phantom_camera_set_property (GObject *object,
                 res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_OY, roi_y, &internal_error);
             g_free (roi_y);
             break;
+        case PROP_WINDOW_WIDTH:
+            priv->settings.window_width = g_value_get_uint (value);
+            gchar* w_str = g_strdup_printf ("%d", priv->settings.window_width);
+            if (priv->control_connected)
+                res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_W, w_str, &internal_error);
+            g_free (w_str);
+            break;
+        case PROP_WINDOW_HEIGHT:
+            priv->settings.window_height = g_value_get_uint (value);
+            gchar* h_str = g_strdup_printf ("%d", priv->settings.window_height);
+            if (priv->control_connected)
+                res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_H, h_str, &internal_error);
+            g_free (h_str);
+            break;
         case PROP_ROI_WIDTH:
             priv->settings.roi_width = g_value_get_uint (value);
-            // Fall through
+            gchar* ow_str = g_strdup_printf ("%d", priv->settings.roi_width);
+            if (priv->control_connected)
+                res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_OW, ow_str, &internal_error);
+            g_free (ow_str);
+
+            if (priv->settings.roi_width < priv->settings.sensor_width) {
+                g_object_set (object, "crop", TRUE, NULL);
+            }
+            else {
+                g_object_set (object, "crop", FALSE, NULL);
+            }
+            break;
         case PROP_ROI_HEIGHT:
             priv->settings.roi_height = g_value_get_uint (value);
-            resolution = g_strdup_printf (
-                "%dx%d", priv->settings.roi_width, priv->settings.roi_height);
+            gchar* oh_str = g_strdup_printf ("%d", priv->settings.roi_height);
             if (priv->control_connected)
-                res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_RES, resolution, &internal_error);
-            g_free (resolution);
+                res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_OH, oh_str, &internal_error);
+            g_free (oh_str);
+
+            if (priv->settings.roi_height < priv->settings.sensor_height) {
+                g_object_set (object, "crop", TRUE, NULL);
+            }
+            else {
+                g_object_set (object, "crop", FALSE, NULL);
+            }
             break;
         /* End of base_overrideables */
         /* Start uca phantom specific */
@@ -687,7 +674,7 @@ uca_phantom_camera_set_property (GObject *object,
     
     }
 
-    if (res == FALSE) {
+    if (res == FALSE && internal_error != NULL) {
         g_warning ("Failed to set property %s: %s", g_param_spec_get_name (pspec), internal_error->message);
         g_error_free (internal_error);
     }
@@ -763,6 +750,15 @@ uca_phantom_camera_get_property (GObject *object,
             break;
         case PROP_FRAMES_PER_SECOND:
             g_value_set_double (value, priv->settings.frames_per_second);
+            break;
+        case PROP_WINDOW_WIDTH:
+            g_value_set_uint (value, priv->settings.window_width);
+            break;
+        case PROP_WINDOW_HEIGHT:
+            g_value_set_uint (value, priv->settings.window_height);
+            break;
+        case PROP_CROP:
+            g_value_set_boolean (value, priv->settings.crop);
             break;
         case PROP_ROI_X:
             g_value_set_uint (value, priv->settings.roi_x0);
@@ -941,7 +937,7 @@ uca_phantom_camera_initable_init (GInitable *initable,
     // Set the network properties
     gchar *xnetcard = getenv ("XNETCARD");
     if (xnetcard != NULL) {
-        g_debug ("XNETCARD environment variable found\n");
+        g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"XNETCARD environment variable found\n");
         g_object_set (camera, "xnetcard", xnetcard, NULL);
     }
 
@@ -949,9 +945,7 @@ uca_phantom_camera_initable_init (GInitable *initable,
                     "xnetcard", priv->xnetcard,
                     "xenabled", priv->xenabled,
                     // "phantom_ipsource", 0,
-                    NULL);    
-
-    // g_print ("Connecting to the camera\n");
+                    NULL);
 
     // Connect the control streamm to the camera
     if (!uca_phantom_communicate_connect_controlstream(priv->communicator, &internal_error)) {
@@ -1028,12 +1022,6 @@ uca_phantom_camera_initable_init (GInitable *initable,
         return FALSE;
     }
     g_free (time_val);
-
-    // // Experimental !
-    // gchar* enable_crop = g_strdup_printf("%d", 1);
-    // res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_CROP, enable_crop, error);
-    // g_free(enable_crop);
-
     return TRUE;
 }
 
@@ -1147,48 +1135,70 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
     uca_phantom_camera_properties[PROP_SENSOR_PHYSICAL_HEIGHT] =
         g_param_spec_double ("sensor-physical-height",
                             "Sensor physical height",
-                            "Sensor physical height",
+                            "Sensor physical height in meters",
                             0, G_MAXDOUBLE, 0,
                             G_PARAM_READABLE);
     
     uca_phantom_camera_properties[PROP_SENSOR_PHYSICAL_WIDTH] =
         g_param_spec_double ("sensor-physical-width",
                             "Sensor physical width",
-                            "Sensor physical width",
+                            "Sensor physical width in meters",
                             0, G_MAXDOUBLE, 0,
                             G_PARAM_READABLE);
     
     uca_phantom_camera_properties[PROP_MAX_SENSOR_RESOLUTION_WIDTH] =
         g_param_spec_uint ("max-sensor-resolution-width",
                             "Max sensor resolution width",
-                            "Max sensor resolution width",
+                            "Max sensor resolution width in pixels",
                             0, G_MAXUINT, 0,
                             G_PARAM_READABLE);
     
     uca_phantom_camera_properties[PROP_MAX_SENSOR_RESOLUTION_HEIGHT] =
         g_param_spec_uint ("max-sensor-resolution-height",
                             "Max sensor resolution height",
-                            "Max sensor resolution height",
+                            "Max sensor resolution height in pixels",
                             0, G_MAXUINT, 0,
                             G_PARAM_READABLE);
+    uca_phantom_camera_properties[PROP_CROP] =
+        g_param_spec_boolean ("crop",
+                            "Crop",
+                            "Crop the image to the ROI. Use windiw height and width to scale the image.",
+                            FALSE,
+                            G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
+    uca_phantom_camera_properties[PROP_WINDOW_WIDTH] =
+        g_param_spec_uint ("window-width",
+                            "window width",
+                            "The window specifies the captured area of the res of the sensor. \
+                            Use this in tandem with roi-width to scale the image. e.g. \
+                            Format: 1280x720 (crop 16:9), defc.res: 2048x1152, (w,h): (2048,1152), (ow, oh): (1280,720)",
+                            0, G_MAXUINT, 0,
+                            G_PARAM_READWRITE);
+    uca_phantom_camera_properties[PROP_WINDOW_HEIGHT] =
+        g_param_spec_uint ("window-height",
+                            "window height",
+                            "The window specifies the captured area of the res of the sensor. \
+                            Use this in tandem with roi-width to scale the image. e.g. \
+                            Format: 1280x720 (crop 16:9), defc.res: 2048x1152, (w,h): (2048,1152), (ow, oh): (1280,720)",
+                            0, G_MAXUINT, 0,
+                            G_PARAM_READWRITE);
     uca_phantom_camera_properties[PROP_NUM_CINES] =
         g_param_spec_uint ("num-cines",
                             "Number of cines",
-                            "Number of cines",
+                            "Number of cines partioned in the phantom's RAM.",
                             0, G_MAXUINT, 16,
                             G_PARAM_READWRITE);
     uca_phantom_camera_properties[PROP_LIVEIMAGES] =
         g_param_spec_boolean ("liveimages",
                             "Live images",
-                            "Live images",
+                            "Mode in which the latest image is always available for reading.",
                             FALSE,
                             G_PARAM_READWRITE);
     uca_phantom_camera_properties[PROP_EARLYIMG] =
         g_param_spec_boolean ("earlyimg",
                             "Early images",
-                            "Early images",
+                            "Start transfering images as soon as cine is flagged as triggered.",
                             TRUE,
-                            G_PARAM_READWRITE);
+                            G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
 
     // Finally install all the phantom specific properties
     for (int i = N_PHANTOM_PROPERTIES; i < N_UNIT_PROPERTIES + N_PHANTOM_PROPERTIES; i++) {
@@ -1258,7 +1268,7 @@ uca_phantom_camera_init (UcaPhantomCamera *self) {
     UcaPhantomCameraPrivate *priv;
     self->priv = priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (self);
 
-    // g_print ("Initializing Phantom Camera\n");
+    g_log_set_default_handler(g_log_default_handler, NULL);
 
     g_cond_init (&priv->cine_cond);
     g_mutex_init (&priv->cine_mutex);
@@ -1271,13 +1281,16 @@ uca_phantom_camera_init (UcaPhantomCamera *self) {
         .roi_width = priv->max_sensor_resolution_width,
         .roi_height = priv->max_sensor_resolution_height,
         .sensor_bit_depth = ImageFormatSpecs[IMG_P12L].bit_depth,
-        
+        .window_width = priv->max_sensor_resolution_width,
+        .window_height = priv->max_sensor_resolution_height,
+
         .frames_per_second = 100.0,
         .exposure_time = 0.001,
         .focal_length = 0.0,
         .aperture = 0.0,
         .edr_exp = 459,
         .shutter_off = FALSE,
+        .crop = FALSE,
         .aexpcomp = 0.0,
         .nb_post_trigger_frames = 1,
         .nb_pre_trigger_frames = 0,
