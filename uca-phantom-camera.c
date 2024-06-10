@@ -283,7 +283,6 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     CaptureSettings settings = priv->settings;
 
     if (priv->liveimages) {
-        priv->settings.current_cine = -1;
         settings.current_cine = -1;
         g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Triggering preview cine\n");
         

@@ -1677,7 +1677,7 @@ gboolean uca_phantom_communicate_request_live_images (UcaPhantomCommunicate *sel
 
     guint count = 1;
     guint start = 0;
-    guint cine = settings.current_cine;
+    guint cine = -1;
     guint image_format = settings.image_format;
 
     // Setup the arguments for image transfer on 1Gb ethernet
