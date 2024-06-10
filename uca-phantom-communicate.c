@@ -2992,6 +2992,7 @@ gboolean uca_phantom_communicate_start_readout (
         self->data_unpacker = g_thread_new("data_unpacker", uca_phantom_communicate_unpack_ximg, self);
     }
     else {
+        g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"\t>Starting data receiver thread\n");
         self->data_receiver = g_thread_new("data_receiver", uca_phantom_communicate_accept_img, self);
     }
 
