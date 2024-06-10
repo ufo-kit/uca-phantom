@@ -399,6 +399,7 @@ static void uca_phantom_communicate_init(UcaPhantomCommunicate* instance)
 
     instance->unpacked_images = g_ptr_array_new_with_free_func(g_free);
     instance->xdata_receiver = NULL;
+    instance->data_receiver = NULL;
     instance->data_unpacker = NULL;
     instance->unpacked_queue = g_async_queue_new();
     instance->request_queue = g_async_queue_new();
