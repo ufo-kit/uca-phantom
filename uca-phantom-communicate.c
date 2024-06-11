@@ -2052,6 +2052,16 @@ gpointer uca_phantom_communicate_request_images_thread(gpointer data) {
 
         if (cine_info->end_request) {
             g_free(cine_info);
+
+            // Push end request to the queue to unblock the xdata_receiver thread
+            ImageRequest* request = g_new0(ImageRequest, 1);
+            request->end_request = TRUE;
+            request->nb_images = 0;
+            request->img_format = 0;
+            request->settings = self->settings;
+
+            g_async_queue_push(self->request_queue, request);
+
             break;
         }
 
@@ -2409,9 +2419,6 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
 {
     UcaPhantomCommunicate* self = UCA_PHANTOM_COMMUNICATE(data);
     g_return_val_if_fail(self->control_connection_state == CONNECTED, NULL);
-
-    // static gsize prev_packet_size = 0;
-    // static guint8* image_buffer = NULL;
 
     g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Buffering thread started: %p\n", g_thread_self());
 
@@ -2779,8 +2786,6 @@ static gpointer uca_phantom_communicate_unpack_ximg(gpointer data)
         CineData* cine_data = g_async_queue_pop(self->packed_queue);
 
         if (cine_data->UnpackedImages == NULL && cine_data->RawImages == NULL) {
-            // Push the CineData object to the queue anyways, to exit the other
-            // threads g_async_queue_push (self->unpacked_queue, cine_data);
             g_free(cine_data);
             break;
         }
@@ -2808,9 +2813,6 @@ static gpointer uca_phantom_communicate_unpack_ximg(gpointer data)
     }
 
     g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"\t>Unpacking done\n");
-
-    ringbuf_free (self->unpacked_ring_buffer);
-
     return NULL;
 }
 
@@ -2966,6 +2968,8 @@ gboolean uca_phantom_communicate_start_readout (
         return TRUE;
     }
 
+    self->live_ring_buffer = NULL;
+
     if (self->xenabled) {
         g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"\t>Starting x threads\n");
         if (self->mac_address_str == NULL) {
@@ -3008,6 +3012,8 @@ gboolean uca_phantom_communicate_start_readout (
         return FALSE;
     }
 
+
+    g_log (VERBOSE, G_LOG_LEVEL_DEBUG, "\t>Starting buffering thread\n");
     self->request_thread = g_thread_new("request_images_thread", uca_phantom_communicate_request_images_thread, self);
     
     return TRUE;
@@ -3163,49 +3169,7 @@ gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate* self, GErro
     GError* sub_error = NULL;
     GError* phantom_error = NULL;
 
-    // Push end request to the queue to unblock the xdata_receiver thread
-    ImageRequest* request = g_new0(ImageRequest, 1);
-    request->end_request = TRUE;
-    request->nb_images = 0;
-    request->img_format = 0;
-    request->settings = self->settings;
-
-    g_async_queue_push(self->request_queue, request);
-
     g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Stopping readout\n");
-    if (self->xenabled) {
-        g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"\t>Stopping xdata_receiver thread\n");
-        sub_error = g_thread_join(self->xdata_receiver);
-        if (sub_error != NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_STOP_READOUT,
-                "Failed to join xdata_receiver thread:\n\t> %s\n", sub_error->message);
-            g_propagate_error(error_loc, phantom_error);
-            g_clear_error(&sub_error);
-            return FALSE;
-        }
-
-        // Stop the data unpacker thread
-        g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"\t>Stopping xdata_unpacker thread\n");
-        sub_error = g_thread_join(self->data_unpacker);
-        if (sub_error != NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_STOP_READOUT,
-                "Failed to join data_unpacker thread:\n\t> %s\n", sub_error->message);
-            g_propagate_error(error_loc, phantom_error);
-            g_clear_error(&sub_error);
-            return FALSE;
-        }
-    }
-    else {
-        g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"\t>Stopping data_receiver thread\n");
-        sub_error = g_thread_join(self->data_receiver);
-        if (sub_error != NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_STOP_READOUT,
-                "Failed to join data_receiver thread:\n\t> %s\n", sub_error->message);
-            g_propagate_error(error_loc, phantom_error);
-            g_clear_error(&sub_error);
-            return FALSE;
-        }
-    }
 
     if (self->live_image_acquisition == ACQUIRING) {
         // Stop the buffering thread
@@ -3231,6 +3195,9 @@ gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate* self, GErro
         cine_info->end_request = TRUE;
         g_async_queue_push(self->cine_request_queue, cine_info);
         g_thread_join(self->request_thread);
+
+        ringbuf_free (self->unpacked_ring_buffer);
+        self->unpacked_ring_buffer = NULL;
     }
 
     if (self->ts_acquisition_state == ACQUIRING) {
@@ -3249,6 +3216,47 @@ gboolean uca_phantom_communicate_stop_readout(UcaPhantomCommunicate* self, GErro
             return FALSE;
         }
         self->ts_acquisition_state = IDLE;
+    }
+
+    if (self->xenabled) {
+        g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"\t>Stopping xdata_receiver thread\n");
+        sub_error = g_thread_join(self->xdata_receiver);
+        if (sub_error != NULL) {
+            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_STOP_READOUT,
+                "Failed to join xdata_receiver thread:\n\t> %s\n", sub_error->message);
+            g_propagate_error(error_loc, phantom_error);
+            g_clear_error(&sub_error);
+            return FALSE;
+        }
+
+        // Stop the data unpacker thread
+        g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"\t>Stopping xdata_unpacker thread\n");
+        sub_error = g_thread_join(self->data_unpacker);
+        if (sub_error != NULL) {
+            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_STOP_READOUT,
+                "Failed to join data_unpacker thread:\n\t> %s\n", sub_error->message);
+            g_propagate_error(error_loc, phantom_error);
+            g_clear_error(&sub_error);
+            return FALSE;
+        }
+
+        // Make sure packed queue is empty
+        while (g_async_queue_try_pop(self->packed_queue) != NULL) {
+            continue;
+        }
+    }
+    else {
+        g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"\t>Stopping data_receiver thread\n");
+        if (self->data_receiver != NULL) {
+            sub_error = g_thread_join(self->data_receiver);
+            if (sub_error != NULL) {
+                g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_STOP_READOUT,
+                    "Failed to join data_receiver thread:\n\t> %s\n", sub_error->message);
+                g_propagate_error(error_loc, phantom_error);
+                g_clear_error(&sub_error);
+                return FALSE;
+            }
+        }
     }
     
 
