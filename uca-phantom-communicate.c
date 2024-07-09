@@ -278,8 +278,9 @@ struct _UcaPhantomCommunicate {
     GSocketConnection* data_connection;
     GInputStream* input_datastream;
     GOutputStream* output_datastream;
-    // GMutex data_connection_mutex;
+    GMutex data_connection_mutex;
     GCond data_connection_cond;
+    GCond data_finished_connection_cond;
     gboolean finished_receiving_1gb;
 
     // Data stream connection variables (10 GbE)
@@ -387,8 +388,9 @@ static void uca_phantom_communicate_init(UcaPhantomCommunicate* instance)
     instance->input_controlstream = NULL;
     instance->output_controlstream = NULL;
     g_mutex_init(&instance->control_connection_mutex);
-    // g_mutex_init(&instance->data_connection_mutex);
+    g_mutex_init(&instance->data_connection_mutex);
     g_cond_init(&instance->data_connection_cond);
+    g_cond_init(&instance->data_finished_connection_cond);
     instance->finished_receiving_1gb = FALSE;
 
     // create a new data connection
@@ -484,12 +486,16 @@ static void uca_phantom_communicate_dispose(GObject* object)
     }
 
     g_mutex_clear(&instance->control_connection_mutex);
+    g_mutex_clear(&instance->data_connection_mutex);
+    g_cond_clear(&instance->data_connection_cond);
+    g_cond_clear(&instance->data_finished_connection_cond);
 
     // Empty the timestamp queue
     while (instance->ts_queue && g_async_queue_length(instance->ts_queue) > 0) {
         TimestampData* ts_data = g_async_queue_try_pop(instance->ts_queue);
         g_free(ts_data);
     }
+
     // Empty the timestamp request queue
     while (instance->ts_request_queue && g_async_queue_length(instance->ts_request_queue) > 0) {
         TsRequest* ts_request = g_async_queue_try_pop(instance->ts_request_queue);
@@ -510,9 +516,7 @@ static void uca_phantom_communicate_dispose(GObject* object)
 }
 
 static void uca_phantom_communicate_finalize(GObject* object)
-{
-    // TODO: dispose/finalize the new variables
-    
+{    
     UcaPhantomCommunicate* instance = UCA_PHANTOM_COMMUNICATE(object);
 
     g_socket_service_stop(instance->service);
@@ -1151,7 +1155,7 @@ gboolean uca_phantom_communicate_run_command(UcaPhantomCommunicate* self, guint 
     if (command_flag == CMD_GET_TIMESTAMPS || command_flag == CMD_GET_IMAGES) {
         g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Waiting for 1GB line data to be received...\n");
         while (!self->finished_receiving_1gb) {
-            g_cond_wait(&self->data_connection_cond, &self->control_connection_mutex);
+            g_cond_wait(&self->data_finished_connection_cond, &self->control_connection_mutex);
         }
         self->finished_receiving_1gb = FALSE;
     }
@@ -1406,6 +1410,55 @@ gboolean uca_phantom_communicate_set_nb_cines(UcaPhantomCommunicate* self, guint
     return TRUE;
 }
 
+gboolean incoming (GSocketService* socket_service, GSocketConnection* connection, GObject* source_object, gpointer user_data) {
+    UcaPhantomCommunicate *self = UCA_PHANTOM_COMMUNICATE(user_data);
+    GError *sub_error = NULL;
+
+    g_mutex_lock(&self->data_connection_mutex);
+
+    // Ref the connection
+    g_object_ref(connection);
+
+    // Set the data connection
+    self->data_connection = connection;
+
+    // Get the input and output streams
+    g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Connection established!\n");
+
+    // Set the input and output streams
+    self->input_datastream = g_io_stream_get_input_stream(G_IO_STREAM(self->data_connection));
+    self->output_datastream = g_io_stream_get_output_stream(G_IO_STREAM(self->data_connection));
+
+    // Get the remote and local address of the connection
+    GSocketAddress* remote_address = g_socket_connection_get_remote_address(self->data_connection, NULL);
+    GSocketAddress* local_address = g_socket_connection_get_local_address(self->data_connection, NULL);
+
+    guint remote_port = g_inet_socket_address_get_port(G_INET_SOCKET_ADDRESS(remote_address));
+    guint local_port = g_inet_socket_address_get_port(G_INET_SOCKET_ADDRESS(local_address));
+
+    GInetAddress* remote_inet_address = g_inet_socket_address_get_address(G_INET_SOCKET_ADDRESS(remote_address));
+    GInetAddress* local_inet_address = g_inet_socket_address_get_address(G_INET_SOCKET_ADDRESS(local_address));
+
+    gchar* remote_ip_address = g_inet_address_to_string(remote_inet_address);
+    gchar* local_ip_address = g_inet_address_to_string(local_inet_address);
+
+    g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Data connection established with phantom (%s:%d) -> (%s:%d)\n", local_ip_address, local_port,
+        remote_ip_address, remote_port);
+
+
+    self->data_connection_state = CONNECTED;
+    g_cond_signal(&self->data_connection_cond);
+
+    g_mutex_unlock(&self->data_connection_mutex);
+
+    g_object_unref(remote_address);
+    g_object_unref(local_address);
+    g_free(remote_ip_address);
+    g_free(local_ip_address);
+
+    return FALSE;
+}
+
 gboolean uca_phantom_communicate_connect_datastream(UcaPhantomCommunicate* self, GError** error_loc)
 {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
@@ -1414,6 +1467,9 @@ gboolean uca_phantom_communicate_connect_datastream(UcaPhantomCommunicate* self,
 
     GError* sub_error = NULL;
     GError* phantom_error = NULL;
+
+    // Connect the signal to the service
+    g_signal_connect(self->service, "incoming", G_CALLBACK(incoming), self);
 
     if (!g_socket_listener_add_inet_port(G_SOCKET_LISTENER(self->service), self->data_port, NULL, &sub_error)) {
         g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_DATASTREAM,
@@ -1438,43 +1494,12 @@ gboolean uca_phantom_communicate_connect_datastream(UcaPhantomCommunicate* self,
     }
 
     g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Waiting for connection...\n");
-
-    self->data_connection = g_socket_listener_accept(G_SOCKET_LISTENER(self->service), NULL, NULL, &sub_error);
-    if (sub_error != NULL) {
-        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_DATASTREAM,
-            "Failed to connect to datastream on port %d:\n\t> %s\n", self->data_port, sub_error->message);
-        g_propagate_error(error_loc, phantom_error);
-        g_clear_error(&sub_error);
-        return FALSE;
+    // Wait for the input control stream to be unlocked
+    g_mutex_lock (&self->data_connection_mutex);
+    while (self->data_connection_state != CONNECTED) {
+        g_cond_wait (&self->data_connection_cond, &self->data_connection_mutex);
     }
-    g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Connection established!\n");
-
-    // Set the input and output streams
-    self->input_datastream = g_io_stream_get_input_stream(G_IO_STREAM(self->data_connection));
-    self->output_datastream = g_io_stream_get_output_stream(G_IO_STREAM(self->data_connection));
-
-    // Get the remote address of the connection
-    GSocketAddress* remote_address = g_socket_connection_get_remote_address(self->data_connection, NULL);
-    GSocketAddress* local_address = g_socket_connection_get_local_address(self->data_connection, NULL);
-
-    guint remote_port = g_inet_socket_address_get_port(G_INET_SOCKET_ADDRESS(remote_address));
-    guint local_port = g_inet_socket_address_get_port(G_INET_SOCKET_ADDRESS(local_address));
-
-    GInetAddress* remote_inet_address = g_inet_socket_address_get_address(G_INET_SOCKET_ADDRESS(remote_address));
-    GInetAddress* local_inet_address = g_inet_socket_address_get_address(G_INET_SOCKET_ADDRESS(local_address));
-
-    gchar* remote_ip_address = g_inet_address_to_string(remote_inet_address);
-    gchar* local_ip_address = g_inet_address_to_string(local_inet_address);
-
-    g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Data connection established with phantom (%s:%d) -> (%s:%d)\n", local_ip_address, local_port,
-        remote_ip_address, remote_port);
-
-    self->data_connection_state = CONNECTED;
-
-    g_object_unref(remote_address);
-    g_object_unref(local_address);
-    g_free(remote_ip_address);
-    g_free(local_ip_address);
+    g_mutex_unlock (&self->data_connection_mutex);
 
     return TRUE;
 }
@@ -2259,7 +2284,7 @@ gboolean uca_phantom_communicate_receive_1gb_images (
     // Unlock the input control stream to allow the next request
     g_mutex_lock (&self->control_connection_mutex);
     self->finished_receiving_1gb = TRUE;
-    g_cond_signal (&self->data_connection_cond);
+    g_cond_signal (&self->data_finished_connection_cond);
     g_mutex_unlock (&self->control_connection_mutex);
 
     return TRUE;
@@ -2909,7 +2934,7 @@ static gpointer uca_phantom_communicate_accept_timestamps(gpointer data)
         // Signal the control connection condition
         g_mutex_lock(&self->control_connection_mutex);
         self->finished_receiving_1gb = TRUE;
-        g_cond_signal(&self->data_connection_cond);
+        g_cond_signal(&self->data_finished_connection_cond);
 
         // Unlock the control connection mutex
         g_mutex_unlock(&self->control_connection_mutex);
