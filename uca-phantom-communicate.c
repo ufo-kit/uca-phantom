@@ -25,7 +25,9 @@
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <arpa/inet.h>
-#include <netinet/in.h> 
+#include <netinet/in.h>
+
+#include <omp.h>
 
 #include "uca-phantom-variables.h"
 #include "uca-phantom-commands.h"
@@ -34,13 +36,13 @@
 
 // Note: if you wish to screw everything up, please tweak the following macros
 #define ETHERNET_HEADER_SIZE 32 // 16 bytes for L1 ethernet header, 16 bytes for custom header
-#define MAX_BUNDLE_SIZE 1e+9 // Maximum size of request bundle
+#define MAX_BUNDLE_SIZE 500e+6 // Maximum size of request bundle
 #define MAX_KERNEL_BUF_SIZE 1000000000 // 1 Gbyte
 #define MAX_HEAP_BUF_SIZE MAX_KERNEL_BUF_SIZE
 
 #define MAX_SENSOR_WIDTH 2048 // Maximum sensor pixel width
 #define MAX_SENSOR_HEIGHT 1952 // Maximum sensor pixel height
-
+#define MAX_NB_UNPACK_WORKERS 4
 #define MAX_NB_IMAGES_BUFFERING 40
 /**
  * TODO:
@@ -274,7 +276,7 @@ struct _UcaPhantomCommunicate {
     GMutex control_connection_mutex;
 
     // Data stream connection variables (1 GbE)
-    GSocketService* service;
+    GSocketListener* service;
     GSocketConnection* data_connection;
     GInputStream* input_datastream;
     GOutputStream* output_datastream;
@@ -394,7 +396,7 @@ static void uca_phantom_communicate_init(UcaPhantomCommunicate* instance)
     instance->finished_receiving_1gb = FALSE;
 
     // create a new data connection
-    instance->service = g_socket_service_new();
+    instance->service = g_socket_listener_new();
     instance->data_connection = NULL;
     instance->input_datastream = NULL;
     instance->output_datastream = NULL;
@@ -519,7 +521,7 @@ static void uca_phantom_communicate_finalize(GObject* object)
 {    
     UcaPhantomCommunicate* instance = UCA_PHANTOM_COMMUNICATE(object);
 
-    g_socket_service_stop(instance->service);
+    g_socket_listener_close(instance->service);
 
     // Free control connection resources
     if (G_IS_SOCKET_CLIENT(instance->control_client)) {
@@ -530,9 +532,6 @@ static void uca_phantom_communicate_finalize(GObject* object)
     }
 
     // Free data connection resources
-    if (G_IS_SOCKET_SERVICE(instance->service)) {
-        g_object_unref(instance->service);
-    }
     if (G_IS_SOCKET_CONNECTION(instance->data_connection)) {
         g_object_unref(instance->data_connection);
     }
@@ -1410,17 +1409,41 @@ gboolean uca_phantom_communicate_set_nb_cines(UcaPhantomCommunicate* self, guint
     return TRUE;
 }
 
-gboolean incoming (GSocketService* socket_service, GSocketConnection* connection, GObject* source_object, gpointer user_data) {
-    UcaPhantomCommunicate *self = UCA_PHANTOM_COMMUNICATE(user_data);
-    GError *sub_error = NULL;
+gboolean uca_phantom_communicate_connect_datastream(UcaPhantomCommunicate* self, GError** error_loc)
+{
+    g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
+    g_return_val_if_fail(self->data_connection_state != CONNECTED, TRUE);
+    g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Attempting to allow the phantom to connect to port: %d\n", self->data_port);
 
-    g_mutex_lock(&self->data_connection_mutex);
+    GError* sub_error = NULL;
+    GError* phantom_error = NULL;
 
-    // Ref the connection
-    g_object_ref(connection);
+    if (!g_socket_listener_add_inet_port(G_SOCKET_LISTENER(self->service), self->data_port, NULL, &sub_error)) {
+        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_DATASTREAM,
+            "Failed to listen on port %d:\n\t> %s\n", self->data_port, sub_error->message);
+        g_propagate_error(error_loc, phantom_error);
+        g_clear_error(&sub_error);
+        return FALSE;
+    }
+    g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Listening on port %d\n", self->data_port);
+
+    // Send the request to connect to the datastream
+    gchar* arg = g_strdup_printf("{port:%d}", self->data_port);
+    gboolean res = uca_phantom_communicate_run_command(self, CMD_START_DATA_CONNECTION, arg, NULL, &sub_error);
+    g_free(arg);
+
+    if (res != TRUE && sub_error != NULL) {
+        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_DATASTREAM,
+            "Failed to connect to datastream on port %d:\n\t> %s\n", self->data_port, sub_error->message);
+        g_propagate_error(error_loc, phantom_error);
+        g_clear_error(&sub_error);
+        return FALSE;
+    }
+
+    g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Waiting for connection...\n");
 
     // Set the data connection
-    self->data_connection = connection;
+    self->data_connection = g_socket_listener_accept (G_SOCKET_LISTENER(self->service), NULL, NULL, &sub_error);
 
     // Get the input and output streams
     g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Connection established!\n");
@@ -1447,59 +1470,10 @@ gboolean incoming (GSocketService* socket_service, GSocketConnection* connection
 
 
     self->data_connection_state = CONNECTED;
-    g_cond_signal(&self->data_connection_cond);
-
-    g_mutex_unlock(&self->data_connection_mutex);
-
     g_object_unref(remote_address);
     g_object_unref(local_address);
     g_free(remote_ip_address);
     g_free(local_ip_address);
-
-    return FALSE;
-}
-
-gboolean uca_phantom_communicate_connect_datastream(UcaPhantomCommunicate* self, GError** error_loc)
-{
-    g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
-    g_return_val_if_fail(self->data_connection_state != CONNECTED, TRUE);
-    g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Attempting to allow the phantom to connect to port: %d\n", self->data_port);
-
-    GError* sub_error = NULL;
-    GError* phantom_error = NULL;
-
-    // Connect the signal to the service
-    g_signal_connect(self->service, "incoming", G_CALLBACK(incoming), self);
-
-    if (!g_socket_listener_add_inet_port(G_SOCKET_LISTENER(self->service), self->data_port, NULL, &sub_error)) {
-        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_DATASTREAM,
-            "Failed to listen on port %d:\n\t> %s\n", self->data_port, sub_error->message);
-        g_propagate_error(error_loc, phantom_error);
-        g_clear_error(&sub_error);
-        return FALSE;
-    }
-    g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Listening on port %d\n", self->data_port);
-
-    // Send the request to connect to the datastream
-    gchar* arg = g_strdup_printf("{port:%d}", self->data_port);
-    gboolean res = uca_phantom_communicate_run_command(self, CMD_START_DATA_CONNECTION, arg, NULL, &sub_error);
-    g_free(arg);
-
-    if (res != TRUE && sub_error != NULL) {
-        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_CONNECT_DATASTREAM,
-            "Failed to connect to datastream on port %d:\n\t> %s\n", self->data_port, sub_error->message);
-        g_propagate_error(error_loc, phantom_error);
-        g_clear_error(&sub_error);
-        return FALSE;
-    }
-
-    g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Waiting for connection...\n");
-    // Wait for the input control stream to be unlocked
-    g_mutex_lock (&self->data_connection_mutex);
-    while (self->data_connection_state != CONNECTED) {
-        g_cond_wait (&self->data_connection_cond, &self->data_connection_mutex);
-    }
-    g_mutex_unlock (&self->data_connection_mutex);
 
     return TRUE;
 }
@@ -2036,14 +2010,22 @@ gboolean throttled_requester (UcaPhantomCommunicate *self, CineInfo *info, GErro
         g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"\t>%p: Image throttler: requested %d images\n", g_thread_self(), count);
         
         guint64 time = g_get_monotonic_time();
-        for (int i=0; i<count; i++) {
+        for (int i=0; i<count/2; i++) {
             g_async_queue_pop (self->throttle_queue);
+        }
+        // Clear the queue
+        while (!g_async_queue_try_pop_unlocked (self->throttle_queue)) {
+            // Do nothing
         }
         
         #ifdef PERFORMANCE
         gfloat time_ms = (gfloat)(g_get_monotonic_time() - time) / 1000;
         g_log (PERFORMANCE, G_LOG_LEVEL_INFO, "\t>%p: Image throttler: requested %d images in %.6f ms\n", g_thread_self(), count, time_ms);
         #endif
+
+        // Print the transfer rate
+        gfloat rate = ((gfloat)count * ImageSize) / (time_ms) * 1e-3 ;
+        g_log (PERFORMANCE, G_LOG_LEVEL_DEBUG,"\t>%p: Image throttler: transfer rate: %.2f MB/s\n", g_thread_self(), rate);
         
         start += count;
         total += count;
@@ -2557,7 +2539,7 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
         g_log (PERFORMANCE, G_LOG_LEVEL_INFO,"xrcv: %ld,%ld,%ld\n", start_time, end_time, bytes_read);
         #endif
 
-        // Create a new CineData struct
+        // Split image in 
         CineData* cine_data = g_new0(CineData, 1);
         cine_data->ImgFormat = request->img_format;
 
@@ -2695,38 +2677,9 @@ static gboolean uca_phantom_communicate_unpack_image_p10(UcaPhantomCommunicate* 
  * @param error_loc
  * @return gboolean
  */
-static gboolean uca_phantom_communicate_unpack_image_p12l(UcaPhantomCommunicate* self, CineData* cine_data,
-    GError** error_loc)
+static gboolean unpack_image_p12l(
+    guint8 *input, guint16* output, gsize input_size)
 {
-    static guint16 *unpacked_buffer = NULL;
-    static gsize previous_size = 0;
-
-    g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
-    g_return_val_if_fail(cine_data != NULL, FALSE);
-
-    GError* phantom_error = NULL;
-
-    gsize output_size = cine_data->SizePerImageUnpacked * cine_data->NbImages;
-
-    gint64 start_time = g_get_monotonic_time();
-    
-    // Allocate memory for the unpacked image
-    if (previous_size < output_size) {
-        if (unpacked_buffer != NULL) {
-            g_free(unpacked_buffer);
-        }
-
-        unpacked_buffer = g_malloc0(output_size);
-        if (unpacked_buffer == NULL) {
-            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_UNPACK_IMAGE,
-                "Failed to allocate memory for unpacked image");
-            g_propagate_error(error_loc, phantom_error);
-            return FALSE;
-        }
-
-        previous_size = output_size;
-    }
-
     __m128i sm0 = _mm_setr_epi8(1, 0, 0x80, 0x80, 4, 3, 0x80, 0x80, 7, 6, 0x80, 0x80, 10, 9, 0x80, 0x80);
     __m128i sm1 = _mm_setr_epi8(0x80, 0x80, 2, 1, 0x80, 0x80, 5, 4, 0x80, 0x80, 8, 7, 0x80, 0x80, 11, 10);
     __m128i m0 = _mm_setr_epi8(0b11110000, 0b11111111, 0, 0, 0b11110000, 0b11111111, 0, 0, 0b11110000, 0b11111111, 0, 0,
@@ -2739,50 +2692,44 @@ static gboolean uca_phantom_communicate_unpack_image_p12l(UcaPhantomCommunicate*
     guint input_index = 0;
     guint output_index = 0;
 
-    if (cine_data->NbPixelsPerImage % 8 != 0) {
-        g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_UNPACK_IMAGE,
-            "Image size is not a multiple of 8");
-        g_propagate_error(error_loc, phantom_error);
-        return FALSE;
-    }
-
-    __m128i input, shifted0, shifted1, result;
-    while (output_index < cine_data->NbPixelsPerImage * cine_data->NbImages) {
+    __m128i input_register, shifted0, shifted1, result;
+    while (output_index < input_size) {
         // Load 8 pixels, i.e. 80 bits = 10 bytes
-        input = _mm_loadu_si128((__m128i*)(cine_data->RawImages + input_index));
+        input_register = _mm_loadu_si128((__m128i*)(input + input_index));
 
         // Mask
-        input = _mm_and_si128(input, mask2);
+        input_register = _mm_and_si128(input_register, mask2);
 
         // Shift
-        shifted0 = _mm_and_si128(_mm_shuffle_epi8(input, sm0), m0) >> 4;
-        shifted1 = _mm_and_si128(_mm_shuffle_epi8(input, sm1), m1);
+        shifted0 = _mm_and_si128(_mm_shuffle_epi8(input_register, sm0), m0) >> 4;
+        shifted1 = _mm_and_si128(_mm_shuffle_epi8(input_register, sm1), m1);
 
         // Result
         result = _mm_or_si128(shifted0, shifted1);
 
         // Store
-        _mm_storeu_si128((__m128i*)(unpacked_buffer + output_index), result);
+        _mm_storeu_si128((__m128i*)(output + output_index), result);
 
         output_index += 8;
         input_index += 12;
     }
 
-    if (output_index != cine_data->NbPixelsPerImage * cine_data->NbImages) {
+    if (output_index != input_size) {
         g_warning("Error while unpacking image");
+        return FALSE;
     }
 
-    // copy into the ring buffer
-    ringbuf_push (self->unpacked_ring_buffer, unpacked_buffer, output_size);
-    gint64 end_time = g_get_monotonic_time();
+    // // copy into the ring buffer
+    // ringbuf_push (self->unpacked_ring_buffer, unpacked_buffer, output_size);
+    // gint64 end_time = g_get_monotonic_time();
 
-    #ifdef PERFORMANCE
-    g_log (PERFORMANCE, G_LOG_LEVEL_INFO,"xupack: %ld,%ld,%ld\n", start_time, end_time, output_size);
-    #endif
+    // #ifdef PERFORMANCE
+    // g_log (PERFORMANCE, G_LOG_LEVEL_INFO,"xupack: %ld,%ld,%ld\n", start_time, end_time, output_size);
+    // #endif
 
     // free the unpacked buffer
     // g_free (unpacked_buffer);
-    g_free (cine_data->RawImages);
+    // g_free (cine_data->RawImages);
 
     return TRUE;
 }
@@ -2815,23 +2762,63 @@ static gpointer uca_phantom_communicate_unpack_ximg(gpointer data)
             break;
         }
 
-        // Unpack the image
-        if (cine_data->ImgFormat == IMG_P10) {
-            if (!uca_phantom_communicate_unpack_image_p10(self, cine_data, &sub_error)) {
-                g_propagate_error(&phantom_error, sub_error);
-                return phantom_error;
-            }
-        } else if (cine_data->ImgFormat == IMG_P12L) {
-            if (!uca_phantom_communicate_unpack_image_p12l(self, cine_data, &sub_error)) {
-                g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Error while unpacking image, %s\n", sub_error->message);
-                g_propagate_error(&phantom_error, sub_error);
-                return phantom_error;
-            }
-        } else {
+        gsize input_size = cine_data->SizePerImageRaw * cine_data->NbImages;
+        gsize output_size = cine_data->SizePerImageUnpacked * cine_data->NbImages;
+        
+        // Allocate memory for the unpacked image
+        cine_data->UnpackedImages = g_malloc0(output_size);
+        if (cine_data->UnpackedImages == NULL) {
+            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_UNPACK_IMAGE,
+                "Failed to allocate memory for unpacked image");
+            g_propagate_error(&sub_error, phantom_error);
+            return sub_error;
+        }
+
+        guint count = 0, remaining_images = cine_data->NbImages, start_index = 0;
+        guint nb_images_per_thread = cine_data->NbImages / MAX_NB_UNPACK_WORKERS;
+
+        // g_warning ("Nb images per thread: %d\n", cine_data->NbImages);
+
+        // Assing unpack_image_p12l to a general function pointer
+        gboolean (*unpack_images)(guint8*, guint16*, gsize) = NULL;
+        if (cine_data->ImgFormat == IMG_P12L) {
+            unpack_images = unpack_image_p12l;
+        }
+        else {
             g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_UNPACK_IMAGE,
                 "Image format not supported over 10Gb Ethernet.");
             return phantom_error;
         }
+
+        gboolean error_occurred = FALSE;
+
+        // Use openMp to parallelize the unpacking
+        #pragma omp parallel num_threads(MAX_NB_UNPACK_WORKERS) private(sub_error)
+        {
+            gint tid = omp_get_thread_num();
+            gint num_threads = omp_get_num_threads();
+            gint images_per_thread = cine_data->NbImages / num_threads;
+            gint start_image = tid * images_per_thread;
+            gint end_image = (tid == num_threads - 1) ? cine_data->NbImages : start_image + images_per_thread;
+
+            guint start_index = start_image * cine_data->NbPixelsPerImage;
+            guint count = (end_image - start_image + 1) * cine_data->NbPixelsPerImage;
+            
+            g_print ("Thread %d: start_index: %d, count: %d\n", tid, start_index, count);
+            gboolean retval = unpack_images(
+                cine_data->RawImages + start_index, cine_data->UnpackedImages + start_index, count);
+            
+            error_occurred |= !retval;
+        }
+
+        if (error_occurred) {
+            g_set_error(&phantom_error, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_UNPACK_IMAGE,
+                "Error occurred while unpacking images");
+            return phantom_error;
+        }
+
+        // Push the unpacked image to the ring buffer
+        ringbuf_push(self->unpacked_ring_buffer, cine_data->UnpackedImages, output_size);
 
         // Free the cine data
         g_free(cine_data);
