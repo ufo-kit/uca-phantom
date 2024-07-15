@@ -5,6 +5,9 @@
 
 #include <glib-object.h>
 
+#define VERBOSE "verbose"
+#define PERFORMANCE "performance"
+
 typedef struct {
     const gchar *name;
     GType        type;

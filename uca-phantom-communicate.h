@@ -177,12 +177,14 @@ typedef struct{
     gdouble exposure_time;
 
     // phantom specific properties
+    guint window_width, window_height;
     gfloat focal_length, aperture;
     guint edr_exp; // EDR exposure time
-    gboolean shutter_off;
+    gboolean shutter_off, crop;
     guint nb_post_trigger_frames, nb_pre_trigger_frames;
     guint current_cine; // Current cine number in which the camera is recording
     gfloat aexpcomp; // Auto exposure compensation
+
 
     AutoexpMode aexpmode;
     UcaCameraTriggerSource trigger_source;
@@ -454,6 +456,24 @@ gboolean uca_phantom_communicate_grab_live_image (UcaPhantomCommunicate* self, g
  * @return gboolean TRUE if the readout was successfully stopped, FALSE otherwise
  */
 gboolean uca_phantom_communicate_grab_timestamp (UcaPhantomCommunicate* self, guint64 *time, TimestampFormat format, GError** error_loc);
+
+
+/**
+ * Retrieves the resolution of the UcaPhantomCommunicate instance.
+ *
+ * This function retrieves the width and height of the UcaPhantomCommunicate instance,
+ * which represents the resolution of the communication.
+ *
+ * @param self The UcaPhantomCommunicate instance.
+ * @param width A pointer to store the width of the resolution.
+ * @param height A pointer to store the height of the resolution.
+ * @param error_loc A pointer to a GError pointer to store any error that occurred during the operation.
+ * 
+ * @return TRUE if the resolution was successfully retrieved, FALSE otherwise.
+ */
+gboolean uca_phantom_communicate_get_resolution (UcaPhantomCommunicate *self, guint16 *width, guint16 *height, GError **error_loc);
+
+
 /**
  * @brief The flags that represent phantom unit variables.
  *
