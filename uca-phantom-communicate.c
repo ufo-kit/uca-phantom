@@ -239,8 +239,6 @@ static void uca_phantom_communicate_constructed(GObject* object);
 static void uca_phantom_communicate_dispose(GObject* object);
 static void uca_phantom_communicate_finalize(GObject* object);
 
-static gboolean uca_phantom_communicate_get_resolution(UcaPhantomCommunicate* self, guint16* width, guint16* height,
-    GError** error_loc);
 static GParamSpec* uca_phantom_communicate_properties[N_COM_PROPERTIES] = {
     NULL,
 };
@@ -1311,7 +1309,7 @@ gboolean uca_phantom_communicate_set_variable(UcaPhantomCommunicate* self, guint
     return TRUE;
 }
 
-static gboolean uca_phantom_communicate_get_resolution(UcaPhantomCommunicate* self, guint16* width, guint16* height,
+gboolean uca_phantom_communicate_get_resolution(UcaPhantomCommunicate* self, guint16* width, guint16* height,
     GError** error_loc)
 {
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);

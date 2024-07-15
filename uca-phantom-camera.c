@@ -157,6 +157,8 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
 
     gboolean result = FALSE;
 
+    GMainLoop *loop = g_main_loop_new (NULL, FALSE);
+
     if ((priv->settings.timestamp_format != TS_NONE || priv->liveimages || !priv->xenabled) && !priv->data_connected) {
         g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Connecting to the datastream\n");
         result = uca_phantom_communicate_connect_datastream (priv->communicator, &internal_error);
@@ -282,6 +284,8 @@ uca_phantom_camera_trigger (UcaCamera *camera,
 
     CaptureSettings settings = priv->settings;
 
+    g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Triggering camera\n");
+
     if (priv->liveimages) {
         settings.current_cine = -1;
         g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Triggering preview cine\n");
@@ -297,13 +301,13 @@ uca_phantom_camera_trigger (UcaCamera *camera,
     gdouble time_to_record = min_frames * period;
 
     // Arm the camera
-    res = uca_phantom_communicate_delete_cine(priv->communicator, settings.current_cine, &internal_error);
+    // Not sure this is useful ? Makes the cine reusable ?
+    res = uca_phantom_communicate_release_cine(priv->communicator, settings.current_cine, &internal_error);
     if (res != TRUE && internal_error != NULL) {
         g_propagate_error (error, internal_error);
         return;
     }
-    // Not sure this is useful ? Makes the cine reusable ?
-    res = uca_phantom_communicate_release_cine(priv->communicator, settings.current_cine, &internal_error);
+    res = uca_phantom_communicate_delete_cine(priv->communicator, settings.current_cine, &internal_error);
     if (res != TRUE && internal_error != NULL) {
         g_propagate_error (error, internal_error);
         return;
@@ -448,6 +452,49 @@ uca_phantom_camera_grab (UcaCamera *camera,
 /**
  *
  */
+static gboolean
+uca_phantom_camera_grab_with_metadata (UcaCamera *camera,
+                         gpointer data,
+                         GHashTable *metadata,
+                         GError **error) {   
+    UcaPhantomCameraPrivate *priv;
+    priv = UCA_PHANTOM_CAMERA_GET_PRIVATE (camera);
+
+    g_object_get(camera, "trigger-source", &(priv->settings.trigger_source), NULL);
+
+    if (priv->settings.trigger_source == UCA_CAMERA_TRIGGER_SOURCE_AUTO){
+        uca_phantom_camera_trigger(camera, error);
+    }
+
+    if (priv->liveimages) {
+        // grab a live image without saving in a cine
+        g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Grabbing a live image\n");
+        return uca_phantom_camera_grab_live (camera, data, error);
+    }
+
+    if (!uca_phantom_communicate_grab_image (priv->communicator, data, error)) {
+        return FALSE;
+    }
+
+    // Add metadata
+    guint64 timestamp;
+    gboolean res = uca_phantom_communicate_grab_timestamp (priv->communicator, &timestamp, priv->settings.current_cine, error);
+    if (res != TRUE) {
+        return FALSE;
+    }
+
+    if (metadata != NULL) {
+        g_hash_table_insert (metadata, "timestamp", GUINT64_TO_POINTER (timestamp));
+    }
+
+    priv->cine_tracker[priv->settings.current_cine] += 1;
+  
+    return TRUE;
+}
+
+/**
+ *
+ */
 static void
 uca_phantom_camera_set_property (GObject *object,
                                  guint property_id,
@@ -474,6 +521,17 @@ uca_phantom_camera_set_property (GObject *object,
         case PROP_HAS_STREAMING: // Nothing to do, this is a read-only property
         case PROP_HAS_CAMRAM_RECORDING:
             // Nothing to do, this is a read-only property
+            break;
+        case PROP_EXPOSURE_TIME:
+            priv->settings.exposure_time = g_value_get_double (value);
+            g_print ("Exposure time: %f\n", priv->settings.exposure_time);
+            // convert seconds to nanoseconds
+            guint exposure_time_ns = priv->settings.exposure_time * 1e9;
+            g_print ("Exposure time: %d\n", exposure_time_ns);
+            gchar* exposure_time = g_strdup_printf("%d", exposure_time_ns);
+            if (priv->control_connected)
+                res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_EXP, exposure_time, &internal_error);
+            g_free(exposure_time);
             break;
         case PROP_IP_SOURCE:
             priv->ip_source = g_value_get_enum (value);
@@ -693,28 +751,29 @@ uca_phantom_camera_get_property (GObject *object,
 
     GError *internal_error = NULL;
 
-
     switch (property_id) {
         // Use all properties defined in base_overrideables
-        case PROP_SENSOR_PHYSICAL_WIDTH:
+        case PROP_SENSOR_PHYSICAL_WIDTH: // Nothing to do, this is a read-only property
             g_value_set_double (value, priv->sensor_physical_width);
             break;
-        case PROP_SENSOR_PHYSICAL_HEIGHT:
+        case PROP_SENSOR_PHYSICAL_HEIGHT: // Nothing to do, this is a read-only property
             g_value_set_double (value, priv->sensor_physical_height);
             break;
-        case PROP_MAX_SENSOR_RESOLUTION_WIDTH:
-            g_value_set_uint (value, priv->max_sensor_resolution_width);
+        case PROP_MAX_SENSOR_RESOLUTION_WIDTH: 
+            g_object_get_property (object, "info-xmax", value);
             break;
         case PROP_MAX_SENSOR_RESOLUTION_HEIGHT:
-            g_value_set_uint (value, priv->max_sensor_resolution_height);
+            g_object_get_property (object, "info-ymax", value);
             break;
         case PROP_NAME:
             g_value_set_string (value, priv->name);
             break;
         case PROP_SENSOR_WIDTH:
+            uca_phantom_communicate_get_resolution (priv->communicator, &priv->settings.sensor_width, &priv->settings.sensor_height, &internal_error);
             g_value_set_uint (value, priv->settings.sensor_width);
             break;
         case PROP_SENSOR_HEIGHT:
+            uca_phantom_communicate_get_resolution (priv->communicator, &priv->settings.sensor_width, &priv->settings.sensor_height, &internal_error);
             g_value_set_uint (value, priv->settings.sensor_height);
             break;
         case PROP_SENSOR_PIXEL_WIDTH:
@@ -724,13 +783,15 @@ uca_phantom_camera_get_property (GObject *object,
             g_value_set_double (value, sensor_pixel_height);
             break;
         case PROP_SENSOR_BITDEPTH:
+            g_object_get_property (object, "info-mdepths", value);
+            priv->settings.sensor_bit_depth = __builtin_ctz (g_value_get_uint (value));
             g_value_set_uint (value, priv->settings.sensor_bit_depth);
             break;
         case PROP_SENSOR_HORIZONTAL_BINNING:
-            g_value_set_uint (value, 1); // TODO
+            g_object_get_property (object, "info-xinc", value);
             break;
         case PROP_SENSOR_VERTICAL_BINNING:
-            g_value_set_uint (value, 1); // TODO
+            g_object_get_property (object, "info-yinc", value);
             break;
         case PROP_IP_SOURCE:
             if (priv->communicator != NULL)
@@ -745,37 +806,47 @@ uca_phantom_camera_get_property (GObject *object,
             g_value_set_enum (value, priv->settings.trigger_type);
             break;
         case PROP_EXPOSURE_TIME:
-            g_value_set_double (value, priv->settings.exposure_time);
+            g_object_get_property (object, "defc-exp", value);
+            g_value_set_double (value, g_value_get_uint (value) * 1e-9); // convert ns to s
+            priv->settings.exposure_time = g_value_get_double (value);
             break;
         case PROP_FRAMES_PER_SECOND:
-            g_value_set_double (value, priv->settings.frames_per_second);
+            g_object_get_property (object, "defc-rate", value);
+            priv->settings.frames_per_second = g_value_get_double (value);
             break;
         case PROP_WINDOW_WIDTH:
-            g_value_set_uint (value, priv->settings.window_width);
+            g_object_get_property (object, "defc-meta-w", value);
+            priv->settings.window_width = g_value_get_uint (value);
             break;
         case PROP_WINDOW_HEIGHT:
-            g_value_set_uint (value, priv->settings.window_height);
+            g_object_get_property (object, "defc-meta-h", value);
+            priv->settings.window_height = g_value_get_uint (value);
             break;
         case PROP_CROP:
-            g_value_set_boolean (value, priv->settings.crop);
+            g_object_get_property (object, "defc-meta-crop", value);
+            priv->settings.crop = g_value_get_boolean (value);
             break;
         case PROP_ROI_X:
-            g_value_set_uint (value, priv->settings.roi_x0);
+            g_object_get_property (object, "defc-meta-ox", value);
+            priv->settings.roi_x0 = g_value_get_uint (value);
             break;
         case PROP_ROI_Y:
-            g_value_set_uint (value, priv->settings.roi_y0);
+            g_object_get_property (object, "defc-meta-oy", value);
+            priv->settings.roi_y0 = g_value_get_uint (value);
             break;
         case PROP_ROI_WIDTH:
-            g_value_set_uint (value, priv->settings.roi_width);
+            g_object_get_property (object, "defc-meta-ow", value);
+            priv->settings.roi_width = g_value_get_uint (value);
             break;
         case PROP_ROI_HEIGHT:
-            g_value_set_uint (value, priv->settings.roi_height);
+            g_object_get_property (object, "defc-meta-oh", value);
+            priv->settings.roi_height = g_value_get_uint (value);
             break;
         case PROP_ROI_WIDTH_MULTIPLIER:
-            g_value_set_uint (value, priv->roi_width_multiplier);
+            g_object_get_property (object, "info-xinc", value);
             break;
         case PROP_ROI_HEIGHT_MULTIPLIER:
-            g_value_set_uint (value, priv->roi_height_multiplier);
+            g_object_get_property (object, "info-yinc", value);
             break;
         case PROP_HAS_STREAMING:
             g_value_set_boolean (value, priv->has_streaming);
@@ -788,19 +859,23 @@ uca_phantom_camera_get_property (GObject *object,
             break;
         // End of base_overrideables
         case PROP_NB_POST_TRIGGER_FRAMES:
-            g_value_set_uint (value, priv->settings.nb_post_trigger_frames);
+            g_object_get_property (object, "defc-ptframes", value);
+            priv->settings.nb_post_trigger_frames = g_value_get_uint (value);
             break;
         case PROP_NB_PRE_TRIGGER_FRAMES:
-            g_value_set_uint (value, priv->settings.nb_pre_trigger_frames);
+            g_value_set_uint (value, priv->settings.nb_pre_trigger_frames); // Requested when triggered
             break;
         case PROP_SYNC_MODE:
-            g_value_set_enum (value, priv->settings.sync_mode);
+            g_object_get_property (object, "cam-syncimg", value);
+            priv->settings.sync_mode = g_value_get_uint (value);
             break;
         case PROP_ACQUISITION_MODE:
-            g_value_set_enum (value, priv->settings.acquisition_mode);
+            g_object_get_property (object, "cam-mode", value);
+            priv->settings.acquisition_mode = g_value_get_uint (value);
             break;
         case PROP_AUTO_EXPOSURE_MODE:
-            g_value_set_enum (value, priv->settings.aexpmode);
+            g_object_get_property (object, "defc-aexpmode", value);
+            priv->settings.aexpmode = g_value_get_uint (value);
             break;
         case PROP_IMAGE_FORMAT:
             g_value_set_enum (value, priv->settings.image_format);
@@ -818,7 +893,7 @@ uca_phantom_camera_get_property (GObject *object,
             g_value_set_boolean (value, priv->liveimages);
             break;
         case PROP_NUM_CINES:
-            g_value_set_uint (value, priv->numcines);
+            g_object_get_property (object, "cam-cines", value);
             break;
         case PROP_EARLYIMG:
             g_value_set_boolean (value, priv->earlyimg);
@@ -925,7 +1000,7 @@ uca_phantom_camera_initable_init (GInitable *initable,
 
     // Init base class properties
     priv->name = g_strdup ("Phantom Camera");
-    priv->has_streaming = FALSE;
+    priv->has_streaming = TRUE;
     priv->has_camram_recording = TRUE;
     priv->liveimages = FALSE;
     priv->xenabled = FALSE;
