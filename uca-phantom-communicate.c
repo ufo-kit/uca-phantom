@@ -2808,7 +2808,10 @@ static gpointer uca_phantom_communicate_unpack_ximg(gpointer data)
             gboolean retval = unpack_images(
                 cine_data->RawImages + start_index, cine_data->UnpackedImages + start_index, count);
             
-            error_occurred |= !retval;
+            #pragma omp atomic write
+            {
+                error_occurred |= !retval;
+            }
         }
 
         if (error_occurred) {
