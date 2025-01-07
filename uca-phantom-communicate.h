@@ -7,6 +7,31 @@
 
 G_BEGIN_DECLS
 
+// Max number of bytes that can be sent in a single request
+#ifndef USER_MAX_NETWORK_REQUEST_SIZE
+#define USER_MAX_NETWORK_REQUEST_SIZE 500e+6 // Maximum size of request bundle
+#endif
+// Max number of images that can be stored in the live images ring buffer
+#ifndef USER_MAX_BUFFERED_IMAGES
+#define USER_MAX_BUFFERED_IMAGES 40 // Maximum number of buffered images
+#endif
+// libpcap timeout
+#ifndef USER_PCAP_TIMEOUT
+#define USER_PCAP_TIMEOUT 5000  // ms
+#endif
+// Throttle based on the the number of images grabbed by user or the number of images received
+#ifndef USER_NO_DROP
+#define USER_NO_DROP FALSE
+#endif
+// Throttling performance
+#ifndef USER_THROTTLE_FACTOR
+#define USER_THROTTLE_FACTOR .75
+#endif
+// Max number of threads for openmp unpacking
+#ifndef USER_NUM_THREADS
+#define USER_NUM_THREADS 16
+#endif
+
 #define UCA_TYPE_PHANTOM_COMMUNICATE (uca_phantom_communicate_get_type ())
 G_DECLARE_FINAL_TYPE (UcaPhantomCommunicate, uca_phantom_communicate, UCA, PHANTOM_COMMUNICATE, GObject)
 

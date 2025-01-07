@@ -6,7 +6,7 @@
  * @author Gabriel Lefloch
  */
 
-// GLib and GObject related includes
+// Standard libraries
 #include <gio/gio.h>
 #include <glib-object.h>
 #include <gmodule.h>
@@ -15,10 +15,11 @@
 #include <time.h>
 #include <unistd.h>
 
-// Intel intrinsics
+// Accelerated image unpacking
 #include <nmmintrin.h>
+#include <omp.h>
 
-// Network related includes
+// Networking
 #include <linux/if.h>
 #include <pcap.h>
 #include <sys/ioctl.h>
@@ -27,29 +28,26 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 
-#include <omp.h>
-
 #include "uca-phantom-variables.h"
 #include "uca-phantom-commands.h"
 #include "uca-phantom-communicate.h"
 #include "ringbuf.h"
 
-// Note: if you wish to screw everything up, please tweak the following macros
+// Note: if you wish to screw everything up, please tweak this macro
 #define ETHERNET_HEADER_SIZE 32 // 16 bytes for L1 ethernet header, 16 bytes for custom header
-#define MAX_BUNDLE_SIZE 500e+6 // Maximum size of request bundle
-#define MAX_KERNEL_BUF_SIZE 2e+9 // 2 Gbyte
-#define MAX_HEAP_BUF_SIZE MAX_KERNEL_BUF_SIZE
+#define MAX_KERNEL_BUF_SIZE 2e+9 // Maximum size of kernel buffer (uint32_t)
 
-// #define USE_MEMPOOL 1
-
-#define MAX_NB_IMAGES_BUFFERING 40
-/**
- * TODO:
- * - Verify the requested data size is smaller than the available space in the
- * camera cine
- * - Checkout the memread, external pins and whatnot
- * - Implement cancelable functions
- */
+#define MAX_NETWORK_REQUEST_SIZE (USER_MAX_NETWORK_REQUEST_SIZE > MAX_KERNEL_BUF_SIZE ? \
+                                  MAX_KERNEL_BUF_SIZE : USER_MAX_NETWORK_REQUEST_SIZE)
+#define MAX_BUFFERED_IMAGES      (USER_MAX_BUFFERED_IMAGES > 40 || USER_MAX_BUFFERED_IMAGES < 2 ? \
+                                  40 : USER_MAX_BUFFERED_IMAGES)
+#define PCAP_TIMEOUT             (USER_PCAP_TIMEOUT > 5000 || USER_PCAP_TIMEOUT < 0 ? \
+                                  5000 : USER_PCAP_TIMEOUT)
+#define THROTTLE_FACTOR          (USER_THROTTLE_FACTOR > 1 || USER_THROTTLE_FACTOR < 0 ? \
+                                  .75 : USER_THROTTLE_FACTOR)
+#define NUM_THREADS              (USER_NUM_THREADS > 16 || USER_NUM_THREADS < 1 ? \
+                                  16 : USER_NUM_THREADS)
+#define NO_DROP USER_NO_DROP
 
 /**
  * @defgroup NetworkStructures Network related structures
@@ -1558,7 +1556,7 @@ gboolean uca_phantom_communicate_connect_xdatastream(UcaPhantomCommunicate* self
     // Set the capture options
     pcap_set_snaplen(self->handle, 2048); // packets seem to be of size 1504
     pcap_set_promisc(self->handle, FALSE);
-    pcap_set_timeout(self->handle, 5000);
+    pcap_set_timeout(self->handle, PCAP_TIMEOUT);
     pcap_set_rfmon(self->handle, FALSE);
 
     pcap_set_buffer_size(self->handle, MAX_KERNEL_BUF_SIZE);
@@ -1959,7 +1957,7 @@ gboolean throttled_requester (UcaPhantomCommunicate *self, CineInfo *info, GErro
     gsize ImageSize = nb_pixels * ImageFormatSpecs[settings.image_format].byte_depth;
 
     gsize frame_size = ImageSize + ETHERNET_HEADER_SIZE;
-    guint MaxNumberImagesPerRequest = MAX_BUNDLE_SIZE / frame_size;
+    guint MaxNumberImagesPerRequest = MAX_NETWORK_REQUEST_SIZE / frame_size;
 
     guint count = 0, total = 0;
 
@@ -2072,12 +2070,14 @@ gboolean throttled_requester (UcaPhantomCommunicate *self, CineInfo *info, GErro
         // This does the actual throttling
         guint64 time = g_get_monotonic_time();
         if (wait_for_grab) {
-            // guint reduced_count = count * .75;
-            // for (guint i=0; i<reduced_count; i++) {
+            #if NO_DROP
+            guint reduced_count = count * THROTTLE_FACTOR;
+            for (guint i=0; i<reduced_count; i++) {
+                g_async_queue_pop (self->throttle_queue);
+            }
+            #else
             g_async_queue_pop (self->throttle_queue);
-            // }
-            // Clear the queue
-            // while (!g_async_queue_try_pop_unlocked (self->throttle_queue)) { /* Do nothing */ }
+            #endif
         }
         
         #ifdef PERFORMANCE
@@ -2491,7 +2491,7 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
     g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Thread %p: Buffering thread started\n", g_thread_self());
 
     #ifdef USE_MEMPOOL
-    gsize buffer_size = MAX_BUNDLE_SIZE;
+    gsize buffer_size = MAX_NETWORK_REQUEST_SIZE;
     mempool_t *mempool = mempool_init(buffer_size, 2);
     if (mempool == NULL) {
         g_warning("Failed to create mempool\n");
@@ -2625,8 +2625,6 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
         g_log (PERFORMANCE, G_LOG_LEVEL_INFO,"xrcv (start usec, end usec, bytes read): %ld,%ld,%ld\n", start_time, end_time, bytes_read);
         #endif
 
-
-        // Split image in 
         CineData* cine_data = g_new0(CineData, 1);
         cine_data->ImgFormat = request->img_format;
 
@@ -2640,13 +2638,15 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
         cine_data->RawImages = buffer;
         cine_data->UnpackedImages = NULL;
 
-        // Add the data to the queue
         g_async_queue_push(self->packed_queue, cine_data);
+
+        #if NO_DROP
+        #else
         g_async_queue_push(self->throttle_queue, cine_data);
+        #endif
 
         g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"\t>Thread %p: Request pushed to the receiver threads\n", g_thread_self());
 
-        // Free the request
         uca_phantom_communicate_free_request(request);
     }
 
@@ -2794,7 +2794,7 @@ static gboolean unpack_image_p12l(guint8 *input, guint16 *output, guint64 total_
     }
 
     const guint nb_pixels_per_register = 8;
-    const guint nb_workers = 16;
+    const guint nb_workers = NUM_THREADS;
     const guint nb_registers = total_pixels / nb_pixels_per_register; // in number of registers
 
     __m128i input_register, shifted0, shifted1, result;
@@ -3064,7 +3064,7 @@ gboolean uca_phantom_communicate_start_readout (
     if (live_images) {
         g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"\t>Starting live thread\n");
         if (self->live_ring_buffer == NULL)
-            self->live_ring_buffer = ringbuf_new (MAX_NB_IMAGES_BUFFERING * image_size, TRUE);
+            self->live_ring_buffer = ringbuf_new (MAX_BUFFERED_IMAGES * image_size, TRUE);
         else {
             ringbuf_reset (self->live_ring_buffer);
         }
@@ -3130,7 +3130,10 @@ gboolean uca_phantom_communicate_grab_image(UcaPhantomCommunicate* self, gpointe
 {
     static guint count = 0;
     static gsize image_size = 0;
-    // g_async_queue_push(self->throttle_queue, &count);
+    
+    #if NO_DROP
+    g_async_queue_push(self->throttle_queue, NULL);
+    #endif
 
     // copy the image data to the output buffer
     // CAUTION : no verification is done on the size of the output buffer...

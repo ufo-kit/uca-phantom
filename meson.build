@@ -5,6 +5,14 @@ project(
 
 c_args = ['-fopenmp', '-O2', '-D_GNU_SOURCE','-Wall', '-Wextra', '-fPIC', '-msse4', '-maes']
 
+c_args += '-DUSER_USE_MEMPOOL=@0@'.format(get_option('use_mempool').to_int())
+c_args += '-DUSER_MAX_NETWORK_REQUEST_SIZE=@0@'.format(get_option('max_network_request_size'))
+c_args += '-DUSER_MAX_BUFFERED_IMAGES=@0@'.format(get_option('max_buffered_images'))
+c_args += '-DUSER_PCAP_TIMEOUT=@0@'.format(get_option('pcap_timeout'))
+c_args += '-DUSER_THROTTLE_FACTOR=@0@'.format(get_option('throttle_factor'))
+c_args += '-DUSER_NUM_THREADS=@0@'.format(get_option('num_threads'))
+c_args += '-DUSER_NO_DROP=@0@'.format(get_option('no_drop').to_int())
+
 gnome = import('gnome')
 
 uca_dep = dependency('libuca', version: '>= 2.0')
@@ -14,12 +22,6 @@ gobject_dep = dependency('gobject-2.0', version: '>= 2.64.6')
 gmodule_dep = dependency('gmodule-2.0', version: '>= 2.38')
 libpcap = dependency('libpcap', version: '>= 1.0')
 openmp_dep = dependency('openmp')
-# hdf5_lib = dependency('hdf5')
-# cc = meson.get_compiler('c')
-
-# # Manually specify the PF_RING include directories and libraries
-# pfring_inc = include_directories('/usr/include')
-# pfring_lib = cc.find_library('pfring', dirs: '/usr/lib')
 
 # Generate the enum types
 enum_sources = ['uca-phantom-communicate.h']
@@ -33,8 +35,6 @@ enums_c = enum_files[0]
 enums_h = enum_files[1]
 
 deps = [uca_dep, glib_dep, gio_dep, gobject_dep, libpcap, openmp_dep]
-# deps += [pfring_lib, hdf5_lib]
-
 headers = include_directories('.')
 uca_headers = include_directories('@0@/@1@/uca'.format(get_option('prefix'), 'include'))
 
@@ -56,5 +56,4 @@ phantom = library('ucaphantom',
     install_dir: plugindir,
 )
 
-# subdir('test')
 subdir('examples')

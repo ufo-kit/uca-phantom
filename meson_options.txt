@@ -1,0 +1,33 @@
+option('use_mempool',
+    type: 'boolean',
+    value: false,
+    description: 'Enable memory pooling for systems with limited memory. This will reduce memory usage at the cost of performance/drops.')
+option('max_network_request_size',
+    type: 'integer',
+    value: 500000000,
+    min:100000000,
+    max:1000000000,
+    description: 'Maximum number of bytes in a single 10gb image request. Max value is 2Gb.')
+option('max_buffered_images',
+    type: 'integer',
+    min:2,
+    max:40,
+    value: 20,
+    description: 'Max number of images that can be buffered before dropping in the live image mode. i.e. when streaming images from the camera.')
+option('pcap_timeout',
+    type: 'integer',
+    value: 1000,
+    description: 'PCAP timeout in milliseconds')
+option('throttle_factor',
+    type: 'string',
+    value: '.75',
+    description: 'Throttle factor. A value of 1 means that the program will wait for all images to be processed before sending the next request, a value of 0 means that the program will send requests to the phantom as fast as possible.')
+option('num_threads',
+    type: 'integer',
+    min:1,
+    value: 16,
+    description: 'Number of threads used to unpack images with OpenMP')
+option('no_drop',
+    type: 'boolean',
+    value: false,
+    description: 'Ensure no frames are dropped by waiting for the user to grab throttle_factor*available images before sending a new request. This reduces performance.')
