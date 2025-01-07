@@ -1,11 +1,27 @@
 #ifndef INCLUDED_RINGBUF_H
 #define INCLUDED_RINGBUF_H
 
+
+#define _GNU_SOURCE
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <linux/memfd.h>
+#include <sys/syscall.h>
+#include <sys/mman.h>
+#include <sys/types.h>
+#include <fcntl.h>
+
 #include <glib.h>
+
 
 #define MAX_BYTE_POWER_OF_TWO 3
 typedef guint64 ringbuf_max_gsize;
 #define PLATFORM_MAX_BYTES 1 << MAX_BYTE_POWER_OF_TWO
+
+
 
 /*
  * ringbuf.h - C ring buffer (FIFO) interface.
@@ -43,7 +59,7 @@ typedef struct _ringbuf_t ringbuf_t;
  * Returns the new ring buffer object, or 0 if there's not enough
  * memory to fulfill the request for the given capacity.
  */
-ringbuf_t *ringbuf_new (gsize size, gboolean block, GError **error);
+ringbuf_t *ringbuf_new (gsize size, gboolean block);
 
 /*
  * The size of the internal buffer, in bytes. One or more bytes may be
@@ -133,5 +149,10 @@ gboolean ringbuf_direct_copy (ringbuf_t *src, ringbuf_t *dst, gsize size);
 
 gconstpointer ringbuf_move_tail (ringbuf_t *rb, gsize size);
 gconstpointer ringbuf_move_head (ringbuf_t *rb, gsize size);
+
+gconstpointer ringbuf_reserve (ringbuf_t *rb, gsize size);
+void ringbuf_commit (ringbuf_t *rb);
+
+gsize ringbuf_wait_for_data (ringbuf_t *rb, gsize size);
 
 #endif /* INCLUDED_RINGBUF_H */

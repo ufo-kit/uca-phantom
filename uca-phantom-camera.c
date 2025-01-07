@@ -362,16 +362,10 @@ uca_phantom_camera_trigger (UcaCamera *camera,
         }
     }
 
-    // This is experimental
-    // does not yet work correctly
-    // Although, it does do something
-    if (settings.crop) {
-        settings.sensor_width = settings.roi_width;
-        settings.sensor_height = settings.roi_height;
-    }
-
     g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Going to request the images !");
-
+    guint64 nb_pixels = settings.sensor_width * settings.sensor_height;
+    guint64 nb_pixels_window = settings.window_width * settings.window_height;
+    
     res = !uca_phantom_communicate_request_images (
             priv->communicator, 
             settings,
@@ -520,15 +514,16 @@ uca_phantom_camera_set_property (GObject *object,
         case PROP_MAX_SENSOR_RESOLUTION_HEIGHT: // Nothing to do, this is a read-only property
         case PROP_HAS_STREAMING: // Nothing to do, this is a read-only property
         case PROP_HAS_CAMRAM_RECORDING:
+        case PROP_SENSOR_BITDEPTH:
             // Nothing to do, this is a read-only property
             break;
         case PROP_EXPOSURE_TIME:
             priv->settings.exposure_time = g_value_get_double (value);
             g_print ("Exposure time: %f\n", priv->settings.exposure_time);
             // convert seconds to nanoseconds
-            guint exposure_time_ns = priv->settings.exposure_time * 1e9;
+            guint64 exposure_time_ns = priv->settings.exposure_time * 1e9;
             g_print ("Exposure time: %d\n", exposure_time_ns);
-            gchar* exposure_time = g_strdup_printf("%d", exposure_time_ns);
+            gchar* exposure_time = g_strdup_printf("%ld", exposure_time_ns);
             if (priv->control_connected)
                 res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_EXP, exposure_time, &internal_error);
             g_free(exposure_time);
@@ -550,10 +545,6 @@ uca_phantom_camera_set_property (GObject *object,
             }
             g_free (resolution);
             break;
-        case PROP_SENSOR_BITDEPTH:
-            priv->settings.sensor_bit_depth = g_value_get_uint (value);
-            // Image format requested on trigger
-            break;
         case PROP_TRIGGER_SOURCE:
             priv->settings.trigger_source = g_value_get_enum (value);
             break;
@@ -573,21 +564,21 @@ uca_phantom_camera_set_property (GObject *object,
             break;
         case PROP_CROP:
             priv->settings.crop = g_value_get_boolean (value);
-            // gchar* crop_str = g_strdup_printf("%d", priv->settings.crop);
-            // if (priv->control_connected)
-            //     res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_CROP, crop_str, &internal_error);
-            // g_free (crop_str);
+            gchar* crop_str = g_strdup_printf("%d", priv->settings.crop);
+            if (priv->control_connected)
+                res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_CROP, crop_str, &internal_error);
+            g_free (crop_str);
             break;
         case PROP_ROI_X:
-            priv->settings.roi_x0 = g_value_get_int (value);
-            gchar* roi_x = g_strdup_printf("%d", priv->settings.roi_x0);
+            priv->settings.roi_x0 = g_value_get_uint (value);
+            gchar* roi_x = g_strdup_printf("%d", (gint)priv->settings.roi_x0 - priv->settings.window_width/2);
             if (priv->control_connected)
                 res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_OX, roi_x, &internal_error);
             g_free (roi_x);
             break;
         case PROP_ROI_Y:
-            priv->settings.roi_y0 = g_value_get_int (value);
-            gchar* roi_y = g_strdup_printf("%d", priv->settings.roi_y0);
+            priv->settings.roi_y0 = g_value_get_uint (value);
+            gchar* roi_y = g_strdup_printf("%d", (gint)priv->settings.roi_y0 - priv->settings.window_height/2);
             if (priv->control_connected)
                 res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_OY, roi_y, &internal_error);
             g_free (roi_y);
@@ -596,43 +587,44 @@ uca_phantom_camera_set_property (GObject *object,
             priv->settings.window_width = g_value_get_uint (value);
             gchar* w_str = g_strdup_printf ("%d", priv->settings.window_width);
             if (priv->control_connected)
-                res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_W, w_str, &internal_error);
+                res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_OW, w_str, &internal_error);
             g_free (w_str);
+            // if (priv->settings.window_width != priv->settings.sensor_width) {
+            //     g_object_set (object, "crop", TRUE, NULL);
+            // }
+            // else {
+            //     g_object_set (object, "crop", FALSE, NULL);
+            // }
             break;
         case PROP_WINDOW_HEIGHT:
             priv->settings.window_height = g_value_get_uint (value);
             gchar* h_str = g_strdup_printf ("%d", priv->settings.window_height);
             if (priv->control_connected)
-                res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_H, h_str, &internal_error);
+                res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_OH, h_str, &internal_error);
             g_free (h_str);
+            // if (priv->settings.window_height != priv->settings.sensor_height) {
+            //     g_object_set (object, "crop", TRUE, NULL);
+            //     g_print ("Cropping\n");
+            // }
+            // else {
+            //     g_object_set (object, "crop", FALSE, NULL);
+            //     g_print ("Not cropping\n");
+            // }
             break;
         case PROP_ROI_WIDTH:
             priv->settings.roi_width = g_value_get_uint (value);
             gchar* ow_str = g_strdup_printf ("%d", priv->settings.roi_width);
+            g_print ("ROI width: %d\n", priv->settings.roi_width);
             if (priv->control_connected)
-                res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_OW, ow_str, &internal_error);
+                res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_W, ow_str, &internal_error);
             g_free (ow_str);
-
-            if (priv->settings.roi_width < priv->settings.sensor_width) {
-                g_object_set (object, "crop", TRUE, NULL);
-            }
-            else {
-                g_object_set (object, "crop", FALSE, NULL);
-            }
             break;
         case PROP_ROI_HEIGHT:
             priv->settings.roi_height = g_value_get_uint (value);
             gchar* oh_str = g_strdup_printf ("%d", priv->settings.roi_height);
             if (priv->control_connected)
-                res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_OH, oh_str, &internal_error);
+                res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_H, oh_str, &internal_error);
             g_free (oh_str);
-
-            if (priv->settings.roi_height < priv->settings.sensor_height) {
-                g_object_set (object, "crop", TRUE, NULL);
-            }
-            else {
-                g_object_set (object, "crop", FALSE, NULL);
-            }
             break;
         /* End of base_overrideables */
         /* Start uca phantom specific */
@@ -670,8 +662,7 @@ uca_phantom_camera_set_property (GObject *object,
             break;
         case PROP_IMAGE_FORMAT:
             priv->settings.image_format = g_value_get_enum (value);
-	        guint bitdepth = priv->settings.image_format > 1 ? 16 : 8;
-            // Requested when triggered
+            priv->settings.sensor_bit_depth = ImageFormatSpecs[priv->settings.image_format].bit_depth;
             break;
         case PROP_TIMESTAMP_FORMAT:
             priv->settings.timestamp_format = g_value_get_enum (value);
@@ -783,8 +774,7 @@ uca_phantom_camera_get_property (GObject *object,
             g_value_set_double (value, sensor_pixel_height);
             break;
         case PROP_SENSOR_BITDEPTH:
-            g_object_get_property (object, "info-mdepths", value);
-            priv->settings.sensor_bit_depth = __builtin_ctz (g_value_get_uint (value));
+            // g_object_get_property (object, "info-mdepths", value);
             g_value_set_uint (value, priv->settings.sensor_bit_depth);
             break;
         case PROP_SENSOR_HORIZONTAL_BINNING:
@@ -807,19 +797,19 @@ uca_phantom_camera_get_property (GObject *object,
             break;
         case PROP_EXPOSURE_TIME:
             g_object_get_property (object, "defc-exp", value);
-            g_value_set_double (value, g_value_get_uint (value) * 1e-9); // convert ns to s
-            priv->settings.exposure_time = g_value_get_double (value);
+            priv->settings.exposure_time = g_value_get_double (value) * 1e9; // convert s to ns
+            g_value_set_double (value, priv->settings.exposure_time);
             break;
         case PROP_FRAMES_PER_SECOND:
             g_object_get_property (object, "defc-rate", value);
             priv->settings.frames_per_second = g_value_get_double (value);
             break;
         case PROP_WINDOW_WIDTH:
-            g_object_get_property (object, "defc-meta-w", value);
+            g_object_get_property (object, "defc-meta-ow", value);
             priv->settings.window_width = g_value_get_uint (value);
             break;
         case PROP_WINDOW_HEIGHT:
-            g_object_get_property (object, "defc-meta-h", value);
+            g_object_get_property (object, "defc-meta-oh", value);
             priv->settings.window_height = g_value_get_uint (value);
             break;
         case PROP_CROP:
@@ -828,18 +818,18 @@ uca_phantom_camera_get_property (GObject *object,
             break;
         case PROP_ROI_X:
             g_object_get_property (object, "defc-meta-ox", value);
-            priv->settings.roi_x0 = g_value_get_uint (value);
+            priv->settings.roi_x0 = g_value_get_uint (value) + priv->settings.window_width/2;
             break;
         case PROP_ROI_Y:
             g_object_get_property (object, "defc-meta-oy", value);
-            priv->settings.roi_y0 = g_value_get_uint (value);
+            priv->settings.roi_y0 = g_value_get_uint (value) + priv->settings.window_height/2;
             break;
         case PROP_ROI_WIDTH:
-            g_object_get_property (object, "defc-meta-ow", value);
+            g_object_get_property (object, "defc-meta-w", value);
             priv->settings.roi_width = g_value_get_uint (value);
             break;
         case PROP_ROI_HEIGHT:
-            g_object_get_property (object, "defc-meta-oh", value);
+            g_object_get_property (object, "defc-meta-h", value);
             priv->settings.roi_height = g_value_get_uint (value);
             break;
         case PROP_ROI_WIDTH_MULTIPLIER:
@@ -867,15 +857,15 @@ uca_phantom_camera_get_property (GObject *object,
             break;
         case PROP_SYNC_MODE:
             g_object_get_property (object, "cam-syncimg", value);
-            priv->settings.sync_mode = g_value_get_uint (value);
+            priv->settings.sync_mode = g_value_get_enum (value);
             break;
         case PROP_ACQUISITION_MODE:
             g_object_get_property (object, "cam-mode", value);
-            priv->settings.acquisition_mode = g_value_get_uint (value);
+            priv->settings.acquisition_mode = g_value_get_enum (value);
             break;
         case PROP_AUTO_EXPOSURE_MODE:
             g_object_get_property (object, "defc-aexpmode", value);
-            priv->settings.aexpmode = g_value_get_uint (value);
+            priv->settings.aexpmode = g_value_get_enum (value);
             break;
         case PROP_IMAGE_FORMAT:
             g_value_set_enum (value, priv->settings.image_format);
@@ -906,6 +896,9 @@ uca_phantom_camera_get_property (GObject *object,
                     if (res != TRUE && internal_error != NULL) {
                         g_warning ("Failed to get property %s: %s", g_param_spec_get_name (pspec), internal_error->message);
                         g_error_free (internal_error);
+                    }
+                    if (UNIT_DEFC_EXP == i_var) {
+                        g_print ("getting exposure time\n");
                     }
                 }
                 break;
@@ -1130,6 +1123,35 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
     for (guint i = 0; base_overrideables[i] != 0; i++) {
         g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
     }
+
+    // uca_phantom_camera_properties[PROP_ROI_X] =
+    //     g_param_spec_int(uca_camera_props[PROP_ROI_X],
+    //         "Horizontal coordinate",
+    //         "Horizontal coordinate of the center of the region of interest",
+    //         0, G_MAXINT, 0,
+    //         G_PARAM_READWRITE);
+
+    // uca_phantom_camera_properties[PROP_ROI_Y] =
+    //     g_param_spec_int(uca_camera_props[PROP_ROI_Y],
+    //         "Vertical coordinate",
+    //         "Vertical coordinate of the center of the region of interest",
+    //         0, G_MAXINT, 0,
+    //         G_PARAM_READWRITE);
+
+    // uca_phantom_camera_properties[PROP_ROI_WIDTH] =
+    //     g_param_spec_int(uca_camera_props[PROP_ROI_WIDTH],
+    //         "Width",
+    //         "Width of the region of interest in pixels",
+    //         1, G_MAXINT, 1,
+    //         G_PARAM_READWRITE);
+
+    // uca_phantom_camera_properties[PROP_ROI_HEIGHT] =
+    //     g_param_spec_int(uca_camera_props[PROP_ROI_HEIGHT],
+    //         "Height",
+    //         "Height of the region of interest in pixels",
+    //         1, G_MAXINT, 1,
+    //         G_PARAM_READWRITE);
+
     uca_phantom_camera_properties[PROP_IP_SOURCE] = 
         g_param_spec_enum ("ip-source",
                            "IP source",
@@ -1240,21 +1262,21 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
                             FALSE,
                             G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
     uca_phantom_camera_properties[PROP_WINDOW_WIDTH] =
-        g_param_spec_uint ("window-width",
-                            "window width",
-                            "The window specifies the captured area of the res of the sensor. \
-                            Use this in tandem with roi-width to scale the image. e.g. \
-                            Format: 1280x720 (crop 16:9), defc.res: 2048x1152, (w,h): (2048,1152), (ow, oh): (1280,720)",
-                            0, G_MAXUINT, 0,
-                            G_PARAM_READWRITE);
+        g_param_spec_uint("window-width",
+                         "window width",
+                         "The window specifies the captured area of the res of the sensor. \
+                         Use this in tandem with roi-width to scale the image. e.g. \
+                         Format: 1280x720 (crop 16:9), defc.res: 2048x1152, (w,h): (2048,1152), (ow, oh): (1280,720)",
+                         0, G_MAXUINT, 0,
+                         G_PARAM_READWRITE);
     uca_phantom_camera_properties[PROP_WINDOW_HEIGHT] =
-        g_param_spec_uint ("window-height",
-                            "window height",
-                            "The window specifies the captured area of the res of the sensor. \
-                            Use this in tandem with roi-width to scale the image. e.g. \
-                            Format: 1280x720 (crop 16:9), defc.res: 2048x1152, (w,h): (2048,1152), (ow, oh): (1280,720)",
-                            0, G_MAXUINT, 0,
-                            G_PARAM_READWRITE);
+        g_param_spec_uint("window-height",
+                         "window height",
+                         "The window specifies the captured area of the res of the sensor. \
+                         Use this in tandem with roi-width to scale the image. e.g. \
+                         Format: 1280x720 (crop 16:9), defc.res: 2048x1152, (w,h): (2048,1152), (ow, oh): (1280,720)",
+                         0, G_MAXUINT, 0,
+                         G_PARAM_READWRITE);
     uca_phantom_camera_properties[PROP_NUM_CINES] =
         g_param_spec_uint ("num-cines",
                             "Number of cines",
@@ -1273,6 +1295,20 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
                             "Start transfering images as soon as cine is flagged as triggered.",
                             TRUE,
                             G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
+
+    // uca_phantom_camera_properties[PROP_ROI_X] =
+    //     g_param_spec_uint("roi-x",
+    //         "Horizontal coordinate",
+    //         "Horizontal coordinate from the left edge of the region of interest",
+    //         0, G_MAXUINT, 0,
+    //         G_PARAM_READWRITE);
+
+    // uca_phantom_camera_properties[PROP_ROI_Y] =
+    //     g_param_spec_uint("roi-y",
+    //         "Vertical coordinate",
+    //         "Vertical coordinate from the top edge of the region of interest",
+    //         0, G_MAXUINT, 0,
+    //         G_PARAM_READWRITE);
 
     // Finally install all the phantom specific properties
     for (int i = N_PHANTOM_PROPERTIES; i < N_UNIT_PROPERTIES + N_PHANTOM_PROPERTIES; i++) {
@@ -1329,6 +1365,11 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
     for (guint id = N_BASE_PROPERTIES; id < N_UNIT_PROPERTIES; id++) {
         g_object_class_install_property (oclass, id, uca_phantom_camera_properties[id]);
     }
+
+    // g_object_class_install_property (oclass, PROP_ROI_X, uca_phantom_camera_properties[PROP_ROI_X]);
+    // g_object_class_install_property (oclass, PROP_ROI_Y, uca_phantom_camera_properties[PROP_ROI_Y]);
+    // g_object_class_install_property (oclass, PROP_ROI_WIDTH, uca_phantom_camera_properties[PROP_ROI_WIDTH]);
+    // g_object_class_install_property (oclass, PROP_ROI_HEIGHT, uca_phantom_camera_properties[PROP_ROI_HEIGHT]);
 
     g_type_class_add_private (klass, sizeof(UcaPhantomCameraPrivate));
 }

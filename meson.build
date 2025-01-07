@@ -3,7 +3,7 @@ project(
     'c',
     default_options:['c_std=c99' ])
 
-c_args = ['-O2', '-D_GNU_SOURCE','-Wall', '-Wextra', '-fPIC', '-msse4', '-maes']
+c_args = ['-fopenmp', '-O2', '-D_GNU_SOURCE','-Wall', '-Wextra', '-fPIC', '-msse4', '-maes']
 
 gnome = import('gnome')
 
@@ -13,6 +13,7 @@ glib_dep = dependency('glib-2.0', version: '>= 2.38')
 gobject_dep = dependency('gobject-2.0', version: '>= 2.64.6')
 gmodule_dep = dependency('gmodule-2.0', version: '>= 2.38')
 libpcap = dependency('libpcap', version: '>= 1.0')
+openmp_dep = dependency('openmp')
 # hdf5_lib = dependency('hdf5')
 # cc = meson.get_compiler('c')
 
@@ -31,7 +32,7 @@ enum_files = gnome.mkenums('phantom-enums',
 enums_c = enum_files[0]
 enums_h = enum_files[1]
 
-deps = [uca_dep, glib_dep, gio_dep, gobject_dep, libpcap]
+deps = [uca_dep, glib_dep, gio_dep, gobject_dep, libpcap, openmp_dep]
 # deps += [pfring_lib, hdf5_lib]
 
 headers = include_directories('.')
