@@ -35,7 +35,7 @@
 
 // Note: if you wish to screw everything up, please tweak this macro
 #define ETHERNET_HEADER_SIZE 32 // 16 bytes for L1 ethernet header, 16 bytes for custom header
-#define MAX_KERNEL_BUF_SIZE 2e+9 // Maximum size of kernel buffer (uint32_t)
+#define MAX_KERNEL_BUF_SIZE 2000000000 // Maximum size of kernel buffer (uint32_t)
 
 #define MAX_NETWORK_REQUEST_SIZE (USER_MAX_NETWORK_REQUEST_SIZE > MAX_KERNEL_BUF_SIZE ? \
                                   MAX_KERNEL_BUF_SIZE : USER_MAX_NETWORK_REQUEST_SIZE)
@@ -47,7 +47,8 @@
                                   .75 : USER_THROTTLE_FACTOR)
 #define NUM_THREADS              (USER_NUM_THREADS > 16 || USER_NUM_THREADS < 1 ? \
                                   16 : USER_NUM_THREADS)
-#define NO_DROP USER_NO_DROP
+#define USE_MEMPOOL               USER_USE_MEMPOOL
+#define NO_DROP                   USER_NO_DROP
 
 /**
  * @defgroup NetworkStructures Network related structures
@@ -410,6 +411,34 @@ static void uca_phantom_communicate_class_init(UcaPhantomCommunicateClass* class
     uca_phantom_communicate_properties[PROP_COM_PHANTOM_IPSOURCE] = g_param_spec_uint(
         "phantom_ipsource", "Set the IP source using IP flags", "Possible flags: USE_ENV, USE_CLASS, USE_DISCOVER.", 0,
         N_IP_FLAGS, USE_CLASS, G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
+
+    #if NO_DROP
+    g_print ("No drop is enabled\n");
+    #else
+    g_print ("No drop is disabled\n");
+    #endif
+
+    #if USE_MEMPOOL
+    g_print ("Mempool is enabled\n");
+    #else
+    g_print ("Mempool is disabled\n");
+    #endif
+
+    #ifdef MAX_NETWORK_REQUEST_SIZE
+    g_print ("Max network request size is %d\n", MAX_NETWORK_REQUEST_SIZE);
+    #endif
+    #ifdef MAX_BUFFERED_IMAGES
+    g_print ("Max buffered images is %d\n", MAX_BUFFERED_IMAGES);
+    #endif
+    #ifdef PCAP_TIMEOUT
+    g_print ("Max timeout is %d\n", PCAP_TIMEOUT);
+    #endif
+    #ifdef THROTTLE_FACTOR
+    g_print ("Max throttle factor is %f\n", THROTTLE_FACTOR);
+    #endif
+    #ifdef NUM_THREADS
+    g_print ("Max number of threads is %d\n", NUM_THREADS);
+    #endif
 
     g_object_class_install_properties(gobject_class, N_COM_PROPERTIES, uca_phantom_communicate_properties);
 }
@@ -1763,18 +1792,15 @@ gboolean uca_phantom_communicate_request_live_images (UcaPhantomCommunicate *sel
     // Request the datatransfer
     res = uca_phantom_communicate_run_command(self, command, request_format, NULL, error_loc);
 
-
     if (res != TRUE && error_loc != NULL) {
         g_free(additional);
         return FALSE;
     }
-
     
-
     g_free(request_format);
     g_free(additional);
 
-    g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Closing thread that requests buffered images\n");
+    g_log (VERBOSE, G_LOG_LEVEL_DEBUG, "Requesting live images done\n");
 
     return TRUE;
 }
@@ -2906,7 +2932,8 @@ static gpointer uca_phantom_communicate_unpack_ximg(gpointer data)
         g_log (PERFORMANCE, G_LOG_LEVEL_INFO,"xupack (start usec, end usec, bytes read): %ld,%ld,%ld\n", start_time, end_time, output_size);
 
         // Free the cine data
-        #ifndef USE_MEMPOOL
+        #ifdef USE_MEMPOOL
+        #else
         g_free(cine_data->RawImages);
         #endif
 

@@ -6,14 +6,17 @@ project(
 c_args = ['-fopenmp', '-O2', '-D_GNU_SOURCE','-Wall', '-Wextra', '-fPIC', '-msse4', '-maes']
 
 c_args += '-DUSER_USE_MEMPOOL=@0@'.format(get_option('use_mempool').to_int())
+c_args += '-DUSER_NO_DROP=@0@'.format(get_option('no_drop').to_int())
 c_args += '-DUSER_MAX_NETWORK_REQUEST_SIZE=@0@'.format(get_option('max_network_request_size'))
 c_args += '-DUSER_MAX_BUFFERED_IMAGES=@0@'.format(get_option('max_buffered_images'))
 c_args += '-DUSER_PCAP_TIMEOUT=@0@'.format(get_option('pcap_timeout'))
 c_args += '-DUSER_THROTTLE_FACTOR=@0@'.format(get_option('throttle_factor'))
 c_args += '-DUSER_NUM_THREADS=@0@'.format(get_option('num_threads'))
-c_args += '-DUSER_NO_DROP=@0@'.format(get_option('no_drop').to_int())
 
 gnome = import('gnome')
+
+# print out the arguments
+message('C args: @0@'.format(c_args))
 
 uca_dep = dependency('libuca', version: '>= 2.0')
 gio_dep = dependency('gio-2.0', version: '>= 2.22')

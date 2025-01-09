@@ -4,9 +4,9 @@ option('use_mempool',
     description: 'Enable memory pooling for systems with limited memory. This will reduce memory usage at the cost of performance/drops.')
 option('max_network_request_size',
     type: 'integer',
-    value: 500000000,
     min:100000000,
     max:1000000000,
+    value: 500000000,
     description: 'Maximum number of bytes in a single 10gb image request. Max value is 2Gb.')
 option('max_buffered_images',
     type: 'integer',

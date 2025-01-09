@@ -9,15 +9,19 @@ G_BEGIN_DECLS
 
 // Max number of bytes that can be sent in a single request
 #ifndef USER_MAX_NETWORK_REQUEST_SIZE
-#define USER_MAX_NETWORK_REQUEST_SIZE 500e+6 // Maximum size of request bundle
+#define USER_MAX_NETWORK_REQUEST_SIZE 500000000
 #endif
 // Max number of images that can be stored in the live images ring buffer
 #ifndef USER_MAX_BUFFERED_IMAGES
-#define USER_MAX_BUFFERED_IMAGES 40 // Maximum number of buffered images
+#define USER_MAX_BUFFERED_IMAGES 40
 #endif
 // libpcap timeout
 #ifndef USER_PCAP_TIMEOUT
 #define USER_PCAP_TIMEOUT 5000  // ms
+#endif
+// Use mempool
+#ifndef USER_USE_MEMPOOL
+#define USER_USE_MEMPOOL FALSE
 #endif
 // Throttle based on the the number of images grabbed by user or the number of images received
 #ifndef USER_NO_DROP
