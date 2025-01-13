@@ -109,7 +109,6 @@ struct _UcaPhantomCameraPrivate {
     gchar *name;
     gdouble sensor_pixel_width, sensor_pixel_height; // in meters
     guint max_sensor_resolution_width, max_sensor_resolution_height; // in pixels
-    gdouble sensor_physical_width, sensor_physical_height; // in meters
     guint expdead, xinc, yinc; // in ns
     guint internal_memory_size; // in MBytes
 
@@ -508,8 +507,6 @@ uca_phantom_camera_set_property (GObject *object,
         case PROP_SENSOR_PIXEL_HEIGHT: // Nothing to do, this is a read-only property
         case PROP_ROI_WIDTH_MULTIPLIER: // Nothing to do, this is a read-only property
         case PROP_ROI_HEIGHT_MULTIPLIER: // Nothing to do, this is a read-only property
-        case PROP_SENSOR_PHYSICAL_WIDTH: // Nothing to do, this is a read-only property
-        case PROP_SENSOR_PHYSICAL_HEIGHT: // Nothing to do, this is a read-only property
         case PROP_MAX_SENSOR_RESOLUTION_WIDTH: // Nothing to do, this is a read-only property
         case PROP_MAX_SENSOR_RESOLUTION_HEIGHT: // Nothing to do, this is a read-only property
         case PROP_HAS_STREAMING: // Nothing to do, this is a read-only property
@@ -519,10 +516,8 @@ uca_phantom_camera_set_property (GObject *object,
             break;
         case PROP_EXPOSURE_TIME:
             priv->settings.exposure_time = g_value_get_double (value);
-            g_print ("Exposure time: %f\n", priv->settings.exposure_time);
             // convert seconds to nanoseconds
             guint64 exposure_time_ns = priv->settings.exposure_time * 1e9;
-            g_print ("Exposure time: %d\n", exposure_time_ns);
             gchar* exposure_time = g_strdup_printf("%ld", exposure_time_ns);
             if (priv->control_connected)
                 res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_EXP, exposure_time, &internal_error);
@@ -744,12 +739,6 @@ uca_phantom_camera_get_property (GObject *object,
 
     switch (property_id) {
         // Use all properties defined in base_overrideables
-        case PROP_SENSOR_PHYSICAL_WIDTH: // Nothing to do, this is a read-only property
-            g_value_set_double (value, priv->sensor_physical_width);
-            break;
-        case PROP_SENSOR_PHYSICAL_HEIGHT: // Nothing to do, this is a read-only property
-            g_value_set_double (value, priv->sensor_physical_height);
-            break;
         case PROP_MAX_SENSOR_RESOLUTION_WIDTH: 
             g_object_get_property (object, "info-xmax", value);
             break;
@@ -797,7 +786,7 @@ uca_phantom_camera_get_property (GObject *object,
             break;
         case PROP_EXPOSURE_TIME:
             g_object_get_property (object, "defc-exp", value);
-            priv->settings.exposure_time = g_value_get_double (value) * 1e9; // convert s to ns
+            priv->settings.exposure_time = g_value_get_double (value) * 1e-9; // convert NS to S
             g_value_set_double (value, priv->settings.exposure_time);
             break;
         case PROP_FRAMES_PER_SECOND:
@@ -1077,8 +1066,6 @@ uca_phantom_camera_initable_init (GInitable *initable,
     priv->internal_memory_size = g_value_get_uint (&value);
     g_value_unset (&value);
 
-    priv->sensor_physical_width = priv->max_sensor_resolution_width * sensor_pixel_width;
-    priv->sensor_physical_height = priv->max_sensor_resolution_height * sensor_pixel_height;
     priv->sensor_pixel_width = sensor_pixel_width;
     priv->sensor_pixel_height = sensor_pixel_height;
 
@@ -1227,21 +1214,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
                               "X enabled",
                               TRUE,
                               G_PARAM_READWRITE);
-    
-    uca_phantom_camera_properties[PROP_SENSOR_PHYSICAL_HEIGHT] =
-        g_param_spec_double ("sensor-physical-height",
-                            "Sensor physical height",
-                            "Sensor physical height in meters",
-                            0, G_MAXDOUBLE, 0,
-                            G_PARAM_READABLE);
-    
-    uca_phantom_camera_properties[PROP_SENSOR_PHYSICAL_WIDTH] =
-        g_param_spec_double ("sensor-physical-width",
-                            "Sensor physical width",
-                            "Sensor physical width in meters",
-                            0, G_MAXDOUBLE, 0,
-                            G_PARAM_READABLE);
-    
+
     uca_phantom_camera_properties[PROP_MAX_SENSOR_RESOLUTION_WIDTH] =
         g_param_spec_uint ("max-sensor-resolution-width",
                             "Max sensor resolution width",
@@ -1319,6 +1292,8 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
         g_string_replace (name, ".", "-", 50);
         gchar *pname = g_string_free (name, FALSE);
 
+        g_print ("Registering %s\n", pname);
+
         if (unit.type == G_TYPE_STRING) {
             uca_phantom_camera_properties[i] = g_param_spec_string (pname,
                                                                     unit.description,
@@ -1365,12 +1340,7 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
     for (guint id = N_BASE_PROPERTIES; id < N_UNIT_PROPERTIES; id++) {
         g_object_class_install_property (oclass, id, uca_phantom_camera_properties[id]);
     }
-
-    // g_object_class_install_property (oclass, PROP_ROI_X, uca_phantom_camera_properties[PROP_ROI_X]);
-    // g_object_class_install_property (oclass, PROP_ROI_Y, uca_phantom_camera_properties[PROP_ROI_Y]);
-    // g_object_class_install_property (oclass, PROP_ROI_WIDTH, uca_phantom_camera_properties[PROP_ROI_WIDTH]);
-    // g_object_class_install_property (oclass, PROP_ROI_HEIGHT, uca_phantom_camera_properties[PROP_ROI_HEIGHT]);
-
+    
     g_type_class_add_private (klass, sizeof(UcaPhantomCameraPrivate));
 }
 
@@ -1421,6 +1391,35 @@ uca_phantom_camera_init (UcaPhantomCamera *self) {
     };    
     priv->data_connected = FALSE;
     priv->x_data_connected = FALSE;
+
+    uca_camera_register_unit (UCA_CAMERA (self), "postframes", UCA_UNIT_COUNT);
+    uca_camera_register_unit (UCA_CAMERA (self), "preframes", UCA_UNIT_COUNT);
+    uca_camera_register_unit (UCA_CAMERA (self), "max-sensor-resolution-width", UCA_UNIT_PIXEL);
+    uca_camera_register_unit (UCA_CAMERA (self), "max-sensor-resolution-height", UCA_UNIT_PIXEL);
+    uca_camera_register_unit (UCA_CAMERA (self), "window-width", UCA_UNIT_PIXEL);
+    uca_camera_register_unit (UCA_CAMERA (self), "window-height", UCA_UNIT_PIXEL);
+    uca_camera_register_unit (UCA_CAMERA (self), "num-cines", UCA_UNIT_COUNT);
+
+    // for (int i = N_PHANTOM_PROPERTIES; i < N_UNIT_PROPERTIES + N_PHANTOM_PROPERTIES; i++) {
+    //     guint i_var = i - N_PHANTOM_PROPERTIES;
+    //     PhantomUnit unit = variables[i_var];
+    //     // replace . in the name by -
+    //     GString *name = g_string_new (unit.name);
+    //     g_string_replace (name, ".", "-", 50);
+    //     gchar *pname = g_string_free (name, FALSE);
+
+    //     /* It would seem as though there are some weird things happening here
+    //      * If I don't check, some of the properties are raised as not being installed
+    //      * But if I do check, the properties are registered. Could this be a UCAD bug?
+    //      */
+    //     if (g_object_class_find_property(G_OBJECT_GET_CLASS(self), pname)) {
+    //         uca_camera_register_unit (UCA_CAMERA (self), pname, unit.unit);
+
+    //         g_print ("Registering unit of %s\n", pname);
+    //     }
+
+    //     g_free (pname);
+    // }
 }
 
 G_MODULE_EXPORT GType

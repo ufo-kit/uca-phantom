@@ -2101,6 +2101,8 @@ gboolean throttled_requester (UcaPhantomCommunicate *self, CineInfo *info, GErro
             for (guint i=0; i<reduced_count; i++) {
                 g_async_queue_pop (self->throttle_queue);
             }
+            // empty the queue
+            while (g_async_queue_try_pop (self->throttle_queue) != NULL);
             #else
             g_async_queue_pop (self->throttle_queue);
             #endif
@@ -2314,41 +2316,35 @@ static void uca_phantom_communicate_free_request(ImageRequest* request)
 
 static
 gboolean uca_phantom_communicate_receive_1gb_images (
-    UcaPhantomCommunicate* self, gpointer data, guint nb_frames, gsize size, gsize frame_size, ringbuf_t *rb, GError **error_loc) {
+    UcaPhantomCommunicate* self, gpointer data, gsize frame_size, GError **error_loc) {
 
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
 
     guint8 *buffer_pointer = data;
 
-    for (guint i_f = 0; i_f < nb_frames; i_f++) {
-        self->finished_receiving_1gb = FALSE;
+    g_mutex_lock (&self->control_connection_mutex);
+    self->finished_receiving_1gb = FALSE;
+    g_mutex_unlock (&self->control_connection_mutex);
 
-        gssize remaining_bytes = frame_size;
+    gssize remaining_bytes = frame_size;
 
-        while (remaining_bytes > 0) {
-            const gssize bytes_read = g_input_stream_read (self->input_datastream, buffer_pointer, remaining_bytes, NULL, error_loc);
-            if (bytes_read < 0) {
-                g_error ("Error reading image frame from datastream: \n");
-                return FALSE;
-            }
-            else if (bytes_read == 0) {
-                g_error ("End of stream reached\n");
-                return FALSE;
-            }
-            
-            buffer_pointer += bytes_read;
-            remaining_bytes -= bytes_read;
+    while (remaining_bytes > 0) {
+        const gssize bytes_read = g_input_stream_read (self->input_datastream, buffer_pointer, remaining_bytes, NULL, error_loc);
+        if (bytes_read < 0) {
+            g_error ("Error reading image frame from datastream: \n");
+            return FALSE;
         }
-
-        if (remaining_bytes != 0) {
-            g_error ("Failed to read all bytes of frame from datastream. expected %ld bytes.\n", frame_size);
+        else if (bytes_read == 0) {
+            g_error ("End of stream reached\n");
+            return FALSE;
         }
+        
+        buffer_pointer += bytes_read;
+        remaining_bytes -= bytes_read;
+    }
 
-        gpointer result = ringbuf_push (rb, data, frame_size);
-        if (result == NULL) {
-            g_error ("Error in the ring buffer...\n");
-            continue;
-        }
+    if (remaining_bytes != 0) {
+        g_error ("Failed to read all bytes of frame from datastream. expected %ld bytes.\n", frame_size);
     }
 
     // Unlock the input control stream to allow the next request
@@ -2378,7 +2374,6 @@ static gpointer uca_phantom_communicate_accept_img(gpointer data)
     g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Thread %p: 1Gb Buffering thread started\n", g_thread_self());
 
     gsize prev_packet_size = 0;
-    guint16* image_buffer = NULL;
     GError* sub_error = NULL;
 
     while (TRUE) {       
@@ -2403,31 +2398,21 @@ static gpointer uca_phantom_communicate_accept_img(gpointer data)
         gsize image_size = nb_pixels * byte_depth;
 
         gsize packet_size = image_size * request->nb_images; // the packed image packet size
+
+        guint8 *image_buffer = ringbuf_reserve (self->unpacked_ring_buffer, packet_size);
         
-        if (prev_packet_size < packet_size){
-            if (image_buffer != NULL){
-                g_free (image_buffer);
-            }
-            image_buffer = g_malloc0 (packet_size); // TODO: accept 16 or 8 bit images
-            if (image_buffer == NULL) {
-                g_error ("Failed to allocate memory for image buffer\n");
-                return NULL;
-            }
-        }
-        
-        gboolean result = uca_phantom_communicate_receive_1gb_images (self, image_buffer, request->nb_images, byte_depth, image_size, self->unpacked_ring_buffer, &sub_error);
+        gboolean result = uca_phantom_communicate_receive_1gb_images (self, image_buffer, packet_size, &sub_error);
         if (result != TRUE) {
             g_error ("Failed to receive image frame from datastream: %s\n", sub_error->message);
             g_free(image_buffer);
             return sub_error;
         }
-        
-        // Free the request
-        uca_phantom_communicate_free_request(request);
+
+        ringbuf_commit (self->unpacked_ring_buffer);
+
+        g_free (request);
 
         g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"\t>Thread %p: 1Gb finished receiving images\n", g_thread_self());
-
-        prev_packet_size = packet_size;
     }
 
     g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Thread %p: Buffering thread finished\n", g_thread_self());
@@ -2445,24 +2430,19 @@ gpointer uca_phantom_communicate_accept_live_img (gpointer data) {
 
     GError *sub_error = NULL;
 
-    // self->input_datastream = g_io_stream_get_input_stream(G_IO_STREAM(self->data_connection));
-    guint8 *image_buffer = NULL;
-
-    g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Thread %p: Live buffering thread started\n", g_thread_self());
+    g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Thread %p: Live image thread started\n", g_thread_self());
 
     while (TRUE) {
         // Wait for a request to be available
-        g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"\t>Thread %p: Waiting for request\n", g_thread_self());
+        g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"\t>Thread %p: Waiting for live image request\n", g_thread_self());
 
         ImageRequest* request = g_async_queue_pop (self->live_images_request_queue);
 
-        g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"\t>Thread %p: Request received\n", g_thread_self());
+        g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"\t>Thread %p: live image request received\n", g_thread_self());
 
-        if (request == NULL) {
-            return NULL;
-        }
-        if (request->end_request == TRUE) {
-            uca_phantom_communicate_free_request(request);
+        if (request == NULL || request->end_request == TRUE) {
+            g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"\t>Thread %p: live image thread end request received\n", g_thread_self());
+            g_free (request);
             return NULL;
         }
         
@@ -2474,31 +2454,21 @@ gpointer uca_phantom_communicate_accept_live_img (gpointer data) {
         guint nb_pixels = settings.sensor_width * settings.sensor_height;
         gsize image_size = nb_pixels * byte_depth;
         gsize packet_size = image_size * request->nb_images; // the packed image packet size
-        
-        if (prev_packet_size != packet_size){
-            if (image_buffer != NULL)
-                g_free (image_buffer);
 
-            image_buffer = g_malloc0 (packet_size);
-            if (image_buffer == NULL) {
-                g_error ("Failed to allocate memory for image buffer\n");
-                return NULL;
-            }
-        }
+        guint8 *image_buffer = ringbuf_reserve (self->live_ring_buffer, packet_size);
         
-        gboolean result = uca_phantom_communicate_receive_1gb_images (self, image_buffer, request->nb_images, byte_depth, image_size, self->live_ring_buffer, &sub_error);
+        gboolean result = uca_phantom_communicate_receive_1gb_images (self, image_buffer, packet_size, &sub_error);
         if (result != TRUE) {
             g_error ("Failed to receive image frame from datastream: \n");
             return sub_error;
         }
 
-        // Free the request
-        uca_phantom_communicate_free_request(request);
+        ringbuf_commit (self->live_ring_buffer);
 
-        prev_packet_size = packet_size;
+        g_free (request);
     }
 
-    g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Thread %p: Buffering thread finished\n", g_thread_self());
+    g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Thread %p: live image thread finished\n", g_thread_self());
 
     return NULL;
 }
@@ -3159,7 +3129,7 @@ gboolean uca_phantom_communicate_grab_image(UcaPhantomCommunicate* self, gpointe
     static gsize image_size = 0;
     
     #if NO_DROP
-    g_async_queue_push(self->throttle_queue, NULL);
+    g_async_queue_push(self->throttle_queue, &count);
     #endif
 
     // copy the image data to the output buffer

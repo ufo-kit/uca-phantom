@@ -12,6 +12,7 @@ typedef struct {
     const gchar *name;
     GType        type;
     GParamFlags  flags;
+    UcaUnit      unit;
     gint         property_id;
     const gchar *description;
 } PhantomUnit;
