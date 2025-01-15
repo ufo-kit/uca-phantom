@@ -330,7 +330,7 @@ gboolean ringbuf_direct_copy (ringbuf_t *src, ringbuf_t *dst, gsize size) {
     return TRUE;
 }
 
-gconstpointer ringbuf_reserve (ringbuf_t *rb, gsize size) {
+gpointer ringbuf_reserve (ringbuf_t *rb, gsize size) {
     gconstpointer head = NULL;
     
     // Wait for space to become available

@@ -156,8 +156,6 @@ uca_phantom_camera_start_readout (UcaCamera *camera,
 
     gboolean result = FALSE;
 
-    GMainLoop *loop = g_main_loop_new (NULL, FALSE);
-
     if ((priv->settings.timestamp_format != TS_NONE || priv->liveimages || !priv->xenabled) && !priv->data_connected) {
         g_log (VERBOSE, G_LOG_LEVEL_DEBUG,"Connecting to the datastream\n");
         result = uca_phantom_communicate_connect_datastream (priv->communicator, &internal_error);
@@ -609,7 +607,6 @@ uca_phantom_camera_set_property (GObject *object,
         case PROP_ROI_WIDTH:
             priv->settings.roi_width = g_value_get_uint (value);
             gchar* ow_str = g_strdup_printf ("%d", priv->settings.roi_width);
-            g_print ("ROI width: %d\n", priv->settings.roi_width);
             if (priv->control_connected)
                 res = uca_phantom_communicate_set_variable(communicator, UNIT_DEFC_META_W, ow_str, &internal_error);
             g_free (ow_str);
@@ -886,9 +883,6 @@ uca_phantom_camera_get_property (GObject *object,
                         g_warning ("Failed to get property %s: %s", g_param_spec_get_name (pspec), internal_error->message);
                         g_error_free (internal_error);
                     }
-                    if (UNIT_DEFC_EXP == i_var) {
-                        g_print ("getting exposure time\n");
-                    }
                 }
                 break;
             }
@@ -1000,7 +994,6 @@ uca_phantom_camera_initable_init (GInitable *initable,
     g_object_set (priv->communicator,
                     "xnetcard", priv->xnetcard,
                     "xenabled", priv->xenabled,
-                    // "phantom_ipsource", 0,
                     NULL);
 
     // Connect the control streamm to the camera
@@ -1103,41 +1096,11 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
     camera_class->stop_readout = uca_phantom_camera_stop_readout;
     camera_class->grab = uca_phantom_camera_grab;
     camera_class->trigger = uca_phantom_camera_trigger;
-    // camera_class->grab_live = uca_phantom_camera_grab_live;
-    // camera_class->write = uca_phantom_camera_write;
 
     // Implement the base class properties
     for (guint i = 0; base_overrideables[i] != 0; i++) {
         g_object_class_override_property (oclass, base_overrideables[i], uca_camera_props[base_overrideables[i]]);
     }
-
-    // uca_phantom_camera_properties[PROP_ROI_X] =
-    //     g_param_spec_int(uca_camera_props[PROP_ROI_X],
-    //         "Horizontal coordinate",
-    //         "Horizontal coordinate of the center of the region of interest",
-    //         0, G_MAXINT, 0,
-    //         G_PARAM_READWRITE);
-
-    // uca_phantom_camera_properties[PROP_ROI_Y] =
-    //     g_param_spec_int(uca_camera_props[PROP_ROI_Y],
-    //         "Vertical coordinate",
-    //         "Vertical coordinate of the center of the region of interest",
-    //         0, G_MAXINT, 0,
-    //         G_PARAM_READWRITE);
-
-    // uca_phantom_camera_properties[PROP_ROI_WIDTH] =
-    //     g_param_spec_int(uca_camera_props[PROP_ROI_WIDTH],
-    //         "Width",
-    //         "Width of the region of interest in pixels",
-    //         1, G_MAXINT, 1,
-    //         G_PARAM_READWRITE);
-
-    // uca_phantom_camera_properties[PROP_ROI_HEIGHT] =
-    //     g_param_spec_int(uca_camera_props[PROP_ROI_HEIGHT],
-    //         "Height",
-    //         "Height of the region of interest in pixels",
-    //         1, G_MAXINT, 1,
-    //         G_PARAM_READWRITE);
 
     uca_phantom_camera_properties[PROP_IP_SOURCE] = 
         g_param_spec_enum ("ip-source",
@@ -1145,7 +1108,8 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
                            "Source used to find the ip of the camera. Class is hard coded. Env is PHANTOM_IP, Bcast automatically finds the camera",
                            IP_TYPE_SOURCE,
                            USE_CLASS,
-                           G_PARAM_READWRITE);
+                           G_PARAM_READWRITE | G_PARAM_CONSTRUCT);
+
     uca_phantom_camera_properties[PROP_NB_POST_TRIGGER_FRAMES] =
         g_param_spec_uint ("postframes",
                            "Number of post trigger frames",
@@ -1291,8 +1255,6 @@ uca_phantom_camera_class_init (UcaPhantomCameraClass *klass) {
         GString *name = g_string_new (unit.name);
         g_string_replace (name, ".", "-", 50);
         gchar *pname = g_string_free (name, FALSE);
-
-        g_print ("Registering %s\n", pname);
 
         if (unit.type == G_TYPE_STRING) {
             uca_phantom_camera_properties[i] = g_param_spec_string (pname,

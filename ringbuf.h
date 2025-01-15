@@ -150,7 +150,7 @@ gboolean ringbuf_direct_copy (ringbuf_t *src, ringbuf_t *dst, gsize size);
 gconstpointer ringbuf_move_tail (ringbuf_t *rb, gsize size);
 gconstpointer ringbuf_move_head (ringbuf_t *rb, gsize size);
 
-gconstpointer ringbuf_reserve (ringbuf_t *rb, gsize size);
+gpointer ringbuf_reserve (ringbuf_t *rb, gsize size);
 void ringbuf_commit (ringbuf_t *rb);
 
 gsize ringbuf_wait_for_data (ringbuf_t *rb, gsize size);
