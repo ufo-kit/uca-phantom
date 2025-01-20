@@ -550,7 +550,9 @@ static void uca_phantom_communicate_dispose(GObject *object)
     {
         g_free(cine_info);
     }
-    while (g_async_queue_try_pop(instance->throttle_queue) != NULL) {}
+    while (g_async_queue_try_pop(instance->throttle_queue) != NULL)
+    {
+    }
 
     g_mutex_clear(&instance->control_connection_mutex);
     g_mutex_clear(&instance->data_connection_mutex);
@@ -889,7 +891,7 @@ cleanup:
         g_object_unref(bcast_socket_addr);
         break;
     default:
-        g_error ("Invalid flag. Implementation error.\n");
+        g_error("Invalid flag. Implementation error.\n");
         return NULL;
     }
 
@@ -962,7 +964,7 @@ gboolean uca_phantom_communicate_connect_controlstream(UcaPhantomCommunicate *se
     g_return_val_if_fail(error_loc == NULL || *error_loc == NULL, FALSE);
     g_return_val_if_fail(self->control_connection_state == DISCONNECTED, FALSE);
 
-    g_log (VERBOSE, G_LOG_LEVEL_DEBUG, "Connecting to the Phantom server...");
+    g_log(VERBOSE, G_LOG_LEVEL_DEBUG, "Connecting to the Phantom server...");
 
     GError *sub_error = NULL;
     gchar *ip_address = NULL;
@@ -1915,7 +1917,7 @@ gboolean uca_phantom_communicate_get_cine_state(UcaPhantomCommunicate *self, gin
     {
         // g_warning ("Failed to get flags string");
         g_value_unset(&flags);
-        g_set_error(error_loc, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GET_CINE_STATE,
+        g_set_error(error_loc, UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_GET_VARIABLE,
                     "Failed to get flags string");
         return FALSE;
     }
@@ -2098,7 +2100,8 @@ gboolean throttled_requester(UcaPhantomCommunicate *self, CineInfo *info, GError
             g_async_queue_pop(self->throttle_queue);
         }
         // empty the queue
-        while (g_async_queue_try_pop(self->throttle_queue) != NULL);
+        while (g_async_queue_try_pop(self->throttle_queue) != NULL)
+            ;
 #else
         g_async_queue_pop(self->throttle_queue);
 #endif
@@ -2159,7 +2162,7 @@ gpointer uca_phantom_communicate_request_images_thread(gpointer data)
         if (!throttled_requester(self, cine_info, &sub_error))
         {
             GError *error_loc = g_error_new(UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES,
-                        "Failed to request images:\n\t> %s\n", sub_error->message);
+                                            "Failed to request images:\n\t> %s\n", sub_error->message);
             g_clear_error(&sub_error);
             return error_loc;
         }
@@ -2175,7 +2178,7 @@ gpointer uca_phantom_communicate_request_images_thread(gpointer data)
             if (request_format == NULL)
             {
                 GError *error_loc = g_error_new(UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES,
-                            "Failed to allocate memory for time command");
+                                                "Failed to allocate memory for time command");
                 return error_loc;
             }
 
@@ -2194,7 +2197,7 @@ gpointer uca_phantom_communicate_request_images_thread(gpointer data)
             if (res != TRUE && sub_error != NULL)
             {
                 GError *error_loc = g_error_new(UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_REQUEST_IMAGES,
-                            "Failed to request timestamps:\n\t> %s\n", sub_error->message);
+                                                "Failed to request timestamps:\n\t> %s\n", sub_error->message);
                 g_clear_error(&sub_error);
                 return error_loc;
             }
@@ -2325,7 +2328,7 @@ static gboolean uca_phantom_communicate_receive_1gb_images(
     g_mutex_lock(&self->control_connection_mutex);
     self->finished_receiving_1gb = FALSE;
     g_mutex_unlock(&self->control_connection_mutex);
-
+    
     gssize remaining_bytes = frame_size;
 
     while (remaining_bytes > 0)
@@ -2394,7 +2397,7 @@ static gpointer uca_phantom_communicate_accept_img(gpointer data)
         }
         if (request->end_request == TRUE)
         {
-            g_free (request);
+            g_free(request);
             return NULL;
         }
 
@@ -2407,9 +2410,20 @@ static gpointer uca_phantom_communicate_accept_img(gpointer data)
 
         gsize packet_size = image_size * request->nb_images; // the packed image packet size
 
-        guint8 *image_buffer = ringbuf_reserve(self->unpacked_ring_buffer, packet_size);
+        CineData *cine_data = g_new0(CineData, 1);
+        cine_data->SizePerImageUnpacked = image_size;
+        cine_data->NbImages = request->nb_images;
 
-        gboolean result = uca_phantom_communicate_receive_1gb_images(self, image_buffer, packet_size, &sub_error);
+        guint8 *image_buffer = ringbuf_reserve(self->unpacked_ring_buffer, packet_size + sizeof(CineData));
+        if (image_buffer == NULL)
+        {
+            return g_error_new(UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_UNPACK_IMAGE,
+                               "Failed to allocate memory for unpacked image");
+        }
+        // First give info on the packet
+        memcpy(image_buffer, cine_data, sizeof(CineData));
+        guint8 *buffer_pointer = image_buffer + sizeof(CineData);
+        gboolean result = uca_phantom_communicate_receive_1gb_images(self, buffer_pointer, packet_size, &sub_error);
         if (result != TRUE)
         {
             g_error("Failed to receive image frame from datastream: %s\n", sub_error->message);
@@ -2420,6 +2434,7 @@ static gpointer uca_phantom_communicate_accept_img(gpointer data)
         ringbuf_commit(self->unpacked_ring_buffer);
 
         g_free(request);
+        g_free(cine_data);
 
         g_log(VERBOSE, G_LOG_LEVEL_DEBUG, "\t>Thread %p: 1Gb finished receiving images\n", g_thread_self());
     }
@@ -2502,7 +2517,7 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
     if (mempool == NULL)
     {
         return g_error_new(UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PAHTNOM_COMMUNICATE_ERROR_MEMPOOL,
-                                    "Failed to initialize memory pool");
+                           "Failed to initialize memory pool");
     }
 
     mempool_t *current_mempool = mempool;
@@ -2662,7 +2677,7 @@ static gpointer uca_phantom_communicate_accept_ximg(gpointer data)
         g_async_queue_push(self->throttle_queue, &img_count);
 #endif
 
-        g_log(VERBOSE, G_LOG_LEVEL_DEBUG, "\t>Thread %p: Request pushed to the receiver threads\n", g_thread_self());
+        g_log(VERBOSE, G_LOG_LEVEL_DEBUG, "\t>Thread %p: finished receiving images\n", g_thread_self());
 
         g_free(request);
     }
@@ -2884,13 +2899,13 @@ static gpointer uca_phantom_communicate_unpack_ximg(gpointer data)
         else
         {
             return g_error_new(UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_UNPACK_IMAGE,
-                        "Image format not supported over 10Gb Ethernet.");
+                               "Image format not supported over 10Gb Ethernet.");
         }
 
         if (cine_data->NbImages < 1)
         {
             return g_error_new(UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_UNPACK_IMAGE,
-                        "Number of images is less than 1");
+                               "Number of images is less than 1");
         }
 
         // Allocate memory for the unpacked image
@@ -2900,7 +2915,7 @@ static gpointer uca_phantom_communicate_unpack_ximg(gpointer data)
         if (output == NULL)
         {
             return g_error_new(UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_UNPACK_IMAGE,
-                        "Failed to allocate memory for unpacked image");
+                               "Failed to allocate memory for unpacked image");
         }
         // First give info on the packet
         memcpy(output, cine_data, sizeof(CineData));
@@ -2912,7 +2927,7 @@ static gpointer uca_phantom_communicate_unpack_ximg(gpointer data)
         if (retval == FALSE)
         {
             return g_error_new(UCA_PHANTOM_COMMUNICATE_ERROR, UCA_PHANTOM_COMMUNICATE_ERROR_UNPACK_IMAGE,
-                        "Error occurred while unpacking images");
+                               "Error occurred while unpacking images");
         }
         guint64 end_time = g_get_monotonic_time();
 
@@ -3012,7 +3027,7 @@ static gpointer uca_phantom_communicate_accept_timestamps(gpointer data)
             memcpy(ts + i, ts_data + i * ts_size, ts_size);
             ts[i].cine = ts_request->cine;
         }
-        
+
         ringbuf_push(self->ts_ring_buffer, ts, ts_request->count * phantom_ts_size);
         g_free(ts_request);
 
@@ -3086,6 +3101,8 @@ gboolean uca_phantom_communicate_start_readout(
         return TRUE;
     }
 
+    gsize unpacked_rb_size = 0;
+
     if (self->xenabled)
     {
         g_log(VERBOSE, G_LOG_LEVEL_DEBUG, "\t>Starting x threads\n");
@@ -3115,14 +3132,17 @@ gboolean uca_phantom_communicate_start_readout(
 
         self->xdata_receiver = g_thread_new("xdata_receiver", uca_phantom_communicate_accept_ximg, self);
         self->data_unpacker = g_thread_new("data_unpacker", uca_phantom_communicate_unpack_ximg, self);
+
+        unpacked_rb_size = (nb_pixels * sizeof(guint16) + sizeof(CineData)) * nb_images;
     }
     else
     {
         g_log(VERBOSE, G_LOG_LEVEL_DEBUG, "\t>Starting data receiver thread\n");
         self->data_receiver = g_thread_new("data_receiver", uca_phantom_communicate_accept_img, self);
+
+        unpacked_rb_size = (image_size + sizeof(CineData)) * nb_images;
     }
 
-    gsize unpacked_rb_size = nb_pixels * 2 * nb_images;
     g_log(VERBOSE, G_LOG_LEVEL_DEBUG, "\t>Unpacked ring buffer size: %ld\n", unpacked_rb_size);
 
     self->unpacked_ring_buffer = ringbuf_new(unpacked_rb_size, TRUE);
@@ -3176,6 +3196,8 @@ gboolean uca_phantom_communicate_grab_image(UcaPhantomCommunicate *self, gpointe
                     "Failed to get the number of pixels and images");
         return FALSE;
     }
+
+    g_log (VERBOSE, G_LOG_LEVEL_DEBUG, "Grabbing image %d of size %ld\n", count, image_size);
 
     ringbuf_pop(data, self->unpacked_ring_buffer, image_size);
 
