@@ -38,6 +38,10 @@ enum UcaPhantomCameraProperties {
     PROP_NUM_CINES,
     PROP_LIVEIMAGES,
     PROP_EARLYIMG,
+    PROP_X_RESOLUTION,
+    PROP_Y_RESOLUTION,
+    PROP_CINE_INFO,
+    PROP_LOG,
     N_PHANTOM_PROPERTIES
 };
 

@@ -7,6 +7,7 @@
 
 #define VERBOSE "verbose"
 #define PERFORMANCE "performance"
+#define DEBUG "debug"
 
 typedef struct {
     const gchar *name;

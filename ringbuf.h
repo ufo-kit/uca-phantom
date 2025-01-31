@@ -16,143 +16,164 @@
 
 #include <glib.h>
 
-
-#define MAX_BYTE_POWER_OF_TWO 3
-typedef guint64 ringbuf_max_gsize;
-#define PLATFORM_MAX_BYTES 1 << MAX_BYTE_POWER_OF_TWO
-
-
-
-/*
- * ringbuf.h - C ring buffer (FIFO) interface.
- *
- * Written in 2011 by Drew Hess <dhess-src@bothan.net>.
- *
- * To the extent possible under law, the author(s) have dedicated all
- * copyright and related and neighboring rights to this software to
- * the public domain worldwide. This software is distributed without
- * any warranty.
- *
- * You should have received a copy of the CC0 Public Domain Dedication
- * along with this software. If not, see
- * <http://creativecommons.org/publicdomain/zero/1.0/>.
- */
-
-/*
- * A byte-addressable ring buffer FIFO implementation.
- *
- * The ring buffer's head pointer points to the starting location
- * where data should be written when copying data *into* the buffer
- * (e.g., with ringbuf_read). The ring buffer's tail pointer points to
- * the starting location where data should be read when copying data
- * *from* the buffer (e.g., with ringbuf_write).
- */
-
-
 typedef struct _ringbuf_t ringbuf_t;
 
-/*
- * Create a new ring buffer with the given capacity (usable
- * bytes). Note that the actual internal buffer size may be one or
- * more bytes larger than the usable capacity, for bookkeeping.
+/**
+ * ringbuf_new:
+ * @size: Desired size in bytes (may be rounded to page size at runtime).
+ * @block: Whether to block when the ring buffer is full.
  *
- * Returns the new ring buffer object, or 0 if there's not enough
- * memory to fulfill the request for the given capacity.
+ * Creates and initializes a new ring buffer. Returns NULL on error.
  */
 ringbuf_t *ringbuf_new (gsize size, gboolean block);
 
-/*
- * The size of the internal buffer, in bytes. One or more bytes may be
- * unusable in order to distinguish the "buffer full" state from the
- * "buffer empty" state.
+/**
+ * ringbuf_buffer_size:
+ * @rb: A valid ring buffer object.
  *
- * For the usable capacity of the ring buffer, use the
- * ringbuf_capacity function.
+ * Returns the total internal buffer size in bytes.
  */
 gsize ringbuf_buffer_size(const ringbuf_t *rb);
 
-/*
- * Deallocate a ring buffer, and, as a side effect, set the pointer to
- * 0.
+/**
+ * ringbuf_free:
+ * @rb: A valid ring buffer object.
+ *
+ * Frees associated memory. Invalidates @rb.
  */
 void ringbuf_free(ringbuf_t *rb);
 
-/*
- * Reset a ring buffer to its initial state (empty).
+/**
+ * ringbuf_reset:
+ * @rb: A valid ring buffer object.
+ *
+ * Clears all data and resets head/tail pointers to zero.
  */
 void ringbuf_reset(ringbuf_t *rb);
 
-// /*
-//  * The usable capacity of the ring buffer, in bytes. Note that this
-//  * value may be less than the ring buffer's internal buffer size, as
-//  * returned by ringbuf_buffer_size.
-//  */
-// gsize ringbuf_capacity(const ringbuf_t *rb);
-
-/*
- * The number of free/available bytes in the ring buffer. This value
- * is never larger than the ring buffer's usable capacity.
+/**
+ * ringbuf_bytes_free:
+ * @rb: A valid ring buffer object.
+ *
+ * Returns how many bytes are still available to write.
  */
 gsize ringbuf_bytes_free(ringbuf_t *rb);
 
-// /*
-//  * The number of bytes currently being used in the ring buffer. This
-//  * value is never larger than the ring buffer's usable capacity.
-//  */
-// gsize ringbuf_bytes_used(ringbuf_t *rb);
-
+/**
+ * ringbuf_is_full:
+ * @rb: A valid ring buffer object.
+ *
+ * Returns nonzero if ring buffer has no more space.
+ */
 int ringbuf_is_full(ringbuf_t *rb);
 
+/**
+ * ringbuf_is_empty:
+ * @rb: A valid ring buffer object.
+ *
+ * Returns nonzero if ring buffer is empty.
+ */
 int ringbuf_is_empty(ringbuf_t *rb);
 
-/*
- * access to the head and tail pointers of the ring buffer.
+/**
+ * ringbuf_tail:
+ * @rb: A valid ring buffer object.
+ *
+ * Gets the current tail pointer for reading.
  */
 gconstpointer ringbuf_tail(ringbuf_t *rb);
 
+/**
+ * ringbuf_head:
+ * @rb: A valid ring buffer object.
+ *
+ * Gets the current head pointer for writing.
+ */
 gconstpointer ringbuf_head(ringbuf_t *rb);
 
-/*
- * Copy n bytes from a contiguous memory area src into the ring buffer
- * dst. Returns the ring buffer's new head pointer.
+/**
+ * ringbuf_push:
+ * @dst: Destination ring buffer.
+ * @src: Source data to copy.
+ * @size: Number of bytes to copy.
  *
- * It is possible to copy more data from src than is available in the
- * buffer; i.e., it's possible to overflow the ring buffer using this
- * function. When an overflow occurs, the state of the ring buffer is
- * guaranteed to be consistent, including the head and tail pointers;
- * old data will simply be overwritten in FIFO fashion, as
- * needed. However, note that, if calling the function results in an
- * overflow, the value of the ring buffer's tail pointer may be
- * different than it was before the function was called.
+ * Writes data into the buffer, growing the head pointer.
  */
 gpointer ringbuf_push(ringbuf_t *dst, gconstpointer src, gsize size);
 
-/*
- * Copy n bytes from the ring buffer src, starting from its tail
- * pointer, into a contiguous memory area dst. Returns the value of
- * src's tail pointer after the copy is finished.
+/**
+ * ringbuf_pop:
+ * @dst: Destination buffer to receive data.
+ * @src: Source ring buffer.
+ * @size: Number of bytes to copy.
  *
- * Note that this copy is destructive with respect to the ring buffer:
- * the n bytes copied from the ring buffer are no longer available in
- * the ring buffer after the copy is complete, and the ring buffer
- * will have n more free bytes than it did before the function was
- * called.
- *
- * This function will *not* allow the ring buffer to underflow. If
- * count is greater than the number of bytes used in the ring buffer,
- * no bytes are copied, and the function will return 0.
+ * Reads data from the buffer, moving the tail pointer.
  */
 gpointer ringbuf_pop (gpointer dst, ringbuf_t *src, gsize size);
+
+/**
+ * ringbuf_timed_pop:
+ * @dst: Destination buffer to receive data.
+ * @src: Source ring buffer.
+ * @size: Number of bytes to copy.
+ * @timeout: Monotonic deadline in microseconds.
+ *
+ * Attempts to read data within the specified timeout. Returns NULL on timeout.
+ */
 gpointer ringbuf_timed_pop (gpointer dst, ringbuf_t *src, gsize size, guint64 timeout);
+
+/**
+ * ringbuf_direct_copy:
+ * @src: Source ring buffer.
+ * @dst: Destination ring buffer.
+ * @size: Number of bytes to copy.
+ *
+ * Copies data directly from @src to @dst. Returns TRUE on success.
+ */
 gboolean ringbuf_direct_copy (ringbuf_t *src, ringbuf_t *dst, gsize size);
 
-
+/**
+ * ringbuf_move_tail:
+ * @rb: A valid ring buffer object.
+ * @size: Number of bytes to move.
+ *
+ * Advances the tail pointer by @size to discard data without copying.
+ */
 gconstpointer ringbuf_move_tail (ringbuf_t *rb, gsize size);
+
+/**
+ * ringbuf_move_head:
+ * @rb: A valid ring buffer object.
+ * @size: Number of bytes to move.
+ *
+ * Advances the head pointer by @size for a manual write operation.
+ */
 gconstpointer ringbuf_move_head (ringbuf_t *rb, gsize size);
 
+/**
+ * ringbuf_reserve:
+ * @rb: A valid ring buffer object.
+ * @size: Number of bytes to reserve.
+ *
+ * Reserves space in the buffer without writing immediately.
+ */
 gpointer ringbuf_reserve (ringbuf_t *rb, gsize size);
-void ringbuf_commit (ringbuf_t *rb);
 
+/**
+ * ringbuf_commit:
+ * @rb: A valid ring buffer object.
+ *
+ * Signals that reserved data has now been written.
+ */
+void ringbuf_commit (ringbuf_t *rb, gsize size);
+
+/**
+ * ringbuf_wait_for_data:
+ * @rb: A valid ring buffer object.
+ * @size: Number of bytes to wait for.
+ *
+ * Blocks until at least @size bytes are available. Returns how many bytes are used.
+ */
 gsize ringbuf_wait_for_data (ringbuf_t *rb, gsize size);
 
 #endif /* INCLUDED_RINGBUF_H */

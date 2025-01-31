@@ -9,6 +9,11 @@
 
 #include "ringbuf.h"
 
+#ifndef likely
+#define likely(x)    __builtin_expect(!!(x), 1)
+#define unlikely(x)  __builtin_expect(!!(x), 0)
+#endif
+
 typedef struct message_t {
     gsize len;
     guint8 *address;
@@ -17,10 +22,10 @@ typedef struct message_t {
 struct _ringbuf_t {
     guint8 *buf;
     gint fd;
-    gsize head, tail, buffer_size;
+    gsize head, tail, buffer_size, reserved_size;
     GMutex mutex;
     GCond readable, writeable;
-    gboolean block_on_full;
+    gboolean block_on_full, full;
     GAsyncQueue *message_queue;
 };
 
@@ -57,27 +62,30 @@ ringbuf_t *ringbuf_new (gsize size, gboolean block) {
 
     // Set buffer size
     if(ftruncate(fd, s) != 0){
-        g_warning ("Could not set size of anonymous file");
+        g_warning ("ould not set size of anonymous file");
+        return NULL;
     }
     
     // Ask mmap for a good address
     if((buffer = mmap(NULL, 2 * s, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)) == MAP_FAILED){
         g_warning ("Could not allocate virtual memory");
+        return NULL;
     }
     
     // Mmap first region
     if(mmap(buffer, s, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0) == MAP_FAILED){
         g_warning ("Could not map buffer into virtual memory");
+        return NULL;
     }
     
     // Mmap second region, with exact address
     if(mmap(buffer + s, s, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0) == MAP_FAILED){
         g_warning ("Could not map buffer into virtual memory");
+        return NULL;
     }
 
     ringbuf_t *rb = g_new0(ringbuf_t, 1);
     if (rb == NULL) {
-        g_warning ("Failed to allocate memory for ring buffer");
         return NULL;
     }
 
@@ -140,7 +148,9 @@ void ringbuf_free (ringbuf_t *rb) {
 static gsize ringbuf_bytes_free_unlocked (ringbuf_t *rb) {
     gsize free = 0;
     if (rb->tail <= rb->head) {
-        free = rb->buffer_size - (rb->head - rb->tail);
+        gsize used = rb->head - rb->tail;
+        gsize total = rb->buffer_size;
+        free = total - used;
     }
     else {
         free = rb->tail - rb->head;
@@ -165,11 +175,11 @@ gsize ringbuf_bytes_used (ringbuf_t *rb) {
 }
 
 gboolean ringbuf_is_full (ringbuf_t *rb) {
-    return (ringbuf_bytes_free(rb) == 0);
+    return (ringbuf_bytes_free(rb) == rb->buffer_size) && rb->full;
 }
 
 gboolean ringbuf_is_empty (ringbuf_t *rb) {
-    return (ringbuf_bytes_free (rb) == ringbuf_bytes_free (rb));
+    return (ringbuf_bytes_free (rb) == rb->buffer_size) && (rb->tail == rb->head);
 }
 
 gconstpointer ringbuf_tail (ringbuf_t *rb) {
@@ -189,6 +199,9 @@ gconstpointer ringbuf_head (ringbuf_t *rb) {
 }
 
 gconstpointer ringbuf_move_tail (ringbuf_t *rb, gsize size) {
+    if (unlikely(!rb || size > rb->buffer_size)) {
+        return NULL;
+    }
     gpointer tail = NULL;
     
     // Wait for data to become available
@@ -212,6 +225,9 @@ gconstpointer ringbuf_move_tail (ringbuf_t *rb, gsize size) {
 }
 
 gconstpointer ringbuf_move_head (ringbuf_t *rb, gsize size) {
+    if (unlikely(!rb || size > rb->buffer_size)) {
+        return NULL;
+    }
     gpointer head = NULL;
     
     // Wait for space to become available
@@ -224,6 +240,9 @@ gconstpointer ringbuf_move_head (ringbuf_t *rb, gsize size) {
 }
 
 gpointer ringbuf_push(ringbuf_t *dst, gconstpointer src, gsize size) {
+    if (unlikely(!dst || !src || size > dst->buffer_size)) {
+        return NULL;
+    }
     gpointer head = NULL;
   
     // Wait for space to become available
@@ -234,9 +253,18 @@ gpointer ringbuf_push(ringbuf_t *dst, gconstpointer src, gsize size) {
         }
     }
 
+    if (size > dst->buffer_size) {
+        return NULL;
+    }
+
     memcpy(dst->buf + dst->head, src, size);
     dst->head += size;
     head = dst->buf + dst->head;
+
+    if(dst->head >= dst->buffer_size) {
+        dst->head -= dst->buffer_size;
+        dst->full = TRUE;
+    }
     g_cond_signal(&dst->readable);
     g_mutex_unlock(&dst->mutex);
 
@@ -244,21 +272,23 @@ gpointer ringbuf_push(ringbuf_t *dst, gconstpointer src, gsize size) {
 }
 
 gpointer ringbuf_pop (gpointer dst, ringbuf_t *src, gsize size) {
+    if (unlikely(!src || !dst || size > src->buffer_size)) {
+        return NULL;
+    }
     gpointer tail = NULL;
-    
     // Wait for data to become available
     g_mutex_lock(&src->mutex);
     while (ringbuf_bytes_used_unlocked(src) < size) {
         g_cond_wait (&src->readable, &src->mutex);
     }
-
+    
     memcpy (dst, src->buf + src->tail, size);
     src->tail += size;
     tail = src->buf + src->tail;
 
     if(src->tail >= src->buffer_size) {
-        src->head -= src->buffer_size;
         src->tail -= src->buffer_size;
+        src->full = FALSE;
     }
 
     g_cond_signal (&src->writeable);
@@ -269,26 +299,29 @@ gpointer ringbuf_pop (gpointer dst, ringbuf_t *src, gsize size) {
 }
 
 gpointer ringbuf_timed_pop (gpointer dst, ringbuf_t *src, gsize size, guint64 timeout) {
+    if (unlikely(!src || !dst || size > src->buffer_size)) {
+        return NULL;
+    }
     gpointer tail = NULL;
     guint64 end_time = 0;
     
     // Wait for data to become available
     g_mutex_lock(&src->mutex);
     end_time = g_get_monotonic_time () + timeout;
-    while (src->tail == src->head) {
+    while (ringbuf_bytes_used_unlocked(src) < size) {
         if (!g_cond_wait_until (&src->readable, &src->mutex, end_time)) {
             g_mutex_unlock (&src->mutex);
             return NULL;
         }
     }
 
-    memcpy (dst, &src->buf[src->tail], size);
+    memcpy (dst, src->buf + src->tail, size);
     src->tail += size;
     tail = src->buf + src->tail;
 
     if(src->tail >= src->buffer_size) {
-        src->head -= src->buffer_size;
         src->tail -= src->buffer_size;
+        src->full = FALSE;
     }
 
     g_cond_signal (&src->writeable);
@@ -298,6 +331,9 @@ gpointer ringbuf_timed_pop (gpointer dst, ringbuf_t *src, gsize size, guint64 ti
 }
 
 gboolean ringbuf_direct_copy (ringbuf_t *src, ringbuf_t *dst, gsize size) {
+    if (unlikely(!src || !dst || size > src->buffer_size || size > dst->buffer_size)) {
+        return FALSE;
+    }
     g_mutex_lock(&src->mutex);
     g_mutex_lock(&dst->mutex);
 
@@ -331,7 +367,10 @@ gboolean ringbuf_direct_copy (ringbuf_t *src, ringbuf_t *dst, gsize size) {
 }
 
 gpointer ringbuf_reserve (ringbuf_t *rb, gsize size) {
-    gconstpointer head = NULL;
+    if (unlikely(!rb || size > rb->buffer_size)) {
+        return NULL;
+    }
+    gpointer head = NULL;
     
     // Wait for space to become available
     g_mutex_lock(&rb->mutex);
@@ -342,19 +381,28 @@ gpointer ringbuf_reserve (ringbuf_t *rb, gsize size) {
     }
 
     head = rb->buf + rb->head;
-    rb->head += size;
     g_mutex_unlock(&rb->mutex);
 
     return head;
 }
 
-void ringbuf_commit (ringbuf_t *rb) {
+void ringbuf_commit (ringbuf_t *rb, gsize size) {
+    if (unlikely(!rb || size > rb->buffer_size)) {
+        return;
+    }
     g_mutex_lock(&rb->mutex);
+    rb->head += size;
+    if(rb->head >= rb->buffer_size) {
+        rb->head -= rb->buffer_size;
+    }
     g_cond_signal(&rb->readable);
     g_mutex_unlock(&rb->mutex);
 }
 
 gsize ringbuf_wait_for_data_timed (ringbuf_t *rb, gsize size, guint64 timeout) {
+    if (unlikely(!rb || size > rb->buffer_size)) {
+        return 0;
+    }
     gsize bytes_used = 0;
     guint64 end_time = 0;
     
@@ -375,6 +423,9 @@ gsize ringbuf_wait_for_data_timed (ringbuf_t *rb, gsize size, guint64 timeout) {
 }
 
 gsize ringbuf_wait_for_data (ringbuf_t *rb, gsize size) {
+    if (unlikely(!rb || size > rb->buffer_size)) {
+        return 0;
+    }
     gsize bytes_used = 0;
     
     // Wait for data to become available
