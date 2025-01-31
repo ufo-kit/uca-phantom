@@ -186,6 +186,19 @@ typedef enum {
     N_IP_FLAGS
 } IpSource;
 
+typedef enum {
+    CINE_INV, // The cine is invalid; it has no memory allocated, nor does it participate in any way in camera operations.
+    CINE_STR, // The cine contains a complete, valid recording.
+    CINE_WTR, // The camera is currently recording this cine, and waiting for trigger.
+    CINE_TRG, // A trigger has been received and accepted for this cine.
+    CINE_RDY, // The cine is ready to receive a recording; RDY and STR cannot be present at the same time.
+    CINE_DEF, // If this flag is set, when acquisition starts into this cine, the acquisition parameters are first copied from the default cine, defc. In ph16, all cines have the DEF flag set at all times.
+    CINE_ABL, // If this flag is set, the cine can accept a trigger.
+    CINE_PRE, // This flag marks a special cine that is used to obtain live preview images when all the other cines are full. Normally, c0 and only c0 has the PRE flag set. The preview cine never has any of ABL, WTR, TRG or STR set.
+    CINE_ACT, // This flag marks the active cine, e.g. the cine into which images are acquired; only one cine can be active at any time
+    CINE_REU // The cine content has been saved, so it can be deleted by the camera if the auto.acqrestart option is set.
+} CineStatus;
+
 /**
  * @brief Struct containing capture settings for the Phantom camera.
  * 
@@ -300,7 +313,8 @@ gboolean uca_phantom_communicate_connect_xdatastream (UcaPhantomCommunicate *sel
  * @return gboolean
  *
  */
-gboolean uca_phantom_communicate_run_command(UcaPhantomCommunicate *self, guint command_flag, gchar* command_arg, PhantomReply *reply, GError **error_loc);
+GString *uca_phantom_communicate_run_command(UcaPhantomCommunicate *self, guint command_flag, gchar* command_arg, GError **error_loc);
+
 
 /**
  * @brief Disconnects the data stream from the phantom.
@@ -430,7 +444,9 @@ gboolean uca_phantom_communicate_disarm (UcaPhantomCommunicate* self, GError** e
  */
 gboolean uca_phantom_communicate_trigger (UcaPhantomCommunicate *self, GError **error_loc);
 
-gboolean uca_phantom_communicate_get_cine_state (UcaPhantomCommunicate* self, gint cine, gchar *flag, GError** error_loc);
+GString *uca_phantom_communicate_get_cine_state (UcaPhantomCommunicate *self, gint cine, GError **error_loc);
+gboolean uca_phantom_communicate_verify_cine_state(UcaPhantomCommunicate *self, gint cine, gchar *flag, GError **error_loc);
+gboolean uca_phantom_communicate_get_active_cine (UcaPhantomCommunicate *self, gint *cine, GError **error_loc);
 gboolean uca_phantom_communicate_get_cine_index (UcaPhantomCommunicate* self, gint cine, guint prop, gint* res, GError** error_loc);
 /**
  * @brief Send a request for images to the Phantom camera and push an internal request to receive images in the program.
